@@ -58,9 +58,20 @@ fn is_sto_base(base: &str) -> bool {
     base.contains("serienstream") || base.contains("//s.to") || base.contains(".s.to")
 }
 
+/// Ein Slug darf nur `[a-z0-9-]` sein — nie roh in URLs oder CSS-Selektoren.
+fn valid_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// Liefert die Staffel-Nummern eines Titels (`0` = Filme-Tab).
 pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> Result<Vec<u32>> {
     if is_sto_base(base) {
+        if !valid_slug(slug) {
+            return Ok(Vec::new());
+        }
         let url = format!("{base}/serie/{slug}");
         let body = super::fetch_text(client, &url).await?;
         return Ok(parse_sto_seasons(&body, slug));
@@ -71,10 +82,11 @@ pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> R
 }
 
 /// serienstream-Staffeln: alle `N` aus `/serie/<slug>/staffel-N[/…]`-Links.
+/// Statischer Selektor, Filterung in Rust (kein Slug im Selektor).
 fn parse_sto_seasons(body: &str, slug: &str) -> Vec<u32> {
     let doc = Html::parse_document(body);
+    let sel = Selector::parse("a[href]").unwrap();
     let prefix = format!("/serie/{slug}/staffel-");
-    let sel = Selector::parse(&format!(r#"a[href^="{prefix}"]"#)).unwrap();
     let mut out = std::collections::BTreeSet::new();
     for el in doc.select(&sel) {
         let href = el.value().attr("href").unwrap_or("");
@@ -89,35 +101,38 @@ fn parse_sto_seasons(body: &str, slug: &str) -> Vec<u32> {
 }
 
 /// serienstream-Folgen einer Staffel: `/serie/<slug>/staffel-N/episode-M`-Links.
-/// Der Linktext ist nur die Nummer, daher „Folge M" als Titel.
+/// Statischer Selektor; die Ziel-URL wird aus validierten Teilen gebaut, nie aus
+/// dem rohen href. Der Linktext ist nur die Nummer, daher „Folge M" als Titel.
 fn parse_sto_episodes(body: &str, base: &str, slug: &str, season: u32) -> Vec<Episode> {
     let doc = Html::parse_document(body);
+    let sel = Selector::parse("a[href]").unwrap();
     let prefix = format!("/serie/{slug}/staffel-{season}/episode-");
-    let sel = Selector::parse(&format!(r#"a[href^="{prefix}"]"#)).unwrap();
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for el in doc.select(&sel) {
         let href = el.value().attr("href").unwrap_or("");
-        if let Some(rest) = href.strip_prefix(&prefix) {
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            let Ok(m) = num.parse::<u32>() else { continue };
-            if !seen.insert(m) {
-                continue;
-            }
-            let text = el.text().collect::<String>().trim().to_string();
-            let title = if text.is_empty() || text == m.to_string() {
-                format!("Folge {m}")
-            } else {
-                text
-            };
-            out.push(Episode {
-                url: format!("{base}{href}"),
-                title,
-                season,
-                index_in_season: m,
-                explicit_number: Some(m),
-            });
+        let Some(rest) = href.strip_prefix(&prefix) else {
+            continue;
+        };
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(m) = num.parse::<u32>() else { continue };
+        if !seen.insert(m) {
+            continue;
         }
+        let text = el.text().collect::<String>().trim().to_string();
+        let title = if text.is_empty() || text == m.to_string() {
+            format!("Folge {m}")
+        } else {
+            text
+        };
+        out.push(Episode {
+            // Aus validierten Teilen gebaut, nicht aus dem rohen href.
+            url: format!("{base}/serie/{slug}/staffel-{season}/episode-{m}"),
+            title,
+            season,
+            index_in_season: m,
+            explicit_number: Some(m),
+        });
     }
     out.sort_by_key(|e| e.index_in_season);
     out
@@ -152,6 +167,9 @@ pub async fn list_episodes(
     season: u32,
 ) -> Result<Vec<Episode>> {
     if is_sto_base(base) {
+        if !valid_slug(slug) {
+            return Ok(Vec::new());
+        }
         let url = format!("{base}/serie/{slug}/staffel-{season}");
         let body = super::fetch_text(client, &url).await?;
         return Ok(parse_sto_episodes(&body, base, slug, season));
