@@ -30,6 +30,8 @@ m3u8-rs = "6"
 # AES-128-CBC für nativen HLS-Downloader (RustCrypto, pure Rust).
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc"] }
+# AES-256-GCM für den modernen Filemoon/Byse-Pfad (RustCrypto, pure Rust).
+aes-gcm = "0.10.3"
 sha2 = "0.10.9"
 getrandom = "0.2"
 hickory-resolver = "0.24"

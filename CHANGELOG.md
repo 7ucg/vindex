@@ -9,6 +9,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Hoster/Filemoon: moderner Byse-API-Pfad (`/api/videos/<code>`). Die AES-256-GCM-
+  verschlüsselten `playback`-Daten werden entschlüsselt — der 32-Byte-Key wird aus `key_parts`
+  und der `version` zusammengesetzt (versionsabhängige Hälften, beide Reihenfolgen als
+  Kandidaten), beide Feldpaare (iv/payload, iv2/payload2) werden probiert. Aus dem JSON wird
+  die höchstaufgelöste Quelle gewählt. Schlägt die API fehl, greift weiter der Legacy-packed-JS-
+  Pfad. `decrypt_playback`, `playback_keys` und `best_source_url` sind reine, per AES-GCM-Round-
+  Trip getestete Funktionen; externe Antworten werden größenbegrenzt gelesen.
 - Watch/AniSkip: MAL-ID-Auflösung über Jikan (`aniskip::resolve_mal_id`). `vindex watch`
   leitet Slug/Staffel/Episode aus der URL ab, sucht den MyAnimeList-Eintrag über die Jikan-
   Titelsuche und zieht für höhere Staffeln die Relations-Kette (Sequel/Prequel/Side story)

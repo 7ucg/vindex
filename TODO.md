@@ -25,9 +25,11 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## Hoster-Pflege
 
-- **Filemoon Byse-API (AES-256-GCM).** Moderner `/api/videos/<code>`-Pfad; aktuell nur der
-  Legacy-packed-JS-Weg. Decrypt-Logik als reine, testbare Funktion; Legacy-Fallback behalten.
-  Muster: `Source-Third-projects/.../extractors/provider/filemoon.py`.
+- **Filemoon Byse-API** erledigt: `/api/videos/<code>` wird zuerst versucht, die AES-256-GCM-
+  `playback`-Daten werden entschlüsselt (Key aus `key_parts` + Version), Legacy-packed-JS bleibt
+  als Fallback. Decrypt/Key-Auswahl/Quellenwahl sind reine, round-trip-getestete Funktionen.
+  Offen (nur live): echte Byse-Antwort gegen die Zusammenbau-Heuristik prüfen; IV-Längen ≠ 12 Byte
+  (nicht-96-Bit-GCM) sind bewusst nicht abgedeckt.
 
 ## API
 

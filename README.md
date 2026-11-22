@@ -19,8 +19,8 @@ HTTP-API/Daemon und Desktop-Backend.
 - Katalogsuche, Parsing von Slug, Staffel und Episode, Hoster-Auflösung über
   Redirects.
 - Stream-Extraktion je Hoster: VOE, Vidmoly, Vidoza, Doodstream, SpeedFiles,
-  Filemoon (Legacy-Pfad). Streamtape, Luluvdo und LoadX sind eingeplant, haben
-  aber noch keinen Extraktor.
+  Filemoon (moderne Byse-API mit AES-256-GCM, Legacy-packed-JS als Fallback).
+  Streamtape, Luluvdo und LoadX sind eingeplant, haben aber noch keinen Extraktor.
 - Sprachauswahl (German Dub, German Sub, English Sub, je nach Portal) mit
   Fallback über Hoster und Sprache.
 - Qualitäts-Sweep zwischen Max- und Min-Grenze (4K bis 360p).

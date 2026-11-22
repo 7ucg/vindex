@@ -22,6 +22,7 @@ base64 = { workspace = true }
 m3u8-rs = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
+aes-gcm = { workspace = true }
 hickory-resolver = { workspace = true }
 governor = { workspace = true }
 backon = { workspace = true }
