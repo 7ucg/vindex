@@ -18,9 +18,33 @@ function when(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString();
 }
 
+// Gruppenschlüssel aus dem Dateinamen: „Show SxxExx…" → „Show", sonst „Filme & Einzelnes".
+function groupKey(name: string): string {
+  const m = /^(.*?)\s+S\d+E\d+/i.exec(name);
+  if (m && m[1].trim()) return m[1].trim();
+  return "Filme & Einzelnes";
+}
+
+interface Group {
+  key: string;
+  items: LibraryEntry[];
+}
+
 export function Library(): JSX.Element {
   const [entries, { refetch }] = createResource(library);
   const [busy, setBusy] = createSignal<string | null>(null);
+
+  const groups = (): Group[] => {
+    const all = entries() ?? [];
+    const map = new Map<string, LibraryEntry[]>();
+    for (const e of all) {
+      const k = groupKey(e.name);
+      (map.get(k) ?? map.set(k, []).get(k)!).push(e);
+    }
+    return [...map.entries()]
+      .map(([key, items]) => ({ key, items: items.sort((a, b) => a.name.localeCompare(b.name)) }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  };
 
   // Im Fenster abspielen: die Datei läuft über den Proxy (HTTP+Range) ins
   // <video> (GStreamer demuxt MKV/TS). „Extern" öffnet mpv bzw. den System-Player.
@@ -65,48 +89,59 @@ export function Library(): JSX.Element {
         </div>
       </Show>
 
-      <Show when={entries() && entries()!.length > 0}>
-        <div class="panel">
-          <For each={entries()}>
-            {(e) => (
-              <div class="dl" title={e.path}>
-                <div
-                  class="thumb"
-                  style={{
-                    background: "var(--surface-2)",
-                    display: "grid",
-                    "place-items": "center",
-                    color: "var(--muted)",
-                  }}
-                >
-                  ▶
-                </div>
-                <div class="info">
-                  <div class="n">{e.name}</div>
-                  <div class="sub">
-                    {size(e.size_bytes)}
-                    <Show when={e.modified}> · {when(e.modified)}</Show>
+      <For each={groups()}>
+        {(g) => (
+          <>
+            <div class="row-h">
+              <h2 style={{ "font-size": "15px" }}>{g.key}</h2>
+              <span class="link">{g.items.length}</span>
+            </div>
+            <div class="panel">
+              <For each={g.items}>
+                {(e) => (
+                  <div class="dl" title={e.path}>
+                    <div
+                      class="thumb"
+                      style={{
+                        background: "var(--surface-2)",
+                        display: "grid",
+                        "place-items": "center",
+                        color: "var(--muted)",
+                      }}
+                    >
+                      ▶
+                    </div>
+                    <div class="info">
+                      <div class="n">{e.name}</div>
+                      <div class="sub">
+                        {size(e.size_bytes)}
+                        <Show when={e.modified}> · {when(e.modified)}</Show>
+                      </div>
+                    </div>
+                    <div class="act">
+                      <button class="chip" onClick={() => void play(e)}>
+                        Abspielen
+                      </button>
+                      <button class="chip" onClick={() => playExternal(e)}>
+                        Extern
+                      </button>
+                      <button
+                        class="chip"
+                        onClick={() => void revealLibraryItem(e.name).catch(() => {})}
+                      >
+                        Ordner
+                      </button>
+                      <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
+                        {busy() === e.name ? "…" : "Löschen"}
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div class="act">
-                  <button class="chip" onClick={() => void play(e)}>
-                    Abspielen
-                  </button>
-                  <button class="chip" onClick={() => playExternal(e)}>
-                    Extern
-                  </button>
-                  <button class="chip" onClick={() => void revealLibraryItem(e.name).catch(() => {})}>
-                    Ordner
-                  </button>
-                  <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
-                    {busy() === e.name ? "…" : "Löschen"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </For>
-        </div>
-      </Show>
+                )}
+              </For>
+            </div>
+          </>
+        )}
+      </For>
 
       <p class="note">
         „Abspielen" läuft im Fenster (über den lokalen Proxy). Spielt das WebView einen Container
