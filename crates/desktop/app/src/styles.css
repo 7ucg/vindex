@@ -808,3 +808,13 @@ a {
   border-radius: 6px;
   padding: 2px 8px;
 }
+
+/* Tastaturbedienung: sichtbarer Fokus-Ring (nur bei Tastatur, nicht bei Maus) */
+:focus-visible {
+  outline: 2px solid var(--play);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+button:focus:not(:focus-visible) {
+  outline: none;
+}

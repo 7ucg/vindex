@@ -194,8 +194,8 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
                   <Show when={selectMode()}>
                     <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
                   </Show>
-                  <div class="play-ov">
-                    <button class="play-btn">
+                  <div class="play-ov" aria-hidden="true">
+                    <button class="play-btn" tabindex="-1">
                       <IconPlay />
                     </button>
                   </div>

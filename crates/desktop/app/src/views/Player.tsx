@@ -391,9 +391,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
         <span class="player-title">{props.playback.title}</span>
 
         <div class="player-tools">
-          <button class="chip" onClick={() => setSpeed(rate() - 0.25)}>−</button>
+          <button class="chip" onClick={() => setSpeed(rate() - 0.25)} aria-label="Langsamer">−</button>
           <span class="sleep-label">{rate().toFixed(2)}×</span>
-          <button class="chip" onClick={() => setSpeed(rate() + 0.25)}>+</button>
+          <button class="chip" onClick={() => setSpeed(rate() + 0.25)} aria-label="Schneller">+</button>
           <button
             class="chip"
             classList={{ on: loopA() !== null }}
@@ -402,14 +402,20 @@ export function Player(props: { playback: Playback }): JSX.Element {
           >
             A-B
           </button>
-          <button class="chip" onClick={() => void togglePip()} title="Bild-in-Bild">
+          <button class="chip" onClick={() => void togglePip()} title="Bild-in-Bild" aria-label="Bild-in-Bild">
             PiP
           </button>
-          <button class="chip" onClick={screenshot} title="Screenshot">
+          <button class="chip" onClick={screenshot} title="Screenshot" aria-label="Screenshot">
             Foto
           </button>
           <Show when={levels().length > 1 || audios().length > 1 || subs().length > 0}>
-            <button class="chip" classList={{ on: menuOpen() }} onClick={() => setMenuOpen(!menuOpen())}>
+            <button
+              class="chip"
+              classList={{ on: menuOpen() }}
+              onClick={() => setMenuOpen(!menuOpen())}
+              title="Qualität, Audio, Untertitel"
+              aria-label="Qualität, Audio, Untertitel"
+            >
               ⚙
             </button>
           </Show>
