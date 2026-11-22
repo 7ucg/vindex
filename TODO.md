@@ -3,36 +3,30 @@
 Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Hoster
+## Offene Features
 
-- **Streamtape / Luluvdo / LoadX.** Nur synthetisch getestet, kein Referenzcode. Live-Befund:
-  aniworld und serienstream bieten diese Hoster aktuell nicht mehr an (nur VOE/Doodstream/
-  Filemoon/Vidmoly/SpeedFiles), daher keine echten Embeds zum Nachziehen. Erst verifizierbar,
-  wenn ein Zielportal sie wieder listet (Embed mit `dev/capture.sh` sichern).
+- **Desktop-Fenster-Frontend** (tauri oder egui) auf der `core`-Facade. Facade und
+  Fortschritts-Kanal (`core::download::Progress`/`ProgressSink`, `Backend::download_with_progress`)
+  sind da; offen ist nur das Fenster selbst (Event-Loop + Widgets), das wegen der System-
+  Bibliotheken (WebKitGTK bzw. GPU) bewusst außerhalb des Workspaces liegt.
+- **Echter TS→MKV-Remuxer ohne ffmpeg** (optional). `VINDEX_NO_FFMPEG` liefert bereits einen
+  rohen `.ts`-Stream ohne ffmpeg; ein eigener Remuxer für `.mkv`-Container wäre die Kür.
+  `SAMPLE-AES` bliebe am ffmpeg-Pfad. Braucht echte TS-Segmente zum Verifizieren.
 
-## Netzwerk & Betrieb
+## Betrieb
 
 - **Produktions-Rate-Limit.** Das eingebaute Limit ist Best-Effort im Prozessspeicher; für
   öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
   Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
 
-## Download & Wiedergabe
+## Nur in deiner Umgebung zu bestätigen (Code steht, Logik getestet)
 
-- **Vollständig ffmpeg-freies HLS** umgesetzt: `VINDEX_NO_FFMPEG` finalisiert den nativen
-  HLS-Download als rohen MPEG-TS (.ts) ohne ffmpeg. Offen (optional): echter TS→MKV-Remuxer für
-  .mkv-Container ohne ffmpeg; SAMPLE-AES bleibt am ffmpeg-Pfad.
-- **Syncplay** umgesetzt (Privacy-Flags + MPV_HOME-Härtung); nur der Lauf gegen echtes
-  Syncplay ist noch Nutzer-seitig zu bestätigen.
-- **Mehrstaffel-MAL-ID.** Die Zuordnung Staffel→MAL-ID höherer Staffeln ist eine ID-Sortier-
-  Heuristik (`aniskip::resolve_mal_id`), gegen echte Mehrstaffler noch nicht verifiziert (Jikan
-  war in der Testumgebung egress-geblockt).
-
-## Desktop
-
-- **Fenster-Frontend** (tauri oder egui) auf der `core`-Facade. Facade und Fortschritts-Kanal
-  (`core::download::Progress`/`ProgressSink`, `Backend::download_with_progress`) sind da; offen
-  ist nur das Fenster selbst (Event-Loop + Widgets), das wegen der System-Bibliotheken
-  (WebKitGTK bzw. GPU) bewusst außerhalb des Workspaces liegt.
+- **Mehrstaffel-MAL-ID** (`aniskip::resolve_mal_id`): folgt der echten Sequel-Kette; der Live-
+  Abruf gegen Jikan war aus der Testumgebung egress-geblockt.
+- **Syncplay** (`--syncplay`): Arg-/Config-Bau abgesichert und getestet; der Lauf gegen einen
+  echten Syncplay-Server/-Raum ist nur mit installiertem Syncplay prüfbar.
+- **Neue Hoster**, falls ein Portal sie wieder listet (z. B. Streamtape): Embed mit
+  `dev/capture.sh` sichern, dann Extraktor bauen.
 
 ## Produkt-Entscheidungen (Default: so lassen)
 
