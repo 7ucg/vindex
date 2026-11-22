@@ -143,6 +143,11 @@ Die `/api/*`-Routen sind zusätzlich pro Client-IP ratenbegrenzt (Sliding-Window
 Standard 60 Requests/Minute, über `VINDEX_RATE_LIMIT` einstellbar). Über dem Limit
 antwortet die API mit `429` und dem Header `Retry-After`. `/health` ist ausgenommen.
 
+Hinter einem Reverse-Proxy: `VINDEX_TRUSTED_PROXIES` (komma-getrennte Proxy-IPs) setzen —
+nur dann wertet die API `X-Forwarded-For` aus und begrenzt nach der echten Client-IP statt
+nach der Proxy-IP. Ohne gesetzte Trusted-Proxies wird `X-Forwarded-For` ignoriert (kein
+Spoofing des Limits).
+
 ## Build
 
 ```bash

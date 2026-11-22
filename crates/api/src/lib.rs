@@ -323,11 +323,52 @@ async fn rate_limit(State(rate): State<Arc<RateLimiter>>, req: Request, next: Ne
 
 /// Client-IP aus der Verbindung (`ConnectInfo`). Fehlt sie (z. B. im Test über
 /// `oneshot`), wird localhost angenommen.
+/// Vertrauenswürdige Reverse-Proxy-IPs aus `VINDEX_TRUSTED_PROXIES` (komma-getrennt).
+/// Nur wenn der direkte Peer hier steht, wird `X-Forwarded-For` ausgewertet — sonst
+/// ist der Header client-kontrolliert und wird ignoriert (kein IP-Spoofing des
+/// Rate-Limits).
+fn trusted_proxies() -> &'static [IpAddr] {
+    static TP: std::sync::OnceLock<Vec<IpAddr>> = std::sync::OnceLock::new();
+    TP.get_or_init(|| {
+        std::env::var("VINDEX_TRUSTED_PROXIES")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|s| s.trim().parse::<IpAddr>().ok())
+            .collect()
+    })
+}
+
+/// Reine Logik: echte Client-IP aus Peer + Trusted-Proxy-Liste + `X-Forwarded-For`.
+/// Steht der *peer* in *trusted*, wird die XFF-Kette von rechts nach links gelesen
+/// und die erste **nicht** vertrauenswürdige IP genommen (der echte Client) — so kann
+/// ein Client die Kette nicht mit vorangestellten Fake-IPs fälschen. Sonst: *peer*.
+fn real_client_ip(peer: IpAddr, trusted: &[IpAddr], xff: Option<&str>) -> IpAddr {
+    if trusted.is_empty() || !trusted.contains(&peer) {
+        return peer;
+    }
+    if let Some(xff) = xff {
+        for part in xff.split(',').rev() {
+            if let Ok(ip) = part.trim().parse::<IpAddr>() {
+                if !trusted.contains(&ip) {
+                    return ip;
+                }
+            }
+        }
+    }
+    peer
+}
+
 fn client_ip(req: &Request) -> IpAddr {
-    req.extensions()
+    let peer = req
+        .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let xff = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+    real_client_ip(peer, trusted_proxies(), xff)
 }
 
 /// Liefert die OpenAPI-3-Spezifikation als JSON. Offen (kein API-Key), wie
@@ -1474,6 +1515,39 @@ mod tests {
     async fn unbekannte_route_ist_404() {
         let (status, _) = send(router_with(state(&[])), get_req("/nirgendwo", None)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn real_client_ip_trusted_proxy_xff() {
+        use std::net::IpAddr;
+        let proxy: IpAddr = "10.0.0.1".parse().unwrap();
+        let proxy2: IpAddr = "10.0.0.2".parse().unwrap();
+        let client: IpAddr = "203.0.113.7".parse().unwrap();
+        let trusted = [proxy, proxy2];
+
+        // Peer ist Trusted-Proxy → echte Client-IP aus XFF (rechts: unser Proxy, dann Client).
+        assert_eq!(
+            real_client_ip(proxy, &trusted, Some("203.0.113.7, 10.0.0.2")),
+            client
+        );
+        // Kette über zwei Trusted-Proxies → erste nicht-vertrauenswürdige von rechts.
+        assert_eq!(
+            real_client_ip(proxy, &trusted, Some("203.0.113.7, 10.0.0.2, 10.0.0.1")),
+            client
+        );
+        // Peer NICHT trusted → XFF wird ignoriert (kein Spoofing), Peer gewinnt.
+        let attacker: IpAddr = "198.51.100.9".parse().unwrap();
+        assert_eq!(
+            real_client_ip(attacker, &trusted, Some("1.2.3.4")),
+            attacker
+        );
+        // Keine Trusted-Proxies konfiguriert → immer Peer.
+        assert_eq!(real_client_ip(proxy, &[], Some("1.2.3.4")), proxy);
+        // Gefälschte vorangestellte IPs ändern nichts (von rechts gelesen).
+        assert_eq!(
+            real_client_ip(proxy, &trusted, Some("1.1.1.1, 203.0.113.7, 10.0.0.1")),
+            client
+        );
     }
 
     #[tokio::test]

@@ -15,9 +15,9 @@ Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund
 
 ## Betrieb
 
-- **Produktions-Rate-Limit.** Das eingebaute Limit ist Best-Effort im Prozessspeicher; für
-  öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
-  Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
+- **Verteiltes Rate-Limit** (optional). Trusted-Proxy-`X-Forwarded-For` ist umgesetzt
+  (`VINDEX_TRUSTED_PROXIES`), der In-Memory-Limiter begrenzt damit nach echter Client-IP. Für
+  mehrere Instanzen bliebe ein verteilter Limiter (z. B. Redis) oder ein Edge-Proxy-Limit offen.
 
 ## Nur in deiner Umgebung zu bestätigen (Code steht, Logik getestet)
 

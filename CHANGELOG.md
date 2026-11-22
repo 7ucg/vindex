@@ -9,6 +9,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- API: Rate-Limit hinter Reverse-Proxy. `VINDEX_TRUSTED_PROXIES` (komma-getrennte Proxy-IPs)
+  aktiviert die Auswertung von `X-Forwarded-For` — nur wenn der direkte Peer ein konfigurierter
+  Trusted-Proxy ist, wird nach der echten Client-IP begrenzt (die XFF-Kette wird rechts→links
+  gelesen, die erste nicht-vertrauenswürdige IP gewinnt, so lässt sie sich nicht fälschen). Ohne
+  Trusted-Proxies bleibt `X-Forwarded-For` unbeachtet. Reine Logik `real_client_ip` getestet.
 - Download: ffmpeg-freier HLS-Pfad (`VINDEX_NO_FFMPEG`). Der native HLS-Download
   (`VINDEX_NATIVE_HLS`, inkl. AES-128-Entschlüsselung) wird dann als roher MPEG-TS-Stream in eine
   `.ts`-Datei finalisiert, statt mit ffmpeg zu remuxen — der zusammengesetzte TS ist bereits
