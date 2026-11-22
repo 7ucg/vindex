@@ -30,7 +30,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   wachsendem Backoff wiederholt. Alle Portal- und Hoster-Fetches laufen darüber.
 - `core::site` — Scraper für aniworld.to und s.to/serienstream.to (Staffeln, Episoden
   inkl. `[Episode N]`-Marker, Hoster-Links je Sprache), Scraper für filmo.to (Filme mit
-  CSRF-/Redirect-Auflösung), sowie der `census`-Katalogzähler.
+  CSRF-/Redirect-Auflösung), sowie der `census`-Katalogzähler. URL-Autocorrect für von
+  Hand getippte Links (Schema erzwingen, Host-Tippfehler korrigieren, Copy-Paste-Müll
+  entfernen) und ein Spiegel-Fallback s.to ↔ serienstream.to bei Transport-Ausfall.
 - `core::hoster` — Resolver für VOE, SpeedFiles, Vidoza, Doodstream, Vidmoly und
   Filemoon (Legacy-Pfad). Streamtape/Luluvdo/LoadX als offene Aufgaben.
 - `core::extract` — HLS-Master-Parsing (m3u8-rs + Regex-Fallback), Qualitäts-Tiers.

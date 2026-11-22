@@ -172,6 +172,9 @@ pub async fn download_url(
     prefs: &DownloadPrefs,
     cancel: Option<CancellationToken>,
 ) -> Result<PathBuf> {
+    // Von Hand getippte URLs vorab korrigieren (Schema, Host-Tippfehler, Müll).
+    let corrected = site::autocorrect::autocorrect(url).map(|c| c.url);
+    let url = corrected.as_deref().unwrap_or(url);
     if site::is_filmo(url) {
         download_movie(client, url, prefs, cancel).await
     } else {

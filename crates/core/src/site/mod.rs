@@ -5,11 +5,53 @@
 //! Wrapper, die die Basis-URL festlegen.
 
 pub mod aniworld;
+pub mod autocorrect;
 pub mod filmo;
 pub mod serienstream;
 pub mod sto;
 
 use crate::model::{BASE, BASE_STO};
+
+/// Spiegel-Host für Transport-Ausfälle. s.to und serienstream.to liefern denselben
+/// Katalog; fällt einer aus, wird der andere versucht.
+fn mirror_host(host: &str) -> Option<&'static str> {
+    match host {
+        "s.to" | "www.s.to" => Some("serienstream.to"),
+        "serienstream.to" | "www.serienstream.to" => Some("s.to"),
+        _ => None,
+    }
+}
+
+/// Ersetzt den Host einer URL durch ihren Spiegel, falls es einen gibt.
+fn mirror_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let alt = mirror_host(&host)?;
+    let mut m = parsed;
+    m.set_host(Some(alt)).ok()?;
+    Some(m.to_string())
+}
+
+/// `GET` mit Retry und Spiegel-Fallback: scheitert der primäre Host transient
+/// (Transportfehler oder Down-Status), wird einmal gegen den Spiegel versucht.
+pub async fn fetch(client: &reqwest::Client, url: &str) -> crate::error::Result<reqwest::Response> {
+    let resp = crate::http::get_retry(client, url, None).await;
+    let needs_mirror = match &resp {
+        Err(_) => true,
+        Ok(r) => matches!(r.status().as_u16(), 403 | 429 | 500 | 502 | 503 | 504),
+    };
+    if needs_mirror {
+        if let Some(alt) = mirror_url(url) {
+            return Ok(crate::http::get_retry(client, &alt, None).await?);
+        }
+    }
+    Ok(resp?)
+}
+
+/// Wie [`fetch`], gibt aber direkt den Body-Text zurück.
+pub async fn fetch_text(client: &reqwest::Client, url: &str) -> crate::error::Result<String> {
+    Ok(fetch(client, url).await?.text().await?)
+}
 
 /// Normalisierter Host einer URL (ohne Trailing-Dot, lowercase). `None`, wenn die
 /// URL nicht parst oder keinen Host hat.

@@ -42,7 +42,7 @@ pub async fn provider_links(client: &reqwest::Client, episode_url: &str) -> Resu
 /// das nach Genre gruppiert ist und einzelne Titel ohne Genre-Zuordnung auslässt).
 pub async fn fetch_catalog(client: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> {
     let url = format!("{BASE}/animes-alphabet");
-    let body = crate::http::get_text_retry(client, &url, None).await?;
+    let body = super::fetch_text(client, &url).await?;
     let doc = Html::parse_document(&body);
     let sel = Selector::parse(r#"a[href^="/anime/stream/"]"#).unwrap();
 
@@ -81,7 +81,7 @@ pub async fn classify(
     count_episodes: bool,
 ) -> anyhow::Result<Classified> {
     let url = format!("{BASE}/anime/stream/{}", entry.slug);
-    let body = crate::http::get_text_retry(client, &url, None).await?;
+    let body = super::fetch_text(client, &url).await?;
 
     // Alles aus dem (nicht-Send) Html-Dokument hier extrahieren und doc danach
     // fallenlassen, bevor der nächste await kommt.
@@ -181,7 +181,7 @@ pub async fn classify(
 
 /// Lädt eine Staffel-/Filme-Seite und zählt die dort gelisteten Episoden/Filme.
 pub async fn count_episodes_on(client: &reqwest::Client, url: &str) -> anyhow::Result<usize> {
-    let body = crate::http::get_text_retry(client, url, None).await?;
+    let body = super::fetch_text(client, url).await?;
     let doc = Html::parse_document(&body);
     let sel = Selector::parse(".seasonEpisodeTitle").unwrap();
     Ok(doc.select(&sel).count())
