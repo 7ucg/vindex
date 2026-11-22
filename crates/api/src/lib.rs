@@ -374,3 +374,211 @@ fn capture_num(url: &str, marker: &str) -> Option<u32> {
         .parse::<u32>()
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn state(keys: &[&str]) -> AppState {
+        AppState {
+            client: reqwest::Client::new(),
+            jobs: Arc::new(Mutex::new(Vec::new())),
+            next_id: Arc::new(AtomicU64::new(1)),
+            auth: auth::AuthConfig::with_keys(keys),
+        }
+    }
+
+    async fn send(app: Router, req: Request<Body>) -> (StatusCode, String) {
+        let resp = app.oneshot(req).await.expect("Router antwortet immer");
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap_or_default();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn get_req(uri: &str, key: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().method("GET").uri(uri);
+        if let Some(k) = key {
+            b = b.header("x-api-key", k);
+        }
+        b.body(Body::empty()).expect("Request baubar")
+    }
+
+    fn post_json(uri: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Request baubar")
+    }
+
+    #[tokio::test]
+    async fn health_ist_offen_und_liefert_ok() {
+        let (status, body) = send(router_with(state(&["geheim"])), get_req("/health", None)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "ok");
+    }
+
+    #[tokio::test]
+    async fn queue_ohne_key_ist_401() {
+        let (status, _) = send(router_with(state(&["geheim"])), get_req("/api/queue", None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn queue_mit_falschem_key_ist_401() {
+        let (status, _) = send(
+            router_with(state(&["geheim"])),
+            get_req("/api/queue", Some("falsch")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn queue_mit_gueltigem_key_ist_200_und_leer() {
+        let (status, body) = send(
+            router_with(state(&["geheim"])),
+            get_req("/api/queue", Some("geheim")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, r#"{"items":[]}"#);
+    }
+
+    #[tokio::test]
+    async fn queue_mit_bearer_key_ist_200() {
+        let req = Request::builder()
+            .uri("/api/queue")
+            .header("authorization", "Bearer geheim")
+            .body(Body::empty())
+            .expect("Request baubar");
+        let (status, _) = send(router_with(state(&["geheim"])), req).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn queue_ohne_konfigurierte_keys_ist_offen() {
+        let (status, _) = send(router_with(state(&[])), get_req("/api/queue", None)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn download_mit_fremdem_host_ist_400() {
+        let (status, _) = send(
+            router_with(state(&[])),
+            post_json("/api/download", r#"{"url":"http://evil.example/x"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn download_mit_http_auf_erlaubtem_host_ist_400() {
+        let (status, _) = send(
+            router_with(state(&[])),
+            post_json(
+                "/api/download",
+                r#"{"url":"http://aniworld.to/anime/stream/x/staffel-1/episode-1"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn download_mit_kaputtem_json_ist_400() {
+        let (status, _) = send(
+            router_with(state(&[])),
+            post_json("/api/download", "{kaputt"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn download_ohne_url_feld_ist_client_fehler() {
+        let (status, _) = send(router_with(state(&[])), post_json("/api/download", "{}")).await;
+        assert!(status.is_client_error(), "{status}");
+    }
+
+    #[tokio::test]
+    async fn download_ohne_key_ist_401_vor_validierung() {
+        let (status, _) = send(
+            router_with(state(&["geheim"])),
+            post_json("/api/download", r#"{"url":"http://evil.example"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn providers_mit_fremdem_host_ist_400() {
+        let (status, _) = send(
+            router_with(state(&[])),
+            get_req("/api/providers?url=http://evil.example", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn providers_ohne_url_parameter_ist_400() {
+        let (status, _) = send(router_with(state(&[])), get_req("/api/providers", None)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn unbekannte_route_ist_404() {
+        let (status, _) = send(router_with(state(&[])), get_req("/nirgendwo", None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn public_detail_versteckt_pfade_und_fehlertexte() {
+        let job = |status, detail: &str| Job {
+            id: 1,
+            url: String::new(),
+            status,
+            detail: detail.to_string(),
+        };
+        assert_eq!(
+            public_detail(&job(JobStatus::Completed, "/home/x/out/Film.mkv")),
+            "Film.mkv"
+        );
+        assert_eq!(
+            public_detail(&job(JobStatus::Failed, "interner Fehler /etc/x")),
+            "Download fehlgeschlagen"
+        );
+        assert_eq!(public_detail(&job(JobStatus::Running, "x")), "");
+        assert_eq!(public_detail(&job(JobStatus::Queued, "x")), "");
+    }
+
+    #[test]
+    fn dateiname_aus_url_episode_und_film() {
+        assert_eq!(
+            file_name_from_url("https://aniworld.to/anime/stream/one-piece/staffel-2/episode-15"),
+            "one piece S02E15.mkv"
+        );
+        assert_eq!(
+            file_name_from_url("https://filmo.to/movies/the-matrix"),
+            "the matrix.mkv"
+        );
+        assert_eq!(file_name_from_url("https://filmo.to/"), "movie.mkv");
+    }
+
+    #[test]
+    fn capture_num_parst_und_lehnt_ab() {
+        assert_eq!(
+            capture_num("https://x/staffel-3/episode-1", "/staffel-"),
+            Some(3)
+        );
+        assert_eq!(capture_num("https://x/staffel-a", "/staffel-"), None);
+        assert_eq!(capture_num("https://x/", "/staffel-"), None);
+    }
+}

@@ -27,6 +27,14 @@ impl AuthConfig {
         }
     }
 
+    /// Test-Konstruktor mit festen Keys (ohne Settings/Env).
+    #[cfg(test)]
+    pub(crate) fn with_keys(keys: &[&str]) -> Self {
+        AuthConfig {
+            keys: Arc::new(keys.iter().map(|k| k.to_string()).collect()),
+        }
+    }
+
     /// True, wenn kein Key konfiguriert ist (API offen).
     pub fn is_open(&self) -> bool {
         self.keys.is_empty()

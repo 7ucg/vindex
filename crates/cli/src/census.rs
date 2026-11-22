@@ -196,3 +196,33 @@ fn csv_escape(s: &str) -> String {
         s.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::csv_escape;
+
+    #[test]
+    fn csv_escape_einfaches_feld_unveraendert() {
+        assert_eq!(csv_escape("One Piece"), "One Piece");
+    }
+
+    #[test]
+    fn csv_escape_leerer_string() {
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn csv_escape_komma_wird_gequotet() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+    }
+
+    #[test]
+    fn csv_escape_anfuehrungszeichen_werden_verdoppelt() {
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_escape_komma_und_quote_kombiniert() {
+        assert_eq!(csv_escape("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+}

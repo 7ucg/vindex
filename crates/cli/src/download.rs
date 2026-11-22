@@ -140,3 +140,103 @@ fn capture_num(url: &str, marker: &str) -> Option<u32> {
         .parse::<u32>()
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dateiname_episode_aus_aniworld_url() {
+        assert_eq!(
+            file_name_from_url("https://aniworld.to/anime/stream/one-piece/staffel-2/episode-15"),
+            "one piece S02E15.mkv"
+        );
+    }
+
+    #[test]
+    fn dateiname_ohne_staffel_und_episode_nutzt_s01e01() {
+        assert_eq!(
+            file_name_from_url("https://aniworld.to/anime/stream/naruto"),
+            "naruto S01E01.mkv"
+        );
+    }
+
+    #[test]
+    fn dateiname_serienstream_url() {
+        assert_eq!(
+            file_name_from_url("https://serienstream.to/serie/stream/dark/staffel-1/episode-3"),
+            "dark S01E03.mkv"
+        );
+    }
+
+    #[test]
+    fn dateiname_filmo_film() {
+        assert_eq!(
+            file_name_from_url("https://filmo.to/movies/the-matrix"),
+            "the matrix.mkv"
+        );
+    }
+
+    #[test]
+    fn dateiname_filmo_film_mit_query_und_pfad() {
+        assert_eq!(
+            file_name_from_url("https://filmo.to/movies/the-matrix?x=1"),
+            "the matrix.mkv"
+        );
+        assert_eq!(
+            file_name_from_url("https://filmo.to/movies/the-matrix/watch"),
+            "the matrix.mkv"
+        );
+    }
+
+    #[test]
+    fn dateiname_filmo_ohne_slug_faellt_auf_movie_zurueck() {
+        assert_eq!(file_name_from_url("https://filmo.to/movies/"), "movie.mkv");
+        assert_eq!(file_name_from_url("https://filmo.to/"), "movie.mkv");
+    }
+
+    #[test]
+    fn dateiname_unbekannte_url_faellt_auf_episode_zurueck() {
+        assert_eq!(
+            file_name_from_url("https://aniworld.to/"),
+            "episode S01E01.mkv"
+        );
+    }
+
+    #[test]
+    fn capture_num_liest_zahl_zwischen_markern() {
+        assert_eq!(
+            capture_num("https://x/staffel-3/episode-12", "/staffel-"),
+            Some(3)
+        );
+        assert_eq!(
+            capture_num("https://x/staffel-3/episode-12", "/episode-"),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn capture_num_marker_fehlt() {
+        assert_eq!(capture_num("https://x/anime/stream/foo", "/staffel-"), None);
+    }
+
+    #[test]
+    fn capture_num_keine_zahl() {
+        assert_eq!(
+            capture_num("https://x/staffel-abc/episode-1", "/staffel-"),
+            None
+        );
+        assert_eq!(
+            capture_num("https://x/staffel-/episode-1", "/staffel-"),
+            None
+        );
+    }
+
+    #[test]
+    fn capture_num_ueberlauf_ist_none() {
+        assert_eq!(
+            capture_num("https://x/staffel-99999999999", "/staffel-"),
+            None
+        );
+    }
+}

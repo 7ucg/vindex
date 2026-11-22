@@ -43,4 +43,8 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Desktop
 
-- **Fenster-Frontend** (tauri oder egui) auf der bestehenden `core`-Facade.
+- **Facade vervollständigen.** `Backend` reicht bisher nur `search` und `providers`
+  durch. Vor einem GUI fehlen: Download (`download_episode`/`download_url` + `DownloadPrefs`)
+  mit Fortschritts-Reporting, Zugriff auf `config::Settings`, und die Hoster→Stream-Auflösung.
+  Dazu mindestens ein headless-Test (die Doku in `lib.rs` behauptet „testbar", 0 Tests).
+- **Fenster-Frontend** (tauri oder egui) auf der vervollständigten `core`-Facade.
