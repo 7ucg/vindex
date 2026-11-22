@@ -1,11 +1,32 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
 import { appSettings, appInfo } from "../lib/api";
-import { applyTheme, getTheme, type Theme } from "../lib/theme";
+import {
+  applyTheme,
+  getTheme,
+  applyAccent,
+  getAccent,
+  applyDensity,
+  getDensity,
+  type Theme,
+  type Accent,
+  type Density,
+} from "../lib/theme";
 
 const THEMES: { id: Theme; label: string }[] = [
   { id: "dark", label: "Dunkel" },
   { id: "light", label: "Hell" },
   { id: "amoled", label: "AMOLED" },
+];
+const ACCENTS: { id: Accent; label: string }[] = [
+  { id: "violett", label: "Violett" },
+  { id: "cyan", label: "Cyan" },
+  { id: "gruen", label: "Grün" },
+  { id: "pink", label: "Pink" },
+  { id: "bernstein", label: "Bernstein" },
+];
+const DENSITIES: { id: Density; label: string }[] = [
+  { id: "normal", label: "Normal" },
+  { id: "kompakt", label: "Kompakt" },
 ];
 
 // Settings: zeigt die effektiven Laufzeit-Einstellungen (VINDEX_* / .env), live aus dem Kern.
@@ -13,10 +34,20 @@ export function Settings(): JSX.Element {
   const [settings] = createResource(appSettings);
   const [info] = createResource(appInfo);
   const [theme, setTheme] = createSignal<Theme>(getTheme());
+  const [accent, setAccent] = createSignal<Accent>(getAccent());
+  const [density, setDensity] = createSignal<Density>(getDensity());
 
   const pickTheme = (t: Theme) => {
     applyTheme(t);
     setTheme(t);
+  };
+  const pickAccent = (a: Accent) => {
+    applyAccent(a);
+    setAccent(a);
+  };
+  const pickDensity = (d: Density) => {
+    applyDensity(d);
+    setDensity(d);
   };
 
   return (
@@ -28,7 +59,7 @@ export function Settings(): JSX.Element {
       <div class="row-h" style={{ margin: "6px 2px 10px" }}>
         <h2 style={{ "font-size": "14px" }}>Erscheinungsbild</h2>
       </div>
-      <div class="controls" style={{ "margin-bottom": "18px" }}>
+      <div class="controls" style={{ "margin-bottom": "12px" }}>
         <For each={THEMES}>
           {(t) => (
             <button
@@ -37,6 +68,34 @@ export function Settings(): JSX.Element {
               onClick={() => pickTheme(t.id)}
             >
               {t.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "12px" }}>
+        <span class="sleep-label">Akzent</span>
+        <For each={ACCENTS}>
+          {(a) => (
+            <button
+              class="chip"
+              classList={{ on: accent() === a.id }}
+              onClick={() => pickAccent(a.id)}
+            >
+              {a.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <span class="sleep-label">Dichte</span>
+        <For each={DENSITIES}>
+          {(d) => (
+            <button
+              class="chip"
+              classList={{ on: density() === d.id }}
+              onClick={() => pickDensity(d.id)}
+            >
+              {d.label}
             </button>
           )}
         </For>

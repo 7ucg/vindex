@@ -2,9 +2,9 @@
 import { render } from "solid-js/web";
 import App from "./App";
 import "./styles.css";
-import { applyTheme, getTheme } from "./lib/theme";
+import { applyAll } from "./lib/theme";
 
-applyTheme(getTheme());
+applyAll();
 
 const root = document.getElementById("root");
 if (root) render(() => <App />, root);

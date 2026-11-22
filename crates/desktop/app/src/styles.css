@@ -45,6 +45,43 @@
   color-scheme: dark;
 }
 
+/* Akzentfarben: überschreiben die Gradient-Stops. */
+:root[data-accent="cyan"] {
+  --v1: #36d1ff;
+  --v2: #5a9bff;
+  --v3: #9affef;
+}
+:root[data-accent="gruen"] {
+  --v1: #36d19a;
+  --v2: #4bd1b0;
+  --v3: #9affd0;
+}
+:root[data-accent="pink"] {
+  --v1: #ff4d9d;
+  --v2: #ff5d7a;
+  --v3: #ffb84d;
+}
+:root[data-accent="bernstein"] {
+  --v1: #ffb84d;
+  --v2: #ff9d4d;
+  --v3: #ff7a4d;
+}
+
+/* Kompakte Dichte: engere Abstände und kleinere Karten. */
+:root[data-density="kompakt"] .wrap {
+  padding: 14px 18px 36px;
+}
+:root[data-density="kompakt"] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+:root[data-density="kompakt"] .dl {
+  padding: 9px 14px;
+}
+:root[data-density="kompakt"] .row-h {
+  margin: 18px 2px 10px;
+}
+
 * {
   box-sizing: border-box;
 }
