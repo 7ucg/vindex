@@ -2682,6 +2682,7 @@ dependencies = [
  "dialoguer",
  "futures",
  "indicatif",
+ "libc",
  "reqwest",
  "tokio",
  "vindex-api",

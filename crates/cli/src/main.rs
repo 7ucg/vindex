@@ -40,6 +40,7 @@ struct ServeArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    reset_sigpipe();
     let cli = Cli::parse();
     match cli.command {
         Command::Census(args) => census::run(args).await,
@@ -49,3 +50,17 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve(args) => vindex_api::serve(&args.addr).await,
     }
 }
+
+/// Setzt SIGPIPE auf das Standardverhalten zurück. Rust ignoriert SIGPIPE sonst,
+/// wodurch `println!` bei vorzeitig geschlossener Ausgabe (etwa `vindex search x
+/// | head`) mit „Broken pipe" panict, statt still zu beenden.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: einmaliger Aufruf vor jeder Ausgabe; setzt nur den Signal-Handler.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
