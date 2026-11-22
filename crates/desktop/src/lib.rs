@@ -6,18 +6,73 @@
 //! des Workspaces, weil es System-Bibliotheken (WebKitGTK u. a.) zum Linken
 //! braucht; die Facade hier ist jedoch voll funktionsfähig und headless testbar
 //! (siehe `ARCHITECTURE.md` §9, Schritt 12).
+//!
+//! Die Facade bleibt bewusst dünn: sie mappt nur sauber auf `vindex_core` und
+//! enthält keine eigene Netz-/Download-Logik. Die reinen Mapper (`prefs_from_settings`,
+//! `validate_url`, `hoster_by_name`) sind ohne Netz getestet.
 
 pub use vindex_core as core;
 
+use std::path::PathBuf;
+
+use core::config::Settings;
+use core::download::DownloadPrefs;
 use core::error::Result;
-use core::model::ProviderLinks;
+use core::hoster::Resolved;
+use core::model::{Hoster, Language, ProviderLinks, Quality};
 use core::{http, site};
+
+pub use tokio_util::sync::CancellationToken;
 
 /// Ein Suchtreffer fürs Frontend.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub title: String,
     pub url: String,
+}
+
+/// Optionale Overrides, die beim Bau eines [`DownloadPrefs`] aus [`Settings`]
+/// Vorrang vor den gespeicherten Einstellungen haben. Ein `None`-Feld erbt den
+/// jeweiligen Wert aus den `Settings`.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadOverrides {
+    /// Zielsprache (statt `settings.language`).
+    pub language: Option<Language>,
+    /// Hoster-Reihenfolge (statt `settings.effective_hosters()`).
+    pub hosters: Option<Vec<Hoster>>,
+    /// Höchste akzeptierte Qualität.
+    pub max_quality: Option<Quality>,
+    /// Niedrigste akzeptierte Qualität.
+    pub min_quality: Option<Quality>,
+    /// Zielverzeichnis.
+    pub out_dir: Option<PathBuf>,
+    /// HLS-Segmente selbst holen.
+    pub native_hls: Option<bool>,
+}
+
+/// Bildet [`Settings`] (plus optionale [`DownloadOverrides`]) auf [`DownloadPrefs`]
+/// ab. Reiner Mapper ohne Netz — Overrides gewinnen, sonst gelten die Settings.
+pub fn prefs_from_settings(
+    settings: &Settings,
+    file_name: impl Into<String>,
+    overrides: &DownloadOverrides,
+) -> DownloadPrefs {
+    let language = overrides.language.unwrap_or(settings.language);
+    DownloadPrefs {
+        languages: vec![language],
+        hosters: overrides
+            .hosters
+            .clone()
+            .unwrap_or_else(|| settings.effective_hosters()),
+        max_quality: overrides.max_quality.unwrap_or(settings.max_quality),
+        min_quality: overrides.min_quality.unwrap_or(settings.min_quality),
+        out_dir: overrides
+            .out_dir
+            .clone()
+            .unwrap_or_else(|| settings.download_path.clone()),
+        file_name: file_name.into(),
+        native_hls: overrides.native_hls.unwrap_or(settings.native_hls),
+    }
 }
 
 /// Facade-Objekt, das ein GUI-Frontend hält (ein HTTP-Client).
@@ -51,5 +106,116 @@ impl Backend {
     pub async fn providers(&self, episode_url: &str) -> Result<ProviderLinks> {
         let base = site::base_for_url(episode_url);
         site::serienstream::provider_links(&self.client, base, episode_url).await
+    }
+
+    /// Lädt die effektiven Laufzeit-Einstellungen (`VINDEX_*`-ENV + `.env`).
+    /// Darüber sind Download-Pfad, Sprache sowie effektive Hoster/Qualität
+    /// (`Settings::effective_hosters`) fürs Frontend zugänglich.
+    pub fn settings(&self) -> Settings {
+        Settings::load()
+    }
+
+    /// Löst einen Hoster + Embed-URL zur direkten Stream-URL auf
+    /// (Durchreichung auf `core::hoster::resolve`).
+    pub async fn resolve_stream(&self, hoster: Hoster, embed_url: &str) -> Result<Resolved> {
+        core::hoster::resolve(&self.client, hoster, embed_url).await
+    }
+
+    /// Lädt eine Episode/einen Film anhand fertiger [`DownloadPrefs`] herunter
+    /// (Durchreichung auf `core::download::download_url`). Abbruch optional über
+    /// einen [`CancellationToken`].
+    pub async fn download(
+        &self,
+        url: &str,
+        prefs: &DownloadPrefs,
+        cancel: Option<CancellationToken>,
+    ) -> Result<PathBuf> {
+        core::download::download_url(&self.client, url, prefs, cancel).await
+    }
+
+    /// Bequemlichkeits-Variante: baut aus [`Settings`] + [`DownloadOverrides`]
+    /// die [`DownloadPrefs`] und startet den Download.
+    pub async fn download_with_settings(
+        &self,
+        url: &str,
+        file_name: impl Into<String>,
+        settings: &Settings,
+        overrides: &DownloadOverrides,
+        cancel: Option<CancellationToken>,
+    ) -> Result<PathBuf> {
+        let prefs = prefs_from_settings(settings, file_name, overrides);
+        self.download(url, &prefs, cancel).await
+    }
+
+    /// Prüft, ob eine Einstiegs-URL ein unterstütztes Portal ist (SSRF-Schutz).
+    /// Durchreichung auf `core::site::validate_source_url`.
+    pub fn validate_url(url: &str) -> std::result::Result<(), String> {
+        site::validate_source_url(url)
+    }
+
+    /// Löst einen Hoster-Namen (z. B. `"voe"`) zum [`Hoster`]-Enum auf.
+    /// Durchreichung auf `Hoster::from_str`.
+    pub fn hoster_by_name(name: &str) -> Option<Hoster> {
+        name.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ohne Overrides müssen die `DownloadPrefs` exakt den `Settings` folgen.
+    #[test]
+    fn prefs_erben_aus_settings() {
+        let settings = Settings::default();
+        let prefs =
+            prefs_from_settings(&settings, "Show S01E01.mkv", &DownloadOverrides::default());
+
+        assert_eq!(prefs.languages, vec![settings.language]);
+        assert_eq!(prefs.hosters, settings.effective_hosters());
+        assert_eq!(prefs.max_quality, settings.max_quality);
+        assert_eq!(prefs.min_quality, settings.min_quality);
+        assert_eq!(prefs.out_dir, settings.download_path);
+        assert_eq!(prefs.file_name, "Show S01E01.mkv");
+        assert_eq!(prefs.native_hls, settings.native_hls);
+    }
+
+    /// Gesetzte Overrides müssen die Settings-Werte überschreiben.
+    #[test]
+    fn overrides_gewinnen_vor_settings() {
+        let settings = Settings::default();
+        let overrides = DownloadOverrides {
+            language: Some(Language::EnglishDub),
+            hosters: Some(vec![Hoster::Vidoza]),
+            max_quality: Some(Quality::P720),
+            min_quality: Some(Quality::P480),
+            out_dir: Some(PathBuf::from("/tmp/vindex-test")),
+            native_hls: Some(!settings.native_hls),
+        };
+        let prefs = prefs_from_settings(&settings, "x.mkv", &overrides);
+
+        assert_eq!(prefs.languages, vec![Language::EnglishDub]);
+        assert_eq!(prefs.hosters, vec![Hoster::Vidoza]);
+        assert_eq!(prefs.max_quality, Quality::P720);
+        assert_eq!(prefs.min_quality, Quality::P480);
+        assert_eq!(prefs.out_dir, PathBuf::from("/tmp/vindex-test"));
+        assert_eq!(prefs.native_hls, !settings.native_hls);
+    }
+
+    /// URL-Validierung über die Facade: unterstützte Hosts ja, fremde nein.
+    #[test]
+    fn validate_url_filtert_fremde_hosts() {
+        assert!(
+            Backend::validate_url("https://aniworld.to/anime/stream/x/staffel-1/episode-1").is_ok()
+        );
+        assert!(Backend::validate_url("https://example.com/evil").is_err());
+        assert!(Backend::validate_url("http://aniworld.to/x").is_err());
+    }
+
+    /// Hoster-Namensauflösung über die Facade.
+    #[test]
+    fn hoster_namensaufloesung() {
+        assert_eq!(Backend::hoster_by_name("voe"), Some(Hoster::Voe));
+        assert_eq!(Backend::hoster_by_name("gibtsnicht"), None);
     }
 }

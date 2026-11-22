@@ -9,3 +9,4 @@ authors.workspace = true
 [dependencies]
 vindex-core = { workspace = true }
 reqwest = { workspace = true }
+tokio-util = { workspace = true }
