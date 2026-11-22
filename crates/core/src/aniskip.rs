@@ -5,30 +5,16 @@
 //! Jikan-API (inoffizielle MyAnimeList-API), weil die Portal-URLs nur einen Slug
 //! tragen, AniSkip aber eine MAL-ID braucht.
 
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::http::capped_text;
 
 const API: &str = "https://api.aniskip.com/v1/skip-times";
 
 /// Obergrenze für eine externe API-Antwort (Jikan/AniSkip). Die JSON-Antworten sind
 /// klein; die Grenze verhindert, dass eine manipulierte Antwort den Speicher flutet.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-
-/// Lädt den Body einer Antwort als Text, aber höchstens `MAX_RESPONSE_BYTES`.
-async fn capped_text(resp: reqwest::Response) -> Result<String> {
-    let mut stream = resp.bytes_stream();
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err(Error::Parse("API-Antwort überschreitet Größenlimit".into()));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
 
 /// Jikan-Basis (inoffizielle MyAnimeList-API).
 const JIKAN_SEARCH: &str = "https://api.jikan.moe/v4/anime";
@@ -67,7 +53,7 @@ pub async fn skip_times(
     if !resp.status().is_success() {
         return Ok(vec![]);
     }
-    let body = capped_text(resp).await?;
+    let body = capped_text(resp, MAX_RESPONSE_BYTES).await?;
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| Error::Parse(format!("aniskip json: {e}")))?;
     if json.get("found").and_then(|v| v.as_bool()) != Some(true) {
@@ -215,7 +201,7 @@ async fn search_anime(client: &reqwest::Client, query: &str) -> Result<Vec<Jikan
     if !resp.status().is_success() {
         return Ok(vec![]);
     }
-    Ok(parse_search(&capped_text(resp).await?))
+    Ok(parse_search(&capped_text(resp, MAX_RESPONSE_BYTES).await?))
 }
 
 /// Holt die verwandten MAL-IDs für eine ID.
@@ -225,7 +211,7 @@ async fn related_ids(client: &reqwest::Client, mal_id: u64) -> Result<Vec<u64>> 
     if !resp.status().is_success() {
         return Ok(vec![]);
     }
-    Ok(parse_related_ids(&capped_text(resp).await?))
+    Ok(parse_related_ids(&capped_text(resp, MAX_RESPONSE_BYTES).await?))
 }
 
 /// Sammelt (begrenzt) die komplette Staffel-Kette ab `start` ein und gibt sie

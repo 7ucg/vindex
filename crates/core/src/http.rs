@@ -366,6 +366,25 @@ pub async fn get_text_retry(
     get_retry(client, url, referer).await?.text().await
 }
 
+/// Liest den Body einer Antwort als Text, aber höchstens `cap` Bytes. Verhindert,
+/// dass eine manipulierte Antwort (z. B. einer externen API) den Speicher flutet.
+/// `Err` mit [`crate::error::Error::Parse`], sobald der Body `cap` überschreitet.
+pub async fn capped_text(resp: reqwest::Response, cap: usize) -> crate::error::Result<String> {
+    use futures::StreamExt as _;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if buf.len() + chunk.len() > cap {
+            return Err(crate::error::Error::Parse(
+                "Antwort überschreitet Größenlimit".into(),
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 // ───────────────────────────── Anti-Bot Stufe 2 ─────────────────────────────
 //
 // TLS-Impersonate-Fallback über `wreq` (BoringSSL-basierte JA3/JA4-Fingerprints).

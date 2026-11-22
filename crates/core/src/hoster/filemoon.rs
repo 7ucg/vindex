@@ -61,6 +61,14 @@ pub fn extract_url_from_html(html: &str) -> Option<String> {
 
 // ───────────────────────────── Byse-API (AES-256-GCM) ─────────────────────────────
 
+/// Obergrenze für die Byse-API-Antwort. Die JSON-Antwort (Keys + verschlüsselte
+/// Quellenliste) ist klein; die Grenze hält eine manipulierte Antwort vom Speicher fern.
+const MAX_BYSE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Obergrenze für einen einzelnen AES-GCM-Ciphertext (base64url-dekodiert), bevor
+/// entschlüsselt wird — die Quellenliste ist wenige KB groß.
+const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+
 /// Datei-Code aus einer Filemoon/Byse-URL (`…/d/<code>` oder `…/e/<code>`).
 pub fn extract_file_code(url: &str) -> Option<String> {
     Regex::new(r"/[de]/([a-zA-Z0-9]+)")
@@ -121,7 +129,7 @@ fn decrypt_payload(
     let ciphertext = b64url_decode(playback.get(payload_prop)?.as_str()?)?;
     // aes-gcm nutzt einen 96-Bit-Nonce; andere IV-Längen wären GHASH-abgeleitet und
     // werden hier nicht unterstützt (reale Byse-Antworten liefern 12-Byte-IVs).
-    if iv.len() != 12 || ciphertext.len() <= 16 {
+    if iv.len() != 12 || ciphertext.len() <= 16 || ciphertext.len() > MAX_PAYLOAD_BYTES {
         return None;
     }
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
@@ -201,7 +209,7 @@ async fn try_byse_api(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    let body = resp.text().await?;
+    let body = crate::http::capped_text(resp, MAX_BYSE_RESPONSE_BYTES).await?;
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => return Ok(None),
