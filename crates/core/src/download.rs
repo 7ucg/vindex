@@ -835,10 +835,12 @@ async fn download_hls_native(
 
 /// Höchstzahl Segmente, die aus einer Playlist gelesen werden.
 const MAX_SEGMENTS: usize = 50_000;
-/// Obergrenze pro Segment.
-const MAX_SEGMENT_BYTES: u64 = 256 * 1024 * 1024;
 /// Engere Grenze für verschlüsselte Segmente (der Krypto-Pfad puffert komplett).
 const MAX_ENCRYPTED_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
+/// Puffer-Grenze pro Segment im parallelen Pfad (jedes Segment liegt komplett im
+/// Speicher). Großzügig für echte HLS-Segmente (< 10 MB); bounded den Peak auf
+/// `SEGMENT_CONCURRENCY × diese Grenze`.
+const MAX_BUFFERED_SEGMENT_BYTES: u64 = 48 * 1024 * 1024;
 /// Obergrenze über alle Segmente zusammen.
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
@@ -881,28 +883,37 @@ async fn fetch_segments_to(
     let client_c = client.clone();
     let referer_c = referer.map(str::to_string);
     let cipher_c = cipher.cloned();
+    // Gemeinsamer Byte-Zähler über alle gleichzeitigen Fetches: der Total-Cap
+    // greift so schon während des Ladens, nicht erst nach einem fertigen Segment.
+    let downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let mut stream = futures::stream::iter(segments.iter().cloned().enumerate())
         .map(move |(index, seg)| {
             let client = client_c.clone();
             let referer = referer_c.clone();
             let cipher = cipher_c.clone();
+            let downloaded = downloaded.clone();
             async move {
-                fetch_one_segment(&client, &seg, referer.as_deref(), cipher.as_ref(), index).await
+                fetch_one_segment(
+                    &client,
+                    &seg,
+                    referer.as_deref(),
+                    cipher.as_ref(),
+                    index,
+                    &downloaded,
+                )
+                .await
             }
         })
         .buffered(SEGMENT_CONCURRENCY);
 
-    let mut total: u64 = 0;
+    let mut written: u64 = 0;
     let mut done = 0usize;
     while let Some(res) = stream.next().await {
         if is_cancelled(cancel) {
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
         let bytes = res?;
-        total += bytes.len() as u64;
-        if total > MAX_TOTAL_BYTES {
-            return Err(Error::extract("HLS", "Download überschreitet Größenlimit"));
-        }
+        written += bytes.len() as u64;
         file.write_all(&bytes).await?;
         done += 1;
         report(
@@ -910,7 +921,7 @@ async fn fetch_segments_to(
             Progress::Segment {
                 done,
                 total: total_segments,
-                bytes: total,
+                bytes: written,
             },
         );
     }
@@ -922,14 +933,18 @@ async fn fetch_segments_to(
 const SEGMENT_CONCURRENCY: usize = 6;
 
 /// Holt ein einzelnes Segment vollständig in den Speicher: SSRF-Prüfung,
-/// Größen-Cap, optionale AES-128-CBC-Entschlüsselung, Sync-Byte-Check (MPEG-TS).
+/// Puffer-Cap pro Segment, gemeinsamer Total-Cap pro Chunk, optionale
+/// AES-128-CBC-Entschlüsselung, Sync-Byte-Check (MPEG-TS).
 async fn fetch_one_segment(
     client: &reqwest::Client,
     seg: &str,
     referer: Option<&str>,
     cipher: Option<&Aes128Ctx>,
     index: usize,
+    downloaded: &std::sync::atomic::AtomicU64,
 ) -> Result<Vec<u8>> {
+    use std::sync::atomic::Ordering;
+
     if !is_http_url(seg) || crate::http::host_is_forbidden_ip_literal(seg) {
         return Err(Error::extract("HLS", "Segment-URL nicht erlaubt"));
     }
@@ -937,16 +952,22 @@ async fn fetch_one_segment(
         .await?
         .error_for_status()?;
     let mut stream = resp.bytes_stream();
+    // Engerer Puffer-Cap im parallelen Pfad (Peak = Concurrency × dieser Cap).
     let cap = if cipher.is_some() {
         MAX_ENCRYPTED_SEGMENT_BYTES
     } else {
-        MAX_SEGMENT_BYTES
+        MAX_BUFFERED_SEGMENT_BYTES
     };
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        if buf.len() as u64 + chunk.len() as u64 > cap {
+        let n = chunk.len() as u64;
+        if buf.len() as u64 + n > cap {
             return Err(Error::extract("HLS", "Segment überschreitet Größenlimit"));
+        }
+        // Gemeinsamer Total-Cap greift schon während des Ladens (alle Fetches).
+        if downloaded.fetch_add(n, Ordering::Relaxed) + n > MAX_TOTAL_BYTES {
+            return Err(Error::extract("HLS", "Download überschreitet Größenlimit"));
         }
         buf.extend_from_slice(&chunk);
     }
