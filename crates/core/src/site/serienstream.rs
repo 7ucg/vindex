@@ -52,11 +52,75 @@ fn parse_catalog(body: &str) -> Vec<CatalogEntry> {
     out
 }
 
+/// true für das serienstream.to/s.to-Markup (anders als aniworld: `/serie/<slug>`,
+/// Staffel-/Folgen-Links statt `hosterSiteDirectNav`).
+fn is_sto_base(base: &str) -> bool {
+    base.contains("serienstream") || base.contains("//s.to") || base.contains(".s.to")
+}
+
 /// Liefert die Staffel-Nummern eines Titels (`0` = Filme-Tab).
 pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> Result<Vec<u32>> {
+    if is_sto_base(base) {
+        let url = format!("{base}/serie/{slug}");
+        let body = super::fetch_text(client, &url).await?;
+        return Ok(parse_sto_seasons(&body, slug));
+    }
     let url = format!("{base}/anime/stream/{slug}");
     let body = super::fetch_text(client, &url).await?;
     Ok(parse_season_nav(&body))
+}
+
+/// serienstream-Staffeln: alle `N` aus `/serie/<slug>/staffel-N[/…]`-Links.
+fn parse_sto_seasons(body: &str, slug: &str) -> Vec<u32> {
+    let doc = Html::parse_document(body);
+    let prefix = format!("/serie/{slug}/staffel-");
+    let sel = Selector::parse(&format!(r#"a[href^="{prefix}"]"#)).unwrap();
+    let mut out = std::collections::BTreeSet::new();
+    for el in doc.select(&sel) {
+        let href = el.value().attr("href").unwrap_or("");
+        if let Some(rest) = href.strip_prefix(&prefix) {
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = num.parse::<u32>() {
+                out.insert(n);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// serienstream-Folgen einer Staffel: `/serie/<slug>/staffel-N/episode-M`-Links.
+/// Der Linktext ist nur die Nummer, daher „Folge M" als Titel.
+fn parse_sto_episodes(body: &str, base: &str, slug: &str, season: u32) -> Vec<Episode> {
+    let doc = Html::parse_document(body);
+    let prefix = format!("/serie/{slug}/staffel-{season}/episode-");
+    let sel = Selector::parse(&format!(r#"a[href^="{prefix}"]"#)).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for el in doc.select(&sel) {
+        let href = el.value().attr("href").unwrap_or("");
+        if let Some(rest) = href.strip_prefix(&prefix) {
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let Ok(m) = num.parse::<u32>() else { continue };
+            if !seen.insert(m) {
+                continue;
+            }
+            let text = el.text().collect::<String>().trim().to_string();
+            let title = if text.is_empty() || text == m.to_string() {
+                format!("Folge {m}")
+            } else {
+                text
+            };
+            out.push(Episode {
+                url: format!("{base}{href}"),
+                title,
+                season,
+                index_in_season: m,
+                explicit_number: Some(m),
+            });
+        }
+    }
+    out.sort_by_key(|e| e.index_in_season);
+    out
 }
 
 /// Reine HTML→Staffel-Logik von [`list_seasons`]. Liest die Staffel-Navigation
@@ -87,6 +151,11 @@ pub async fn list_episodes(
     slug: &str,
     season: u32,
 ) -> Result<Vec<Episode>> {
+    if is_sto_base(base) {
+        let url = format!("{base}/serie/{slug}/staffel-{season}");
+        let body = super::fetch_text(client, &url).await?;
+        return Ok(parse_sto_episodes(&body, base, slug, season));
+    }
     let url = if season == 0 {
         format!("{base}/anime/stream/{slug}/filme")
     } else {
@@ -323,6 +392,34 @@ mod tests {
     use super::*;
 
     const BASE_T: &str = "https://example.test";
+
+    #[test]
+    fn sto_staffeln_aus_serie_links() {
+        let html = r#"
+            <a href="/serie/breaking-bad/staffel-0">Filme</a>
+            <a href="/serie/breaking-bad/staffel-1">1</a>
+            <a href="/serie/breaking-bad/staffel-2">2</a>
+            <a href="/serie/breaking-bad/staffel-1/episode-1">1</a>
+        "#;
+        assert_eq!(parse_sto_seasons(html, "breaking-bad"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn sto_folgen_aus_episode_links() {
+        let html = r#"
+            <li><a href="/serie/breaking-bad/staffel-1/episode-1" class="nav-link">1</a></li>
+            <li><a href="/serie/breaking-bad/staffel-1/episode-2" class="nav-link">2</a></li>
+            <a href="/serie/breaking-bad/staffel-2/episode-1">1</a>
+        "#;
+        let eps = parse_sto_episodes(html, "https://serienstream.to", "breaking-bad", 1);
+        assert_eq!(eps.len(), 2);
+        assert_eq!(eps[0].index_in_season, 1);
+        assert_eq!(eps[0].title, "Folge 1");
+        assert_eq!(
+            eps[0].url,
+            "https://serienstream.to/serie/breaking-bad/staffel-1/episode-1"
+        );
+    }
 
     #[test]
     fn katalog_parst_serie_links_dedupliziert() {
