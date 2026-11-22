@@ -149,8 +149,21 @@ pub fn client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(20))
         .redirect(safe_redirect_policy())
-        // Cookie-Store: einige Portale (filmo.to) binden CSRF-/Session-Cookies, die
-        // zwischen Seiten-GET und Folge-POST mitgehen müssen (per Domain gescopet).
+        .dns_resolver(std::sync::Arc::new(GuardedResolver));
+    apply_proxy(b)?.build()
+}
+
+/// Kurzlebiger Client mit eigenem, frischem Cookie-Jar — nur für Flows, die
+/// Session-/CSRF-Cookies über mehrere Requests brauchen (filmo.to: Film-GET setzt
+/// die Laravel-Session, der `/n`-POST braucht sie). Bewusst **nicht** auf den
+/// geteilten Langzeit-Clients, damit kein Cookie-Zustand über Flows/Hosts/Nutzer
+/// hinweg geteilt wird. Der Jar ist reqwest-intern pro Domain gescopet.
+pub fn cookie_client() -> reqwest::Result<reqwest::Client> {
+    let b = reqwest::Client::builder()
+        .user_agent(next_user_agent())
+        .gzip(true)
+        .timeout(Duration::from_secs(30))
+        .redirect(safe_redirect_policy())
         .cookie_store(true)
         .dns_resolver(std::sync::Arc::new(GuardedResolver));
     apply_proxy(b)?.build()
@@ -164,7 +177,6 @@ pub fn browser_client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(30))
         .redirect(safe_redirect_policy())
-        .cookie_store(true)
         .dns_resolver(std::sync::Arc::new(GuardedResolver));
     apply_proxy(b)?.build()
 }
@@ -241,6 +253,16 @@ fn safe_redirect_policy() -> reqwest::redirect::Policy {
         }
         let url = attempt.url();
         if !matches!(url.scheme(), "http" | "https") {
+            return attempt.stop();
+        }
+        // Kein https→http-Downgrade: sonst könnten Session-Cookies (filmo.to-Flow)
+        // oder Tokens über Klartext abfließen.
+        if url.scheme() == "http"
+            && attempt
+                .previous()
+                .last()
+                .is_some_and(|p| p.scheme() == "https")
+        {
             return attempt.stop();
         }
         if let Some(host) = url.host_str() {

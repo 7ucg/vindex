@@ -235,3 +235,4 @@ mod year_de {
         assert_eq!(super::extract_year("kein jahr"), None);
     }
 }
+

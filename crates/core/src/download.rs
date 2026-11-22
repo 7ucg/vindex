@@ -159,7 +159,10 @@ pub async fn download_movie(
 ) -> Result<PathBuf> {
     site::validate_source_url(movie_url).map_err(Error::Parse)?;
     report(progress, Progress::Resolving);
-    let movie = site::filmo::movie(client, movie_url).await?;
+    // filmo.to bindet eine Laravel-Session ans CSRF-Token: Film-GET und `/n`-POST
+    // teilen sich einen eigenen, kurzlebigen Cookie-Client (nicht den geteilten).
+    let fclient = crate::http::cookie_client()?;
+    let movie = site::filmo::movie(&fclient, movie_url).await?;
     let csrf = movie
         .csrf
         .as_deref()
@@ -177,7 +180,7 @@ pub async fn download_movie(
             if is_cancelled(&cancel) {
                 return Err(Error::Ffmpeg("abgebrochen".into()));
             }
-            let embed = match site::filmo::resolve_embed(client, movie_url, csrf, token).await {
+            let embed = match site::filmo::resolve_embed(&fclient, movie_url, csrf, token).await {
                 Ok(e) => e,
                 Err(e) => {
                     tracing::debug!("Filmo-Redirect ({}) fehlgeschlagen: {e}", hoster.as_str());
@@ -295,7 +298,9 @@ async fn resolve_movie_playable(
     prefs: &DownloadPrefs,
 ) -> Result<Resolved> {
     site::validate_source_url(movie_url).map_err(Error::Parse)?;
-    let movie = site::filmo::movie(client, movie_url).await?;
+    // Eigener Cookie-Client für den filmo.to-Session-/CSRF-Flow (siehe download_movie).
+    let fclient = crate::http::cookie_client()?;
+    let movie = site::filmo::movie(&fclient, movie_url).await?;
     let csrf = movie
         .csrf
         .as_deref()
@@ -309,7 +314,7 @@ async fn resolve_movie_playable(
             let Some(token) = hmap.get(&hoster) else {
                 continue;
             };
-            let embed = match site::filmo::resolve_embed(client, movie_url, csrf, token).await {
+            let embed = match site::filmo::resolve_embed(&fclient, movie_url, csrf, token).await {
                 Ok(e) => e,
                 Err(e) => {
                     tracing::debug!("Filmo-Redirect ({}) fehlgeschlagen: {e}", hoster.as_str());
