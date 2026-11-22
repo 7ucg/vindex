@@ -9,6 +9,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Watch: synchronisierte Wiedergabe `--syncplay` (`core::mpv::build_syncplay_args`/
+  `play_syncplay`). Syncplay steuert mpv: Stream-URL positional, mpv-Pfad über `--player-path`,
+  die gehärteten mpv-Optionen hinter `--`. Hat Vorrang vor `--player`.
 - Watch: Player-Auswahl `--player mpv|iina` (`core::mpv::Player`). IINA läuft über `iina-cli`
   und bekommt dieselben (gehärteten) mpv-Optionen als `--mpv-…`; die URL bleibt ein eigenes
   letztes Argument. Standard bleibt mpv.

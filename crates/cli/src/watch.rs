@@ -8,7 +8,9 @@ use vindex_core::aniskip::{self, skip_times};
 use vindex_core::config::Settings;
 use vindex_core::download::resolve_playable;
 use vindex_core::http;
-use vindex_core::mpv::{build_player_args, play_with, AniSkipTimes, Player};
+use vindex_core::mpv::{
+    build_player_args, build_syncplay_args, play_syncplay, play_with, AniSkipTimes, Player,
+};
 use vindex_core::watchstate::episode_from_url;
 
 use crate::download::{file_name_from_url, resolve_prefs_from};
@@ -29,6 +31,9 @@ pub struct WatchArgs {
     /// Player: `mpv` (Standard) oder `iina` (nur macOS).
     #[arg(long)]
     pub player: Option<String>,
+    /// Synchronisierte Wiedergabe über Syncplay (steuert mpv). Vorrang vor `--player`.
+    #[arg(long)]
+    pub syncplay: bool,
 }
 
 pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
@@ -78,13 +83,28 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
         None
     };
 
+    let title = title_from_url(&args.url);
+
+    // Syncplay hat Vorrang vor der Player-Auswahl (steuert mpv selbst).
+    if args.syncplay {
+        let sp_args = build_syncplay_args(
+            &stream.url,
+            stream.referer.as_deref(),
+            title.as_deref(),
+            aniskip.as_ref(),
+        );
+        println!("Starte syncplay ...");
+        return play_syncplay(&sp_args)
+            .await
+            .map_err(|e| anyhow::anyhow!("Wiedergabe fehlgeschlagen: {e}"));
+    }
+
     let player = match args.player.as_deref() {
         None => Player::Mpv,
         Some(name) => Player::from_name(name)
             .ok_or_else(|| anyhow::anyhow!("Unbekannter Player: {name} (nutze mpv oder iina)"))?,
     };
 
-    let title = title_from_url(&args.url);
     let player_args = build_player_args(
         player,
         &stream.url,

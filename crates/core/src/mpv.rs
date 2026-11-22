@@ -173,6 +173,26 @@ pub fn build_mpv_args(
     args
 }
 
+/// Baut die Syncplay-Argumente für synchronisierte Wiedergabe. Syncplay steuert
+/// mpv: die Stream-URL ist das positionale Argument, der mpv-Pfad wird über
+/// `--player-path` gesetzt, und die gehärteten mpv-Optionen stehen hinter `--`.
+/// Syncplay läuft bewusst nur mit mpv (nicht IINA).
+pub fn build_syncplay_args(
+    stream_url: &str,
+    referer: Option<&str>,
+    title: Option<&str>,
+    aniskip: Option<&AniSkipTimes>,
+) -> Vec<String> {
+    let mut args = vec![
+        stream_url.to_string(),
+        "--player-path".to_string(),
+        Player::Mpv.binary().to_string(),
+        "--".to_string(),
+    ];
+    args.extend(mpv_option_tokens(referer, title, aniskip));
+    args
+}
+
 /// Baut die Argumente für den gewählten Player. Für mpv wie [`build_mpv_args`];
 /// für IINA werden dieselben Optionen als `--mpv-<opt>` an `iina-cli` übergeben und
 /// die URL als letztes Argument angehängt (kein `--`-Trenner, iina-cli kennt ihn nicht).
@@ -207,7 +227,16 @@ pub async fn play(args: &[String]) -> Result<()> {
 
 /// Wie [`play`], aber für einen frei gewählten [`Player`] (mpv oder IINA).
 pub async fn play_with(player: Player, args: &[String]) -> Result<()> {
-    let bin = player.binary();
+    run_player(player.binary(), args).await
+}
+
+/// Startet Syncplay (synchronisierte Wiedergabe) mit den [`build_syncplay_args`].
+pub async fn play_syncplay(args: &[String]) -> Result<()> {
+    run_player("syncplay", args).await
+}
+
+/// Startet ein Player-Binary mit getrennten Argumenten (keine Shell) und wartet.
+async fn run_player(bin: &str, args: &[String]) -> Result<()> {
     let mut cmd = Command::new(bin);
     cmd.kill_on_drop(true);
     cmd.args(args);
@@ -422,6 +451,23 @@ mod tests {
         assert_eq!(args.last().unwrap(), url);
         // iina-cli kennt keinen `--`-Trenner.
         assert!(!args.iter().any(|a| a == "--"));
+    }
+
+    #[test]
+    fn syncplay_args_url_positional_und_player_path() {
+        let url = "https://cdn.example/s.m3u8";
+        let args = build_syncplay_args(url, Some("https://ref"), Some("Titel"), None);
+        // URL ist das erste (positionale) Argument.
+        assert_eq!(args.first().unwrap(), url);
+        // mpv-Pfad wird gesetzt, der `--`-Trenner leitet die mpv-Optionen ein.
+        let pp = args.iter().position(|a| a == "--player-path").unwrap();
+        assert_eq!(args[pp + 1], "mpv");
+        let sep = args.iter().position(|a| a == "--").unwrap();
+        assert!(sep > pp);
+        // Die gehärteten mpv-Optionen stehen hinter `--`, die URL nicht erneut.
+        assert!(args[sep..].contains(&"--no-config".to_string()));
+        assert!(args[sep..].contains(&"--force-media-title=Titel".to_string()));
+        assert_eq!(args.iter().filter(|a| a.as_str() == url).count(), 1);
     }
 
     #[test]
