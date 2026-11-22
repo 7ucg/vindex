@@ -343,6 +343,43 @@ fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), S
     std::fs::remove_file(&canon).map_err(|e| e.to_string())
 }
 
+/// Validiert `name` wie `library`/`delete` und gibt den kanonisierten Pfad zurück
+/// — gemeinsame Basis für Öffnen und „im Ordner zeigen" (kein Frontend-Opener-Grant).
+fn library_path(name: &str, state: &AppState) -> Result<std::path::PathBuf, String> {
+    let dir = state.backend.settings().download_path;
+    let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    safe_media_path(&dir, &canon_dir, name)
+        .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())
+}
+
+/// Öffnet eine Bibliotheksdatei im System-Player (vom Backend, nach Validierung).
+#[tauri::command]
+fn open_library_item(
+    app: tauri::AppHandle,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let canon = library_path(&name, &state)?;
+    app.opener()
+        .open_path(canon.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Zeigt eine Bibliotheksdatei im Dateimanager (vom Backend, nach Validierung).
+#[tauri::command]
+fn reveal_library_item(
+    app: tauri::AppHandle,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let canon = library_path(&name, &state)?;
+    app.opener()
+        .reveal_item_in_dir(canon)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
@@ -417,6 +454,8 @@ pub fn run() {
             list_downloads,
             library,
             delete_library_item,
+            open_library_item,
+            reveal_library_item,
             app_settings
         ])
         .run(tauri::generate_context!())

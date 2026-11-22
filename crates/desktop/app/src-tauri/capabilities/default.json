@@ -1,17 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimale Rechte fürs Hauptfenster: Core-Plugins und — eng scoped — das Anzeigen einer Datei im Dateimanager (nur im Download-Ordner).",
+  "description": "Minimale Rechte fürs Hauptfenster: nur Core-Plugins. Öffnen/Anzeigen von Bibliotheksdateien läuft über validierte Backend-Commands, nicht über einen Frontend-Opener-Grant.",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    {
-      "identifier": "opener:allow-reveal-item-in-dir",
-      "allow": [{ "path": "$DOWNLOAD/**" }]
-    },
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$DOWNLOAD/**" }]
-    }
-  ]
+  "permissions": ["core:default"]
 }

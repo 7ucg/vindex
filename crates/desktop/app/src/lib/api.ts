@@ -132,6 +132,14 @@ export function deleteLibraryItem(name: string): Promise<void> {
   return invoke("delete_library_item", { name });
 }
 
+export function openLibraryItem(name: string): Promise<void> {
+  return invoke("open_library_item", { name });
+}
+
+export function revealLibraryItem(name: string): Promise<void> {
+  return invoke("reveal_library_item", { name });
+}
+
 /** Lokale Datei → asset://-URL fürs <video>-Element. */
 export function localFileUrl(path: string): string {
   return convertFileSrc(path);

@@ -1,6 +1,11 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
-import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
-import { library, deleteLibraryItem, type LibraryEntry } from "../lib/api";
+import {
+  library,
+  deleteLibraryItem,
+  openLibraryItem,
+  revealLibraryItem,
+  type LibraryEntry,
+} from "../lib/api";
 
 function size(bytes: number): string {
   const m = bytes / (1024 * 1024);
@@ -18,7 +23,7 @@ export function Library(): JSX.Element {
   // Lokale Dateien (MKV/TS) spielt der System-Player zuverlässig — das WebView
   // kommt mit dem MKV-Container nicht klar. In-Window-Offline folgt mit libmpv.
   const play = (e: LibraryEntry) => {
-    void openPath(e.path).catch(() => {});
+    void openLibraryItem(e.name).catch(() => {});
   };
 
   const remove = async (e: LibraryEntry) => {
@@ -77,7 +82,7 @@ export function Library(): JSX.Element {
                   <button class="chip" onClick={() => play(e)}>
                     Abspielen
                   </button>
-                  <button class="chip" onClick={() => void revealItemInDir(e.path).catch(() => {})}>
+                  <button class="chip" onClick={() => void revealLibraryItem(e.name).catch(() => {})}>
                     Ordner
                   </button>
                   <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
