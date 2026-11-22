@@ -9,6 +9,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Anti-Bot Stufe 2: TLS-Impersonate-Fallback über `wreq` (BoringSSL-JA3/JA4-
+  Fingerprint). Opt-in über `VINDEX_IMPERSONATE` (Default **aus**). Sieht eine
+  Portal-Antwort nach einer Cloudflare-Challenge aus (Status 403/429/503 oder
+  Interstitial-Marker), wird die Seite einmalig über einen Chrome-Fingerprint-Client
+  nachgeholt. Der Impersonate-Pfad nutzt denselben festen DNS-Upstream (1.1.1.1) und
+  Adressfilter wie der reqwest-Pfad (SSRF-/Rebinding-Schutz). Ohne das Flag unverändert.
 - CLI: Batch-Download über `vindex download --batch <datei>` — eine URL pro Zeile,
   Leerzeilen und mit `#` beginnende Kommentare werden übersprungen. Die URLs werden
   nacheinander mit demselben Sprach-/Hoster-/Qualitäts-Setup geladen (Delay dazwischen),
@@ -21,7 +27,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geplant
 
-- TLS-Impersonate (`wreq`) und Headless-Browser-Fallback für Cloudflare-gated Seiten.
+- Headless-Browser-Fallback (Stufe 3) für Cloudflare-gated Seiten, die auch der
+  TLS-Impersonate nicht durchbricht.
 - Filemoon Byse-API (AES-256-GCM); Resolver für Streamtape, Luluvdo, LoadX.
 - „keep watching", Proxy-Rotation.
 - Watch via mpv/IINA, Syncplay, Anime4K.

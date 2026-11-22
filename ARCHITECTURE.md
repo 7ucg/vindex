@@ -49,7 +49,7 @@ English Dub.
 | Crate | Version | Zweck | Entscheidung |
 | --- | --- | --- | --- |
 | `reqwest` | 0.13 | Standard-Async-HTTP | Basis-Transport. |
-| `wreq` | 0.16 | Browser-Impersonate (TLS/JA3/JA4, HTTP2) | für Cloudflare-gated Hoster (Erweiterungspunkt). |
+| `wreq` + `wreq-util` | 6.0.0-rc / 3.0.0-rc | Browser-Impersonate (TLS/JA3/JA4, HTTP2) | Stufe 2 umgesetzt, opt-in (`VINDEX_IMPERSONATE`, Default aus). BoringSSL via `btls-sys` (braucht cmake/clang zum Bauen). |
 | `scraper` | 0.29 | HTML/CSS-Selektoren | Scraping. |
 | `regex` | 1 | Deobfuskation, Playlist-Parsing | — |
 
@@ -157,8 +157,13 @@ optional). Mux via `ffmpeg -reconnect … -c copy`; Retries mit wachsendem Delay
 Gestuft, Höflichkeit vor Umgehung:
 
 1. **Fast-Path**: `reqwest` mit browser-ähnlichen Headern, rotierender User-Agent.
-2. **TLS-Impersonate**: bei Cloudflare-Verdacht Wiederholung über `wreq` (Chrome-Fingerprint).
-3. **Headless-Browser-Fallback**: echter Browser als letzter Ausweg.
+2. **TLS-Impersonate** (umgesetzt, opt-in via `VINDEX_IMPERSONATE`, Default aus): bei
+   Cloudflare-Verdacht einmalige Wiederholung über `wreq` mit Chrome-Fingerprint
+   (`wreq-util::Emulation::Chrome149`). Hook in der Fetch-Schicht
+   (`site::fetch_text` und `serienstream::provider_links`). Der wreq-Client nutzt
+   über `wreq::dns::Resolve` denselben 1.1.1.1-Upstream + Adressfilter wie der
+   reqwest-Pfad, dazu Schema-/IP-Literal-Vorprüfung — SSRF-/Rebinding-Schutz bleibt.
+3. **Headless-Browser-Fallback**: echter Browser als letzter Ausweg (offen).
 
 Challenge-Erkennung: Status `403/429/503` oder Body-Marker (`just a moment`,
 `verifying you are human`, `cf-browser-verification`, `challenge-platform`, `cf_chl`,
@@ -212,7 +217,8 @@ API-Key-Auth, Queue-Limit und localhost-Bind-Schutz.
 
 Offen (u. a.):
 
-1. wreq-TLS-Impersonate + Headless-Browser-Fallback.
+1. Headless-Browser-Fallback (Stufe 3). TLS-Impersonate (Stufe 2, `wreq`) ist
+   umgesetzt (opt-in).
 2. Filemoon Byse-API (AES-256-GCM); Streamtape/Luluvdo/LoadX.
 3. Batch-Datei, „keep watching", Proxy-Rotation.
 4. Watch via mpv/IINA, Syncplay, Anime4K.

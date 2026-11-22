@@ -27,11 +27,13 @@ HTTP-API/Daemon und Desktop-Backend.
 - Download-Engine auf ffmpeg-Basis, mit Retry, Reconnect und Abbruch.
 - Naming-Templates im Jellyfin-Layout, Rate-Limiting pro Hoster, Backoff,
   User-Agent-Rotation, Cloudflare-Erkennung.
+- TLS-Impersonate-Fallback (Anti-Bot Stufe 2) über `wreq` mit Chrome-Fingerprint —
+  opt-in über `VINDEX_IMPERSONATE`, standardmäßig deaktiviert.
 - Konfiguration über `VINDEX_*`-Variablen und `.env`.
 - AniSkip-Abruf für Intro- und Outro-Zeiten.
 - Schnittstellen: CLI mit interaktivem Menü, HTTP-API-Daemon, Desktop-Backend.
 
-Was noch fehlt (TLS-Impersonate und Browser-Fallback, einzelne Hoster,
+Was noch fehlt (Headless-Browser-Fallback, einzelne Hoster,
 Watch/Syncplay, weitere API-Flächen, Desktop-Frontend), steht in
 [ARCHITECTURE.md](ARCHITECTURE.md) und [CHANGELOG.md](CHANGELOG.md).
 

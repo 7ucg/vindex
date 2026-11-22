@@ -5,7 +5,7 @@
 //! Stufe 1 (reqwest + UA-Rotation) und die Challenge-Erkennung umgesetzt; die
 //! Impersonate-/Browser-Stufen sind als Erweiterungspunkte markiert.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::model::USER_AGENT;
@@ -286,6 +286,149 @@ pub async fn get_text_retry(
     get_retry(client, url, referer).await?.text().await
 }
 
+// ───────────────────────────── Anti-Bot Stufe 2 ─────────────────────────────
+//
+// TLS-Impersonate-Fallback über `wreq` (BoringSSL-basierte JA3/JA4-Fingerprints).
+// Opt-in: nur aktiv, wenn `VINDEX_IMPERSONATE` gesetzt ist (siehe `config.rs`,
+// Default aus). Standard-Stufe bleibt reqwest; erst bei Cloudflare-Verdacht wird
+// die Anfrage *einmalig* mit einem Chrome-Fingerprint wiederholt.
+//
+// SSRF/DNS: `wreq` bietet mit [`wreq::dns::Resolve`] dieselbe Resolver-Schnittstelle
+// wie reqwest. Der Impersonate-Client nutzt deshalb denselben festen Upstream
+// (1.1.1.1) und denselben Adressfilter ([`is_forbidden_ip`]) wie [`GuardedResolver`]
+// — der Rebinding-/Interne-Ziel-Schutz greift also auch auf dem wreq-Pfad. Zusätzlich
+// prüft [`get_text_impersonate`] vor dem Abruf Schema und IP-Literal der Ziel-URL.
+
+/// Prozessweiter Schalter für den Impersonate-Fallback. Wird aus
+/// [`crate::config::Settings::load`] gesetzt (ENV `VINDEX_IMPERSONATE`), damit die
+/// Fetch-Schicht ohne Durchreichen von `Settings` an jeden Scraper-Aufruf auskommt.
+static IMPERSONATE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Setzt den prozessweiten Impersonate-Schalter (idempotent).
+pub fn set_impersonate(enabled: bool) {
+    IMPERSONATE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Liest den prozessweiten Impersonate-Schalter.
+pub fn impersonate_enabled() -> bool {
+    IMPERSONATE_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Reine Entscheidungslogik: Soll für diese Antwort der Impersonate-Pfad genommen
+/// werden? Nur wenn *flag* an ist **und** die Antwort nach einer Challenge aussieht
+/// (Status 403/429/503 oder ein Interstitial-Marker im Body, vgl.
+/// [`looks_like_challenge`]). Netzfrei testbar.
+pub fn should_impersonate(flag: bool, status: u16, body: &str) -> bool {
+    flag && looks_like_challenge(body, status)
+}
+
+/// DNS-Resolver für den wreq-Impersonate-Client. Identisch zu [`GuardedResolver`],
+/// nur gegen die `wreq::dns`-Schnittstelle: fester Upstream (1.1.1.1) plus
+/// Adressfilter gegen interne Ziele/DNS-Rebinding.
+struct WreqGuardedResolver;
+
+impl wreq::dns::Resolve for WreqGuardedResolver {
+    fn resolve(&self, name: wreq::dns::Name) -> wreq::dns::Resolving {
+        Box::pin(async move {
+            let lookup = upstream_resolver().lookup_ip(name.as_str()).await?;
+            let allowed: Vec<std::net::SocketAddr> = lookup
+                .iter()
+                .filter(|ip| !is_forbidden_ip(*ip))
+                .map(|ip| std::net::SocketAddr::new(ip, 0))
+                .collect();
+            if allowed.is_empty() {
+                let err: Box<dyn std::error::Error + Send + Sync> =
+                    "Ziel löst nur auf gesperrte Adressen auf".into();
+                return Err(err);
+            }
+            let iter: wreq::dns::Addrs = Box::new(allowed.into_iter());
+            Ok(iter)
+        })
+    }
+}
+
+/// Redirect-Policy des Impersonate-Clients — analog zu [`safe_redirect_policy`]:
+/// nur http/https, keine gesperrten IP-Literale als Ziel, höchstens 10 Hops.
+fn wreq_safe_redirect() -> wreq::redirect::Policy {
+    wreq::redirect::Policy::custom(|attempt| {
+        if attempt.previous.len() >= 10 {
+            return attempt.stop();
+        }
+        let uri = attempt.uri.as_ref();
+        match uri.scheme_str() {
+            Some("http") | Some("https") => {}
+            _ => return attempt.stop(),
+        }
+        if let Some(host) = uri.host() {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                if is_forbidden_ip(ip) {
+                    return attempt.stop();
+                }
+            }
+        }
+        attempt.follow()
+    })
+}
+
+/// Baut (einmalig, gecached) den wreq-Client mit Chrome-Impersonation. `Chrome149`
+/// ist der neueste von `wreq-util` bereitgestellte Chrome-Preset; er setzt den
+/// kompletten TLS/HTTP2/Header-Fingerprint inkl. passendem User-Agent.
+fn impersonate_client() -> Result<wreq::Client, wreq::Error> {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<wreq::Client> = OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c.clone());
+    }
+    let client = wreq::Client::builder()
+        .emulation(wreq_util::Emulation::Chrome149)
+        .gzip(true)
+        .timeout(Duration::from_secs(30))
+        .redirect(wreq_safe_redirect())
+        .dns_resolver(std::sync::Arc::new(WreqGuardedResolver))
+        .build()?;
+    // Bei Race den zuerst gesetzten Client verwenden (wreq::Client ist Arc-intern,
+    // Clone ist billig).
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
+}
+
+/// Holt *url* über den TLS-Impersonate-Client (Chrome-Fingerprint).
+///
+/// SSRF: wie [`crate::hoster::resolve`] werden non-http(s)-URLs und IP-Literale aus
+/// gesperrten Bereichen *vor* dem Abruf abgewiesen; Hostnamen deckt der
+/// [`WreqGuardedResolver`] ab. Der echte Abruf braucht Netz/ein Cloudflare-Ziel und
+/// ist daher nicht netzfrei testbar — getestet wird nur die Vorab-Validierung.
+pub async fn get_text_impersonate(
+    url: &str,
+    referer: Option<&str>,
+) -> crate::error::Result<String> {
+    use crate::error::Error;
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::Parse(
+            "Impersonate: Ziel-URL muss http/https sein".to_string(),
+        ));
+    }
+    if host_is_forbidden_ip_literal(url) {
+        return Err(Error::Parse(
+            "Impersonate: Ziel-URL zeigt auf eine gesperrte Adresse".to_string(),
+        ));
+    }
+    let client = impersonate_client()
+        .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Client (wreq): {e}")))?;
+    let mut req = client.get(url);
+    if let Some(r) = referer {
+        req = req.header("Referer", r);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Abruf (wreq): {e}")))?;
+    resp.text()
+        .await
+        .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Body (wreq): {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +476,46 @@ mod tests {
         assert!(!f("93.184.216.34")); // example.com, öffentlich
         assert!(!f("1.1.1.1"));
         assert!(!f("2002:5db8:1234::")); // 6to4 auf öffentliche 93.184.18.52
+    }
+
+    #[test]
+    fn impersonate_entscheidung_nur_bei_flag_und_challenge() {
+        // Flag aus: nie impersonaten, egal wie die Antwort aussieht.
+        assert!(!should_impersonate(false, 403, ""));
+        assert!(!should_impersonate(false, 200, "just a moment"));
+        // Flag an, aber saubere 200-Antwort: kein Impersonate.
+        assert!(!should_impersonate(true, 200, "<html>ok</html>"));
+        // Flag an + Challenge (Status bzw. Marker): Impersonate.
+        assert!(should_impersonate(true, 403, ""));
+        assert!(should_impersonate(true, 429, ""));
+        assert!(should_impersonate(true, 503, ""));
+        assert!(should_impersonate(
+            true,
+            200,
+            "<title>Just a moment...</title>"
+        ));
+    }
+
+    #[test]
+    fn impersonate_schalter_setz_und_lesbar() {
+        set_impersonate(true);
+        assert!(impersonate_enabled());
+        set_impersonate(false);
+        assert!(!impersonate_enabled());
+    }
+
+    #[tokio::test]
+    async fn impersonate_weist_unerlaubte_ziele_vor_dem_abruf_ab() {
+        // Netzfrei: die SSRF-Vorprüfung greift vor jedem Verbindungsversuch.
+        assert!(get_text_impersonate("ftp://example.com/x", None)
+            .await
+            .is_err());
+        assert!(get_text_impersonate("http://127.0.0.1/x", None)
+            .await
+            .is_err());
+        assert!(get_text_impersonate("http://169.254.169.254/latest", None)
+            .await
+            .is_err());
     }
 
     #[test]

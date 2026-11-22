@@ -33,8 +33,11 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Netzwerk & Anti-Bot
 
-- **TLS-Impersonate (Stufe 2).** Bei Cloudflare-Verdacht den Abruf über `wreq` mit
-  Chrome-Fingerprint wiederholen. Erkennung steht schon in `core::http`.
+- **TLS-Impersonate (Stufe 2).** Umgesetzt (opt-in, `VINDEX_IMPERSONATE`, Default aus):
+  bei Cloudflare-Verdacht wird der Abruf einmalig über `wreq` mit Chrome-Fingerprint
+  wiederholt (`core::http::get_text_impersonate`, Hook in `site::fetch_text` und
+  `serienstream::provider_links`). Offen: gegen ein echtes Cloudflare-Ziel verifizieren
+  (bisher nur Bau + netzfreie Logik-/SSRF-Tests).
 - **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht
   reicht.
 - **Proxy-Rotation** für geratelimitete CDNs.

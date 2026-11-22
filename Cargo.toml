@@ -31,6 +31,9 @@ hickory-resolver = "0.24"
 # Rate-Limiting / Retry
 governor = "0.10"
 backon = "1"
+# TLS-Impersonate (Anti-Bot Stufe 2, opt-in): Chrome-Fingerprint über BoringSSL.
+wreq = "6.0.0-rc.31"
+wreq-util = "3.0.0-rc.14"
 # Config / Logging / Fehler
 config = "0.15"
 dotenvy = "0.15"

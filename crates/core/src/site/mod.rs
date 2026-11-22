@@ -49,8 +49,18 @@ pub async fn fetch(client: &reqwest::Client, url: &str) -> crate::error::Result<
 }
 
 /// Wie [`fetch`], gibt aber direkt den Body-Text zurück.
+///
+/// Anti-Bot Stufe 2 (opt-in, `VINDEX_IMPERSONATE`): Sieht die Antwort nach einer
+/// Cloudflare-Challenge aus, wird die Seite **einmalig** über den TLS-Impersonate-
+/// Client (Chrome-Fingerprint) nachgeholt. Ist das Flag aus, Verhalten wie bisher.
 pub async fn fetch_text(client: &reqwest::Client, url: &str) -> crate::error::Result<String> {
-    Ok(fetch(client, url).await?.text().await?)
+    let resp = fetch(client, url).await?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await?;
+    if crate::http::should_impersonate(crate::http::impersonate_enabled(), status, &body) {
+        return crate::http::get_text_impersonate(url, None).await;
+    }
+    Ok(body)
 }
 
 /// Normalisierter Host einer URL (ohne Trailing-Dot, lowercase). `None`, wenn die

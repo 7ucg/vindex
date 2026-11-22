@@ -68,9 +68,16 @@ pub async fn provider_links(
 ) -> Result<ProviderLinks> {
     let resp = super::fetch(client, episode_url).await?;
     let status = resp.status().as_u16();
-    let body = resp.text().await?;
+    let mut body = resp.text().await?;
     if crate::http::looks_like_challenge(&body, status) {
-        return Err(Error::Challenge(episode_url.to_string()));
+        // Anti-Bot Stufe 2 (opt-in): bei Cloudflare-Verdacht einmalig über den
+        // TLS-Impersonate-Client (Chrome-Fingerprint) wiederholen. Ohne das Flag
+        // bleibt es beim bisherigen Verhalten (Challenge-Fehler).
+        if crate::http::impersonate_enabled() {
+            body = crate::http::get_text_impersonate(episode_url, None).await?;
+        } else {
+            return Err(Error::Challenge(episode_url.to_string()));
+        }
     }
 
     let links = parse_provider_links(&body, base);

@@ -27,6 +27,11 @@ pub struct Settings {
     /// Segmente von HLS-Streams selbst holen (robust gegen 429), statt ffmpeg die
     /// Playlist ziehen zu lassen (`VINDEX_NATIVE_HLS`). ffmpeg remuxt weiterhin.
     pub native_hls: bool,
+    /// TLS-Impersonate-Fallback (Anti-Bot Stufe 2) einschalten (`VINDEX_IMPERSONATE`).
+    /// Bei Cloudflare-Verdacht wird die Anfrage einmalig über einen `wreq`-Client mit
+    /// Chrome-Fingerprint wiederholt. Default **aus** (laut README standardmäßig
+    /// deaktiviert).
+    pub impersonate: bool,
     /// API-Keys für den Daemon (`VINDEX_API_KEYS`, komma-getrennt). Leer = keine
     /// Auth; der Daemon startet dann nur auf localhost.
     pub api_keys: Vec<String>,
@@ -49,6 +54,7 @@ impl std::fmt::Debug for Settings {
             .field("keep_watching", &self.keep_watching)
             .field("naming_template", &self.naming_template)
             .field("native_hls", &self.native_hls)
+            .field("impersonate", &self.impersonate)
             .field(
                 "api_keys",
                 &format_args!("[{} redigiert]", self.api_keys.len()),
@@ -73,6 +79,7 @@ impl Default for Settings {
             keep_watching: false,
             naming_template: crate::naming::DEFAULT_TEMPLATE.to_string(),
             native_hls: false,
+            impersonate: false,
             api_keys: Vec::new(),
         }
     }
@@ -120,6 +127,7 @@ impl Settings {
         s.aniskip = env_bool("VINDEX_ANISKIP", s.aniskip);
         s.keep_watching = env_bool("VINDEX_KEEP_WATCHING", s.keep_watching);
         s.native_hls = env_bool("VINDEX_NATIVE_HLS", s.native_hls);
+        s.impersonate = env_bool("VINDEX_IMPERSONATE", s.impersonate);
         if let Some(v) = env("VINDEX_NAMING_TEMPLATE") {
             s.naming_template = v;
         }
@@ -130,6 +138,9 @@ impl Settings {
                 .filter(|k| !k.is_empty())
                 .collect();
         }
+        // Impersonate-Schalter prozessweit setzen, damit die Fetch-Schicht ohne
+        // Durchreichen von `Settings` an jeden Scraper-Aufruf darauf zugreifen kann.
+        crate::http::set_impersonate(s.impersonate);
         s
     }
 
@@ -165,4 +176,34 @@ fn dirs_download() -> PathBuf {
     std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join("Downloads"))
         .unwrap_or_else(|| PathBuf::from("Downloads"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &str = "VINDEX_IMPERSONATE";
+
+    #[test]
+    fn impersonate_env_wird_korrekt_geparst() {
+        // Default (nicht gesetzt): aus.
+        std::env::remove_var(KEY);
+        assert!(!env_bool(KEY, false));
+        // Aktivierende Werte.
+        for v in ["1", "true", "on"] {
+            std::env::set_var(KEY, v);
+            assert!(env_bool(KEY, false), "{v} sollte true ergeben");
+        }
+        // Deaktivierende Werte überschreiben auch einen true-Default.
+        for v in ["0", "false", "off"] {
+            std::env::set_var(KEY, v);
+            assert!(!env_bool(KEY, true), "{v} sollte false ergeben");
+        }
+        std::env::remove_var(KEY);
+    }
+
+    #[test]
+    fn impersonate_default_ist_aus() {
+        assert!(!Settings::default().impersonate);
+    }
 }
