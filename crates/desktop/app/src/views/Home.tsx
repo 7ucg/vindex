@@ -3,6 +3,7 @@ import { search, resolvePlayback, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
+import { watchlist } from "../lib/watchlist";
 
 // Home: eine funktionierende Katalog-Suche über den echten Kern.
 // „Weiterschauen"/Empfehlungen folgen, sobald der Watch-State im Frontend hängt.
@@ -13,6 +14,7 @@ export function Home(): JSX.Element {
   const [err, setErr] = createSignal<string | null>(null);
   const [searched, setSearched] = createSignal(false);
   const [recent] = createSignal(recentProgress());
+  const [saved] = createSignal(watchlist());
 
   const resume = async (url: string, r: Resume) => {
     setErr(null);
@@ -106,6 +108,30 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
+      <Show when={!searched() && saved().length > 0}>
+        <div class="row-h">
+          <h2>Merkliste</h2>
+        </div>
+        <div class="grid">
+          <For each={saved()}>
+            {(it) => (
+              <div class="card" title={it.url} onClick={() => openTitle(it.title, it.url)}>
+                <div class="poster">
+                  <div class="ph" />
+                  <div class="play-ov">
+                    <button class="play-btn">
+                      <IconPlay />
+                    </button>
+                  </div>
+                </div>
+                <div class="t">{it.title}</div>
+                <div class="s">gemerkt</div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <Show when={err()}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>
           Fehler: {err()}
@@ -145,7 +171,7 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
-      <Show when={!searched() && !loading() && recent().length === 0}>
+      <Show when={!searched() && !loading() && recent().length === 0 && saved().length === 0}>
         <div class="empty">
           Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links
           zeigen den Katalog als Grid.

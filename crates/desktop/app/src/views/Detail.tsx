@@ -15,6 +15,7 @@ import {
   type Episode,
 } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
+import { inWatchlist, toggleWatchlist } from "../lib/watchlist";
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
@@ -55,6 +56,8 @@ export function Detail(): JSX.Element {
   const [playErr, setPlayErr] = createSignal<string | null>(null);
 
   const [bulk, setBulk] = createSignal(false);
+  const [saved, setSaved] = createSignal(inWatchlist(sel.url));
+  const toggleSave = () => setSaved(toggleWatchlist({ url: sel.url, title: sel.title }));
 
   const enqueue = (e: Episode) => {
     const base =
@@ -132,6 +135,14 @@ export function Detail(): JSX.Element {
           ‹ Zurück
         </button>
         <h2 style={{ margin: 0 }}>{sel.title}</h2>
+        <button
+          class="chip"
+          classList={{ on: saved() }}
+          style={{ "margin-left": "auto" }}
+          onClick={toggleSave}
+        >
+          {saved() ? "★ Gemerkt" : "☆ Merken"}
+        </button>
       </div>
 
       <Show when={meta()?.poster || meta()?.description}>
