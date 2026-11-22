@@ -30,7 +30,29 @@ export function Player(props: { playback: Playback }): JSX.Element {
   const [rate, setRate] = createSignal(1);
   const [loopA, setLoopA] = createSignal<number | null>(null);
   const [loopB, setLoopB] = createSignal<number | null>(null);
+  // HLS-Tracks (Qualität/Audio/Untertitel).
+  type Track = { i: number; label: string };
+  const [levels, setLevels] = createSignal<Track[]>([]);
+  const [curLevel, setCurLevel] = createSignal(-1);
+  const [audios, setAudios] = createSignal<Track[]>([]);
+  const [curAudio, setCurAudio] = createSignal(-1);
+  const [subs, setSubs] = createSignal<Track[]>([]);
+  const [curSub, setCurSub] = createSignal(-1);
+  const [menuOpen, setMenuOpen] = createSignal(false);
   let sleepHandle: number | undefined;
+
+  const pickLevel = (i: number) => {
+    if (hls) hls.currentLevel = i;
+    setCurLevel(i);
+  };
+  const pickAudio = (i: number) => {
+    if (hls) hls.audioTrack = i;
+    setCurAudio(i);
+  };
+  const pickSub = (i: number) => {
+    if (hls) hls.subtitleTrack = i;
+    setCurSub(i);
+  };
 
   const doSkip = () => {
     const t = skipTarget();
@@ -310,6 +332,28 @@ export function Player(props: { playback: Playback }): JSX.Element {
             setErr(`Wiedergabefehler: ${data.type} / ${data.details} — prüfe Proxy …`);
             void probe(src);
           });
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            setLevels(
+              hls!.levels.map((l, i) => ({
+                i,
+                label: l.height ? `${l.height}p` : `${Math.round((l.bitrate || 0) / 1000)}k`,
+              })),
+            );
+            setCurLevel(hls!.currentLevel);
+          });
+          hls.on(Hls.Events.LEVEL_SWITCHED, (_e, d) => setCurLevel(d.level));
+          hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+            setAudios(
+              hls!.audioTracks.map((t, i) => ({ i, label: t.name || t.lang || `Audio ${i + 1}` })),
+            );
+            setCurAudio(hls!.audioTrack);
+          });
+          hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+            setSubs(
+              hls!.subtitleTracks.map((t, i) => ({ i, label: t.name || t.lang || `Sub ${i + 1}` })),
+            );
+            setCurSub(hls!.subtitleTrack);
+          });
           hls.loadSource(src);
           hls.attachMedia(el);
         } else {
@@ -356,6 +400,11 @@ export function Player(props: { playback: Playback }): JSX.Element {
           <button class="chip" onClick={screenshot} title="Screenshot">
             Foto
           </button>
+          <Show when={levels().length > 1 || audios().length > 1 || subs().length > 0}>
+            <button class="chip" classList={{ on: menuOpen() }} onClick={() => setMenuOpen(!menuOpen())}>
+              ⚙
+            </button>
+          </Show>
           <Show when={hasNext()}>
             <button class="chip" disabled={goingNext()} onClick={() => void next()}>
               {goingNext() ? "lädt …" : "Nächste ›"}
@@ -387,6 +436,53 @@ export function Player(props: { playback: Playback }): JSX.Element {
           </div>
         </div>
       </div>
+
+      <Show when={menuOpen()}>
+        <div class="player-menu">
+          <Show when={levels().length > 1}>
+            <div class="pm-sec">Qualität</div>
+            <div class="pm-row">
+              <button class="chip" classList={{ on: curLevel() === -1 }} onClick={() => pickLevel(-1)}>
+                Auto
+              </button>
+              <For each={levels()}>
+                {(l) => (
+                  <button class="chip" classList={{ on: curLevel() === l.i }} onClick={() => pickLevel(l.i)}>
+                    {l.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={audios().length > 1}>
+            <div class="pm-sec">Audio</div>
+            <div class="pm-row">
+              <For each={audios()}>
+                {(t) => (
+                  <button class="chip" classList={{ on: curAudio() === t.i }} onClick={() => pickAudio(t.i)}>
+                    {t.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={subs().length > 0}>
+            <div class="pm-sec">Untertitel</div>
+            <div class="pm-row">
+              <button class="chip" classList={{ on: curSub() === -1 }} onClick={() => pickSub(-1)}>
+                Aus
+              </button>
+              <For each={subs()}>
+                {(t) => (
+                  <button class="chip" classList={{ on: curSub() === t.i }} onClick={() => pickSub(t.i)}>
+                    {t.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+        </div>
+      </Show>
 
       <Show when={loading() && !err()}>
         <div class="spinner" style={{ position: "absolute", inset: "0", margin: "auto" }} />

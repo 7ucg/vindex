@@ -626,6 +626,32 @@ a {
   padding: 1px 7px;
 }
 
+.player-menu {
+  position: absolute;
+  top: 56px;
+  right: 18px;
+  z-index: 5;
+  background: rgba(10, 8, 19, 0.92);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 12px 14px;
+  max-width: 420px;
+  backdrop-filter: blur(8px);
+}
+.player-menu .pm-sec {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin: 6px 2px 6px;
+}
+.player-menu .pm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .player-hint {
   position: absolute;
   bottom: 54px;
