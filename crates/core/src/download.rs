@@ -51,6 +51,9 @@ pub struct DownloadPrefs {
     pub out_dir: PathBuf,
     /// Dateiname inkl. Endung (z. B. `Show S01E01.mkv`).
     pub file_name: String,
+    /// HLS-Segmente selbst holen (robust gegen 429) statt ffmpeg die Playlist
+    /// ziehen zu lassen. ffmpeg remuxt weiterhin die zusammengesetzte Datei.
+    pub native_hls: bool,
 }
 
 impl DownloadPrefs {
@@ -200,18 +203,22 @@ async fn try_download_resolved(
         let text = fetch_text_capped(req, MAX_PLAYLIST_BYTES).await?;
         let variants = parse_hls_master(&text, &resolved.url);
 
+        let referer = resolved.referer.as_deref();
         if variants.is_empty() {
-            // Einzel-Quality-Media-Playlist → direkt muxen.
-            return mux(resolved, out_path, cancel).await.map(|_| true);
+            // Einzel-Quality-Media-Playlist: nativ holen oder muxen.
+            return Ok(deliver_hls(
+                client,
+                &resolved.url,
+                referer,
+                prefs.native_hls,
+                out_path,
+                cancel,
+            )
+            .await);
         }
         for q in prefs.quality_sweep() {
             if let Some(url) = variants.get(&q) {
-                let variant = Resolved {
-                    url: url.clone(),
-                    referer: resolved.referer.clone(),
-                    is_hls: true,
-                };
-                if mux(&variant, out_path, cancel).await.is_ok() {
+                if deliver_hls(client, url, referer, prefs.native_hls, out_path, cancel).await {
                     return Ok(true);
                 }
             }
@@ -240,6 +247,168 @@ async fn try_download_resolved(
 
 fn is_cancelled(cancel: &Option<CancellationToken>) -> bool {
     cancel.as_ref().map(|c| c.is_cancelled()).unwrap_or(false)
+}
+
+/// Liefert eine HLS-Variante aus: bei `native` erst der eigene Segment-Download,
+/// sonst oder bei Fehlschlag der ffmpeg-Mux. Gibt Erfolg als `bool` zurück.
+async fn deliver_hls(
+    client: &reqwest::Client,
+    url: &str,
+    referer: Option<&str>,
+    native: bool,
+    out_path: &Path,
+    cancel: &Option<CancellationToken>,
+) -> bool {
+    if native {
+        match download_hls_native(client, url, referer, out_path, cancel).await {
+            Ok(true) => return true,
+            Ok(false) => {} // verschlüsselt/leer → ffmpeg
+            Err(e) => tracing::debug!("nativer HLS-Download fehlgeschlagen: {e}"),
+        }
+    }
+    let variant = Resolved {
+        url: url.to_string(),
+        referer: referer.map(str::to_string),
+        is_hls: true,
+    };
+    mux(&variant, out_path, cancel).await.is_ok()
+}
+
+/// Obergrenze einer HLS-Media-Playlist (viele kurze Segment-Zeilen, aber begrenzt).
+const MAX_MEDIA_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
+
+/// True, wenn die Media-Playlist verschlüsselte Segmente nutzt (`EXT-X-KEY` mit
+/// einer anderen Methode als `NONE`). Solche Streams überlässt vindex ffmpeg.
+fn hls_is_encrypted(text: &str) -> bool {
+    text.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("#EXT-X-KEY") && !l.to_ascii_uppercase().contains("METHOD=NONE")
+    })
+}
+
+/// Segment-URLs einer Media-Playlist, absolut aufgelöst gegen *base_url*.
+fn media_segment_urls(text: &str, base_url: &str) -> Vec<String> {
+    let base = reqwest::Url::parse(base_url).ok();
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|seg| {
+            if seg.starts_with("http://") || seg.starts_with("https://") {
+                Some(seg.to_string())
+            } else {
+                base.as_ref()?.join(seg).ok().map(|u| u.to_string())
+            }
+        })
+        .collect()
+}
+
+/// Lädt eine HLS-Media-Playlist segmentweise selbst, hängt die Segmente zu einer
+/// `.part.ts` zusammen und remuxt sie mit ffmpeg nach *out_path*.
+///
+/// `Ok(true)`: erfolgreich. `Ok(false)`: nicht zuständig (verschlüsselt oder keine
+/// Segmente) — der Aufrufer soll auf den normalen ffmpeg-Mux zurückfallen.
+async fn download_hls_native(
+    client: &reqwest::Client,
+    media_url: &str,
+    referer: Option<&str>,
+    out_path: &Path,
+    cancel: &Option<CancellationToken>,
+) -> Result<bool> {
+    if !is_http_url(media_url) {
+        return Ok(false);
+    }
+    let text = {
+        let mut req = client.get(media_url);
+        if let Some(r) = referer {
+            req = req.header("Referer", r);
+        }
+        fetch_text_capped(req, MAX_MEDIA_PLAYLIST_BYTES).await?
+    };
+    if hls_is_encrypted(&text) {
+        return Ok(false);
+    }
+    let segments = media_segment_urls(&text, media_url);
+    if segments.is_empty() {
+        return Ok(false);
+    }
+
+    if let Some(dir) = out_path.parent() {
+        tokio::fs::create_dir_all(dir).await.ok();
+    }
+    let part = out_path.with_extension("part.ts");
+
+    let result = fetch_segments_to(client, &segments, referer, &part, cancel).await;
+    if let Err(e) = result {
+        tokio::fs::remove_file(&part).await.ok();
+        return Err(e);
+    }
+
+    // Zusammengesetzten TS-Stream nach out_path remuxen; die lokale Datei ist
+    // vertrauenswürdig, daher file-Protokoll erlaubt.
+    let remux = remux_local(&part, out_path, cancel).await;
+    tokio::fs::remove_file(&part).await.ok();
+    remux.map(|_| true)
+}
+
+/// Holt alle Segmente nacheinander (mit Retry) und schreibt sie fortlaufend in *part*.
+async fn fetch_segments_to(
+    client: &reqwest::Client,
+    segments: &[String],
+    referer: Option<&str>,
+    part: &Path,
+    cancel: &Option<CancellationToken>,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::File::create(part).await?;
+    for seg in segments {
+        if is_cancelled(cancel) {
+            return Err(Error::Ffmpeg("abgebrochen".into()));
+        }
+        let bytes = crate::http::get_retry(client, seg, referer)
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        file.write_all(&bytes).await?;
+    }
+    file.flush().await?;
+    Ok(())
+}
+
+/// Remuxt eine lokale Mediendatei mit ffmpeg (`-c copy`) nach *out_path*.
+async fn remux_local(
+    src: &Path,
+    out_path: &Path,
+    cancel: &Option<CancellationToken>,
+) -> Result<()> {
+    if is_cancelled(cancel) {
+        return Err(Error::Ffmpeg("abgebrochen".into()));
+    }
+    let mut cmd = Command::new("ffmpeg");
+    cmd.kill_on_drop(true);
+    cmd.args(["-nostdin", "-y", "-i"]);
+    cmd.arg(src);
+    cmd.args(["-c", "copy"]);
+    cmd.arg(out_path);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    let status = match cmd.status().await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::Ffmpeg(
+                "ffmpeg nicht gefunden — bitte installieren und in den PATH legen".into(),
+            ));
+        }
+        Err(e) => return Err(Error::Io(e)),
+    };
+    if status.success() {
+        Ok(())
+    } else {
+        tokio::fs::remove_file(out_path).await.ok();
+        Err(Error::Ffmpeg(
+            "Remux der Segmentdatei fehlgeschlagen".into(),
+        ))
+    }
 }
 
 /// Muxt *stream* mit ffmpeg nach *out_path* (Reconnect, `-c copy`), mit Retries.
@@ -379,10 +548,34 @@ mod tests {
             min_quality: Quality::P480,
             out_dir: PathBuf::from("/tmp"),
             file_name: "x.mkv".into(),
+            native_hls: false,
         };
         assert_eq!(
             prefs.quality_sweep(),
             vec![Quality::P1080, Quality::P720, Quality::P480]
+        );
+    }
+
+    #[test]
+    fn detects_encrypted_playlist() {
+        let enc = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k\"\nseg0.ts\n";
+        assert!(hls_is_encrypted(enc));
+        assert!(!hls_is_encrypted(
+            "#EXTM3U\nseg0.ts\n#EXT-X-KEY:METHOD=NONE\n"
+        ));
+        assert!(!hls_is_encrypted("#EXTM3U\nseg0.ts\n"));
+    }
+
+    #[test]
+    fn resolves_segment_urls() {
+        let text = "#EXTM3U\n#EXTINF:6,\nseg0.ts\n#EXTINF:6,\nhttps://cdn/seg1.ts\n";
+        let segs = media_segment_urls(text, "https://host/path/index.m3u8");
+        assert_eq!(
+            segs,
+            vec![
+                "https://host/path/seg0.ts".to_string(),
+                "https://cdn/seg1.ts".to_string()
+            ]
         );
     }
 }

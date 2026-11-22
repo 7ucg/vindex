@@ -35,7 +35,10 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 ## Download & Wiedergabe
 
 - **Batch-Download** über eine Episodenliste und ein „keep watching".
-- **Nativer HLS-Downloader** ohne ffmpeg-Abhängigkeit.
+- **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) läuft
+  nativ, das Remuxen der zusammengesetzten Datei nutzt aber noch ffmpeg. Ein eigener
+  TS-Remuxer würde ffmpeg ganz ersetzen; dazu AES-128-Entschlüsselung für verschlüsselte
+  Playlists (fallen aktuell auf ffmpeg zurück).
 - **Watch** via mpv/IINA inkl. AniSkip, dazu Syncplay und Anime4K.
 
 ## Desktop

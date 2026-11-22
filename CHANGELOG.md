@@ -39,7 +39,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - `core::download` — ffmpeg-Mux (Reconnect, Retry, Cleanup), Qualitäts-Sweep und
   Fallback-Kette Sprache → Hoster → Qualität, Abbruch über CancellationToken. Einzel-MP4-
   Streams werden per ffprobe auf ihre Höhe geprüft und unter der Mindestqualität
-  übersprungen.
+  übersprungen. Optional (`VINDEX_NATIVE_HLS`) holt vindex die HLS-Segmente selbst mit
+  Retry/Backoff und lässt ffmpeg nur noch remuxen — robuster gegen 429-gedrosselte CDNs;
+  verschlüsselte Playlists (`EXT-X-KEY`) fallen auf den ffmpeg-Pfad zurück.
 - `core::ratelimit` — Throttle pro Hoster (governor) und Backoff mit Jitter (backon).
 - `core::config` — Einstellungen aus `VINDEX_*` und `.env`.
 - `core::naming` — Datei-Templates (Jellyfin-Layout) und Episoden-Nummerierung.

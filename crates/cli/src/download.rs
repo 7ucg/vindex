@@ -89,6 +89,7 @@ pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
         min_quality: settings.min_quality,
         out_dir,
         file_name: file_name.clone(),
+        native_hls: settings.native_hls,
     };
 
     println!(
