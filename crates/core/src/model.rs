@@ -180,12 +180,6 @@ pub enum Hoster {
     Filemoon,
     Vidmoly,
     SpeedFiles,
-    /// Im Scope, aber ohne Referenz-Implementierung (eigenes Reverse Engineering).
-    Streamtape,
-    /// Im Scope, aber ohne Referenz-Implementierung.
-    Luluvdo,
-    /// Im Scope, aber ohne Referenz-Implementierung.
-    LoadX,
 }
 
 impl Hoster {
@@ -198,9 +192,6 @@ impl Hoster {
             Hoster::Filemoon => "Filemoon",
             Hoster::Vidmoly => "Vidmoly",
             Hoster::SpeedFiles => "SpeedFiles",
-            Hoster::Streamtape => "Streamtape",
-            Hoster::Luluvdo => "Luluvdo",
-            Hoster::LoadX => "LoadX",
         }
     }
 
@@ -213,24 +204,8 @@ impl Hoster {
             "filemoon" => Some(Hoster::Filemoon),
             "vidmoly" => Some(Hoster::Vidmoly),
             "speedfiles" => Some(Hoster::SpeedFiles),
-            "streamtape" => Some(Hoster::Streamtape),
-            "luluvdo" => Some(Hoster::Luluvdo),
-            "loadx" => Some(Hoster::LoadX),
             _ => None,
         }
-    }
-
-    /// Ob ein Resolver existiert (im Gegensatz zu reinen Scope-Platzhaltern).
-    pub fn is_implemented(self) -> bool {
-        matches!(
-            self,
-            Hoster::Voe
-                | Hoster::Vidoza
-                | Hoster::Doodstream
-                | Hoster::Filemoon
-                | Hoster::Vidmoly
-                | Hoster::SpeedFiles
-        )
     }
 
     /// Hoster aus einem Anzeigenamen **oder** einem Host-/Label-String
@@ -249,9 +224,6 @@ impl Hoster {
             ("filemoon", Hoster::Filemoon),
             ("vidmoly", Hoster::Vidmoly),
             ("speedfile", Hoster::SpeedFiles),
-            ("streamtape", Hoster::Streamtape),
-            ("lulu", Hoster::Luluvdo),
-            ("loadx", Hoster::LoadX),
         ];
         HOST_HINTS
             .iter()
@@ -449,16 +421,13 @@ mod tests {
         );
     }
 
-    const ALLE_HOSTER: [Hoster; 9] = [
+    const ALLE_HOSTER: [Hoster; 6] = [
         Hoster::Voe,
         Hoster::Vidoza,
         Hoster::Doodstream,
         Hoster::Filemoon,
         Hoster::Vidmoly,
         Hoster::SpeedFiles,
-        Hoster::Streamtape,
-        Hoster::Luluvdo,
-        Hoster::LoadX,
     ];
 
     #[test]
@@ -494,23 +463,6 @@ mod tests {
     }
 
     #[test]
-    fn hoster_is_implemented_nur_mit_resolver() {
-        for h in [
-            Hoster::Voe,
-            Hoster::Vidoza,
-            Hoster::Doodstream,
-            Hoster::Filemoon,
-            Hoster::Vidmoly,
-            Hoster::SpeedFiles,
-        ] {
-            assert!(h.is_implemented(), "{h:?}");
-        }
-        for h in [Hoster::Streamtape, Hoster::Luluvdo, Hoster::LoadX] {
-            assert!(!h.is_implemented(), "{h:?}");
-        }
-    }
-
-    #[test]
     fn hoster_from_host_or_name_anzeigename_hat_vorrang() {
         assert_eq!(
             Hoster::from_host_or_name("Filemoon"),
@@ -533,11 +485,6 @@ mod tests {
             Hoster::from_host_or_name("speedfiles.net"),
             Some(Hoster::SpeedFiles)
         );
-        assert_eq!(Hoster::from_host_or_name("lulu.st"), Some(Hoster::Luluvdo));
-        assert_eq!(
-            Hoster::from_host_or_name(" STREAMTAPE.com "),
-            Some(Hoster::Streamtape)
-        );
     }
 
     #[test]
@@ -554,9 +501,8 @@ mod tests {
     }
 
     #[test]
-    fn fallback_reihenfolge_nur_implementierte_ohne_duplikate() {
+    fn fallback_reihenfolge_ohne_duplikate() {
         let order = default_fallback_order();
-        assert!(order.iter().all(|h| h.is_implemented()));
         let unique: std::collections::HashSet<_> = order.iter().collect();
         assert_eq!(unique.len(), order.len());
     }

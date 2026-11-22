@@ -17,9 +17,9 @@ HTTP-API/Daemon und Desktop-Backend.
   jeweils live end-to-end bis zur spielbaren Stream-URL verifiziert. s.to ist stillgelegt.
 - Katalogsuche, Parsing von Slug, Staffel und Episode, Hoster-Auflösung über
   Redirects.
-- Stream-Extraktion je Hoster: VOE, Vidmoly, Vidoza, Doodstream, SpeedFiles,
-  Filemoon (moderne Byse-API mit AES-256-GCM, Legacy-packed-JS als Fallback).
-  Streamtape, Luluvdo und LoadX sind eingeplant, haben aber noch keinen Extraktor.
+- Stream-Extraktion je Hoster: VOE (inkl. voe.sx-Stub-Redirect zur rotierenden CDN-Domain),
+  Vidmoly, Vidoza, Doodstream, SpeedFiles, Filemoon (moderne Byse-API mit AES-256-GCM,
+  Legacy-packed-JS als Fallback).
 - Sprachauswahl (German Dub, German Sub, English Sub, je nach Portal) mit
   Fallback über Hoster und Sprache.
 - Qualitäts-Sweep zwischen Max- und Min-Grenze (4K bis 360p).

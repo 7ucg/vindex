@@ -31,10 +31,6 @@ erneut verifizieren.
 | Doodstream | vorhanden (mp4, pass_md5 + token) | models/extractors |
 | Filemoon | vorhanden (Legacy packed-JS; Byse-API offen) | models/extractors |
 | SpeedFiles | vorhanden (10-Schritt-Deobfuskation) | Aniloader |
-| Streamtape / Luluvdo / LoadX | kein Resolver | keine Referenz-Vorlage |
-
-Streamtape, Luluvdo und LoadX sind im Scope, haben aber keine Vorlage und sind als
-eigene Reverse-Engineering-Aufgaben offen (siehe §8).
 
 **Sprach-Varianten** (aniworld `data-lang-key`): `1` German Dub, `2` Japanese · English
 Sub, `3` Japanese · German Sub. s.to bietet zusätzlich English Dub. Filmo: German Dub,
@@ -199,8 +195,7 @@ Das HTML der Portale ist instabil. Selektoren wie `data-lang-key`,
 liegen sie zentral, parsen defensiv und laufen gegen echte Seiten im Test.
 
 Jeder Hoster kann seinen Auslieferungsweg wechseln, also braucht jeder Resolver
-Versionierung und Fallback-Patterns. Die Filemoon Byse-API (AES-256-GCM) steht
-dafür noch aus, und für Streamtape, Luluvdo und LoadX fehlt bislang eine Vorlage.
+Versionierung und Fallback-Patterns. Die Filemoon Byse-API (AES-256-GCM) ist umgesetzt.
 
 Rechtlich: nur legale und private Nutzung. TLS-Impersonate, Browser-Fallback und
 etwaige Captcha-Funktionen sind AGB-kritisch und standardmäßig deaktiviert.
@@ -219,7 +214,7 @@ Offen (u. a.):
 
 1. Headless-Browser-Fallback (Stufe 3). TLS-Impersonate (Stufe 2, `wreq`) ist
    umgesetzt (opt-in).
-2. Filemoon Byse-API (AES-256-GCM); Streamtape/Luluvdo/LoadX.
+2. (Filemoon Byse-API ist umgesetzt.)
 3. Batch-Datei, „keep watching", Proxy-Rotation.
 4. Watch via mpv/IINA, Syncplay, Anime4K.
 5. Nativer HLS-Downloader (ffmpeg-frei).

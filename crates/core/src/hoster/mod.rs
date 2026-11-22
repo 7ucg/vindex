@@ -1,17 +1,12 @@
 //! Hoster-Resolver: Embed-/Redirect-URL → direkter Stream.
 //!
 //! Faithfully portiert aus den Referenzen (`downloaders/*.py`,
-//! `extractors/provider/*.py`). Streamtape/Luluvdo/LoadX wurden ohne Vorlage per
-//! eigenem Reverse Engineering ergänzt; LoadX ist gegen Live nicht verifiziert
-//! (siehe `loadx.rs` und `ARCHITECTURE.md` §1).
+//! `extractors/provider/*.py`).
 
 pub mod common;
 pub mod doodstream;
 pub mod filemoon;
-pub mod loadx;
-pub mod luluvdo;
 pub mod speedfiles;
-pub mod streamtape;
 pub mod vidmoly;
 pub mod vidoza;
 pub mod voe;
@@ -61,9 +56,6 @@ pub async fn resolve(
         Hoster::Vidmoly => vidmoly::resolve(client, embed_url).await,
         Hoster::Filemoon => filemoon::resolve(client, embed_url).await,
         Hoster::SpeedFiles => speedfiles::resolve(client, embed_url).await,
-        Hoster::Streamtape => streamtape::resolve(client, embed_url).await,
-        Hoster::Luluvdo => luluvdo::resolve(client, embed_url).await,
-        Hoster::LoadX => loadx::resolve(client, embed_url).await,
     }?;
 
     // Die aufgelöste Stream-URL stammt aus gescraptem Hoster-HTML — ebenfalls gegen
