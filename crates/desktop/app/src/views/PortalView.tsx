@@ -31,8 +31,12 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [sort, setSort] = createSignal<Sort>("az");
   const [filter, setFilter] = createSignal("");
 
+  // Sicherer Zugriff: eine Resource im Fehlerzustand WIRFT beim Lesen von items().
+  // ready() liefert die Liste, ohne zu werfen — sonst bräche die Fehleranzeige.
+  const ready = () => (items.error || items.loading ? null : items() ?? []);
+
   const visible = createMemo(() => {
-    const all: SearchHit[] = items() ?? [];
+    const all: SearchHit[] = ready() ?? [];
     const f = filter().trim().toLowerCase();
     let out = f ? all.filter((h) => h.title.toLowerCase().includes(f)) : all.slice();
     out.sort((a, b) =>
@@ -45,12 +49,12 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     <div class="wrap">
       <div class="row-h">
         <h2>{LABEL[props.portal]}</h2>
-        <Show when={items()}>
+        <Show when={ready()}>
           <span class="link">{visible().length} Titel</span>
         </Show>
       </div>
 
-      <Show when={items()}>
+      <Show when={ready()}>
         <div class="controls" style={{ "margin-bottom": "16px" }}>
           <button class="chip" classList={{ on: sort() === "az" }} onClick={() => setSort("az")}>
             A–Z
@@ -80,7 +84,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
         </div>
       </Show>
 
-      <Show when={items() && visible().length === 0 && !items.loading}>
+      <Show when={ready() && visible().length === 0}>
         <div class="empty">Keine Treffer.</div>
       </Show>
 

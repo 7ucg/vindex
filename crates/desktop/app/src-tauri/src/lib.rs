@@ -159,7 +159,17 @@ async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<Pla
         .backend
         .resolve_playback(&url, &languages, &hosters)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::warn!(url = %url, "resolve_playback fehlgeschlagen: {e}");
+            e.to_string()
+        })?;
+
+    tracing::info!(
+        is_hls = resolved.is_hls,
+        has_referer = resolved.referer.is_some(),
+        stream = %resolved.url,
+        "Stream aufgelöst"
+    );
 
     let proxied = state
         .proxy
@@ -334,6 +344,20 @@ fn app_settings(state: State<'_, AppState>) -> SettingsDto {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Logging nach stderr (sichtbar im `tauri dev`-Terminal). Level über
+    // VINDEX_LOG bzw. RUST_LOG, Standard: info fürs App- und vindex-Modul.
+    let filter = tracing_subscriber::EnvFilter::try_from_env("VINDEX_LOG")
+        .or_else(|_| tracing_subscriber::EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new(
+                "info,vindex_desktop_app_lib=debug,vindex_core=debug",
+            )
+        });
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .try_init();
+
     // Settings früh laden (setzt u. a. den obscura-Pfad in core::browser).
     let _ = core::config::Settings::load();
 

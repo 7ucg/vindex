@@ -107,7 +107,9 @@ pub fn start(
 
     let sem = downloads.sem.clone();
 
-    tokio::spawn(async move {
+    // Tauris Runtime, nicht tokio::spawn direkt: der Command läuft evtl. im
+    // GTK-Thread ohne aktiven Tokio-Reaktor.
+    tauri::async_runtime::spawn(async move {
         // Auf einen freien Slot warten — bis dahin bleibt der Job „queued".
         let _permit = sem.acquire_owned().await.ok();
         if cancel.is_cancelled() {

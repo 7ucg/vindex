@@ -210,16 +210,27 @@ export function Player(props: { playback: Playback }): JSX.Element {
     // Sleep-Timer nach einem Remount (Auto-Next) mit Restzeit neu bewaffnen.
     armSleep();
 
+    // Fragt die Proxy-URL direkt ab, um den echten Grund zu zeigen (Status + Anfang).
+    const probe = async (u: string) => {
+      try {
+        const r = await fetch(u);
+        const body = (await r.text()).slice(0, 200).replace(/\s+/g, " ");
+        setErr(`Proxy ${r.status} ${r.statusText} · ${body}`);
+      } catch (e) {
+        setErr(`Proxy nicht erreichbar: ${String(e)}`);
+      }
+    };
+
     void (async () => {
       if (props.playback.isHls) {
         const { default: Hls } = await import("hls.js");
         if (Hls.isSupported()) {
           hls = new Hls({ enableWorker: true, lowLatencyMode: false });
           hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) {
-              setErr(`Wiedergabefehler: ${data.type} / ${data.details}`);
-              setLoading(false);
-            }
+            if (!data.fatal) return;
+            setLoading(false);
+            setErr(`Wiedergabefehler: ${data.type} / ${data.details} — prüfe Proxy …`);
+            void probe(src);
           });
           hls.loadSource(src);
           hls.attachMedia(el);

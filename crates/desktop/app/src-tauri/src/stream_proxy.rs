@@ -136,7 +136,14 @@ async fn fetch_validated(
 ) -> Result<(reqwest::Url, reqwest::Response), (StatusCode, &'static str)> {
     let mut current = start_url;
     for _ in 0..=MAX_REDIRECTS {
-        ensure_public(&current)?;
+        if let Err(e) = ensure_public(&current) {
+            tracing::warn!(
+                host = current.host_str().unwrap_or("?"),
+                reason = e.1,
+                "Proxy weist Ziel ab"
+            );
+            return Err(e);
+        }
 
         let mut req = client.get(current.clone());
         if let Some(r) = referer {
@@ -148,10 +155,13 @@ async fn fetch_validated(
             req = req.header(RANGE, rg.clone());
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|_| (StatusCode::BAD_GATEWAY, "upstream"))?;
+        let resp = req.send().await.map_err(|e| {
+            tracing::warn!(
+                host = current.host_str().unwrap_or("?"),
+                "Proxy-Upstream-Fehler: {e}"
+            );
+            (StatusCode::BAD_GATEWAY, "upstream")
+        })?;
 
         if resp.status().is_redirection() {
             let loc = resp
@@ -188,6 +198,14 @@ async fn deliver(
     let is_hls = ct.contains("mpegurl")
         || ct.contains("vnd.apple")
         || final_url.path().to_ascii_lowercase().ends_with(".m3u8");
+
+    tracing::debug!(
+        status = status.as_u16(),
+        content_type = %ct,
+        is_hls,
+        host = final_url.host_str().unwrap_or("?"),
+        "Proxy liefert aus"
+    );
 
     if is_hls {
         let text = match resp.text().await {
