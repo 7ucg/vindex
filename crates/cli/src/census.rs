@@ -190,7 +190,9 @@ fn write_csv(path: &str, results: &[Classified]) -> anyhow::Result<()> {
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') {
+    // RFC 4180: Felder mit Komma, Quote oder Zeilenumbruch werden gequotet,
+    // enthaltene Quotes verdoppelt.
+    if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -219,6 +221,12 @@ mod tests {
     #[test]
     fn csv_escape_anfuehrungszeichen_werden_verdoppelt() {
         assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_escape_zeilenumbruch_wird_gequotet() {
+        assert_eq!(csv_escape("Zeile1\nZeile2"), "\"Zeile1\nZeile2\"");
+        assert_eq!(csv_escape("a\rb"), "\"a\rb\"");
     }
 
     #[test]
