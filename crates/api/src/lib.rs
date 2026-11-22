@@ -55,7 +55,14 @@ fn rate_limit_from_env() -> u32 {
 pub struct RateLimiter {
     max: u32,
     window: Duration,
-    hits: StdMutex<HashMap<IpAddr, VecDeque<Instant>>>,
+    state: StdMutex<RateState>,
+}
+
+/// Interner Zustand des Limiters; `last_sweep` drosselt den O(n)-Aufräumlauf.
+#[derive(Default)]
+struct RateState {
+    map: HashMap<IpAddr, VecDeque<Instant>>,
+    last_sweep: Option<Instant>,
 }
 
 /// Obergrenze getrackter Schlüssel, damit die Map nicht unbegrenzt wächst.
@@ -68,6 +75,12 @@ fn normalize_rate_key(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(_) => ip,
         IpAddr::V6(v6) => {
+            // IPv4-mapped (::ffff:a.b.c.d) zuerst auf die IPv4-Form bringen, sonst
+            // würde die /64-Maskierung die eingebettete IPv4 nullen und alle
+            // gemappten Adressen in einen Bucket kippen (Lockout-DoS).
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return IpAddr::V4(v4);
+            }
             let mut seg = v6.segments();
             for s in seg.iter_mut().skip(4) {
                 *s = 0;
@@ -83,7 +96,7 @@ impl RateLimiter {
         RateLimiter {
             max,
             window,
-            hits: StdMutex::new(HashMap::new()),
+            state: StdMutex::new(RateState::default()),
         }
     }
 
@@ -93,16 +106,35 @@ impl RateLimiter {
     fn check(&self, ip: IpAddr) -> Result<(), u64> {
         let now = Instant::now();
         let key = normalize_rate_key(ip);
-        let mut map = self.hits.lock().expect("Rate-Limit-Mutex nicht vergiftet");
-        // Speicher begrenzen: vor dem Anlegen eines neuen Buckets veraltete
-        // Einträge (deren jüngster Treffer außerhalb des Fensters liegt) wegfegen.
-        if !map.contains_key(&key) && map.len() >= MAX_TRACKED_KEYS {
-            map.retain(|_, dq| {
-                dq.back()
-                    .is_some_and(|&t| now.duration_since(t) < self.window)
-            });
+        let mut guard = self.state.lock().expect("Rate-Limit-Mutex nicht vergiftet");
+        let st = &mut *guard;
+        // Speicher begrenzen, sobald ein neuer Bucket nötig wäre und die Map voll ist.
+        if !st.map.contains_key(&key) && st.map.len() >= MAX_TRACKED_KEYS {
+            // Veraltete Einträge wegfegen, aber höchstens einmal pro Fenster, damit
+            // der O(n)-Scan nicht bei jedem Request unter dem Lock läuft.
+            let due = st
+                .last_sweep
+                .is_none_or(|t| now.duration_since(t) >= self.window);
+            if due {
+                st.map.retain(|_, dq| {
+                    dq.back()
+                        .is_some_and(|&t| now.duration_since(t) < self.window)
+                });
+                st.last_sweep = Some(now);
+            }
+            // Hartes Limit: notfalls den am längsten inaktiven Bucket verdrängen.
+            if st.map.len() >= MAX_TRACKED_KEYS {
+                if let Some(victim) = st
+                    .map
+                    .iter()
+                    .min_by_key(|(_, dq)| dq.back().copied())
+                    .map(|(k, _)| *k)
+                {
+                    st.map.remove(&victim);
+                }
+            }
         }
-        let dq = map.entry(key).or_default();
+        let dq = st.map.entry(key).or_default();
         // Zeitstempel außerhalb des Fensters verwerfen.
         while let Some(&front) = dq.front() {
             if now.duration_since(front) >= self.window {
