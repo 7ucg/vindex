@@ -9,7 +9,8 @@ use vindex_core::config::Settings;
 use vindex_core::download::resolve_playable;
 use vindex_core::http;
 use vindex_core::mpv::{
-    anime4k_glsl_value, build_player_args, play_with, AniSkipTimes, Anime4kMode, Player,
+    anime4k_glsl_value, build_player_args, build_syncplay_args, play_syncplay, play_with,
+    AniSkipTimes, Anime4kMode, Player,
 };
 use vindex_core::watchstate::episode_from_url;
 
@@ -38,6 +39,9 @@ pub struct WatchArgs {
     /// Verzeichnis mit den Anime4K-`.glsl`-Shadern (sonst `VINDEX_ANIME4K_DIR`).
     #[arg(long)]
     pub anime4k_dir: Option<String>,
+    /// Synchronisierte Wiedergabe über Syncplay (steuert mpv). Vorrang vor `--player`.
+    #[arg(long)]
+    pub syncplay: bool,
 }
 
 pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
@@ -89,14 +93,30 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
 
     let title = title_from_url(&args.url);
 
+    // Anime4K-Shader-Kette (optional): Modus + Shader-Verzeichnis auflösen.
+    let anime4k = resolve_anime4k(&args)?;
+
+    // Syncplay hat Vorrang vor der Player-Auswahl (steuert mpv selbst, gehärtet).
+    if args.syncplay {
+        let sp_args = build_syncplay_args(
+            &stream.url,
+            stream.referer.as_deref(),
+            title.as_deref(),
+            aniskip.as_ref(),
+            anime4k.as_deref(),
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!("Starte syncplay ...");
+        return play_syncplay(&sp_args)
+            .await
+            .map_err(|e| anyhow::anyhow!("Wiedergabe fehlgeschlagen: {e}"));
+    }
+
     let player = match args.player.as_deref() {
         None => Player::Mpv,
         Some(name) => Player::from_name(name)
             .ok_or_else(|| anyhow::anyhow!("Unbekannter Player: {name} (nutze mpv oder iina)"))?,
     };
-
-    // Anime4K-Shader-Kette (optional): Modus + Shader-Verzeichnis auflösen.
-    let anime4k = resolve_anime4k(&args)?;
 
     let player_args = build_player_args(
         player,

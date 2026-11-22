@@ -234,20 +234,16 @@ pub fn anime4k_glsl_value(mode: Anime4kMode, shader_dir: &std::path::Path) -> Op
 /// Baut die mpv-Options-Tokens (Härtung, Referer, Titel, AniSkip-Kapitel, optional
 /// Anime4K-Shader) — ohne `--`-Trenner und ohne URL. Gemeinsame Basis für mpv/IINA.
 /// `anime4k` ist der fertige `--glsl-shaders`-Wert (siehe [`anime4k_glsl_value`]).
-fn mpv_option_tokens(
+/// Dynamische (pro-Wiedergabe) mpv-Optionen: Referer, Medientitel, AniSkip-Kapitel,
+/// Anime4K-Shader — **ohne** die Härtungsflags. Basis für den Syncplay-Pfad, dessen
+/// Härtung über eine `MPV_HOME`-Config statt über Flags kommt.
+fn mpv_dynamic_tokens(
     referer: Option<&str>,
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
     anime4k: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
-
-    // Härtung: keine Nutzer-Config, kein ytdl-Hook, keine Lua-Scripts — so kann eine
-    // (aus gescraptem HTML stammende) URL weder Scripts noch den ytdl-Pfad erreichen.
-    args.push("--no-config".to_string());
-    args.push("--ytdl=no".to_string());
-    args.push("--load-scripts=no".to_string());
-
     if let Some(r) = referer {
         // `-append`, damit kein Komma die Header-Liste aufsplittet.
         args.push(format!(
@@ -268,6 +264,23 @@ fn mpv_option_tokens(
     if let Some(shaders) = anime4k {
         args.push(format!("--glsl-shaders={}", sanitize(shaders)));
     }
+    args
+}
+
+fn mpv_option_tokens(
+    referer: Option<&str>,
+    title: Option<&str>,
+    aniskip: Option<&AniSkipTimes>,
+    anime4k: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+
+    // Härtung: keine Nutzer-Config, kein ytdl-Hook, keine Lua-Scripts — so kann eine
+    // (aus gescraptem HTML stammende) URL weder Scripts noch den ytdl-Pfad erreichen.
+    args.push("--no-config".to_string());
+    args.push("--ytdl=no".to_string());
+    args.push("--load-scripts=no".to_string());
+    args.extend(mpv_dynamic_tokens(referer, title, aniskip, anime4k));
     args
 }
 
@@ -338,6 +351,49 @@ pub fn build_player_args(
     Ok(args)
 }
 
+/// Baut die Syncplay-Argumente (synchronisierte Wiedergabe). Syncplay steuert mpv:
+/// Stream-URL positional, mpv-Pfad über `--player-path`, danach `--` + die
+/// **dynamischen** mpv-Optionen (Referer/Titel/Kapitel/Shader). Die mpv-Härtung kommt
+/// NICHT über Flags (Syncplay reicht `--`-Args je nach Version evtl. nicht durch),
+/// sondern garantiert über eine `MPV_HOME`-Config (siehe [`play_syncplay`]).
+///
+/// Privacy: `--filename-privacy`/`--file-size-privacy` auf `DontSend`, damit die
+/// tokenisierte Stream-URL **nicht** an den Syncplay-Server/-Raum geht. `--no-gui`
+/// für den headless Start. `Err`, wenn die URL keine sichere http(s)-URL ist.
+pub fn build_syncplay_args(
+    stream_url: &str,
+    referer: Option<&str>,
+    title: Option<&str>,
+    aniskip: Option<&AniSkipTimes>,
+    anime4k: Option<&str>,
+) -> Result<Vec<String>> {
+    if !url_is_launch_safe(stream_url) {
+        return Err(Error::Mpv(
+            "Stream-URL ist keine absolute http/https-URL".into(),
+        ));
+    }
+    let mut args = vec![
+        stream_url.to_string(),
+        "--no-gui".to_string(),
+        "--player-path".to_string(),
+        Player::Mpv.binary().to_string(),
+        // Privatsphäre: Dateiname/-größe nicht an den Raum/Server senden.
+        "--filename-privacy".to_string(),
+        "DontSend".to_string(),
+        "--file-size-privacy".to_string(),
+        "DontSend".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(mpv_dynamic_tokens(referer, title, aniskip, anime4k));
+    Ok(args)
+}
+
+/// Inhalt der `MPV_HOME`-`mpv.conf`, die beim Syncplay-Start die Härtung erzwingt.
+/// `MPV_HOME` lenkt mpv auf dieses Verzeichnis statt auf die Nutzer-Config (ersetzt
+/// `--no-config`), und die Optionen setzen ytdl/Scripts hart aus — unabhängig davon,
+/// ob Syncplay die `--`-Flags durchreicht.
+pub(crate) const SYNCPLAY_MPV_CONF: &str = "ytdl=no\nload-scripts=no\n";
+
 /// Startet mpv mit den gebauten Argumenten und wartet auf das Ende der Wiedergabe.
 ///
 /// Läuft über `tokio::process::Command` mit getrennten Argumenten (keine Shell).
@@ -371,6 +427,57 @@ async fn run_player(bin: &str, args: &[String]) -> Result<()> {
     } else {
         Err(Error::Mpv(format!("{bin} endete mit Status {status}")))
     }
+}
+
+/// Startet Syncplay mit garantierter mpv-Härtung über ein eigenes `MPV_HOME`-
+/// Verzeichnis (0700, `mpv.conf` mit `ytdl=no`/`load-scripts=no`). So gilt die Härtung
+/// auch dann, wenn Syncplay die `--`-Flags nicht an mpv durchreicht. Das Verzeichnis
+/// lebt nur für die Wiedergabe und wird danach entfernt.
+pub async fn play_syncplay(args: &[String]) -> Result<()> {
+    let dir = std::env::temp_dir().join(format!(
+        "vindex-syncplay-mpv-{}-{}",
+        std::process::id(),
+        epoch_nanos()
+    ));
+    tokio::fs::create_dir_all(&dir).await.map_err(Error::Io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    tokio::fs::write(dir.join("mpv.conf"), SYNCPLAY_MPV_CONF)
+        .await
+        .map_err(Error::Io)?;
+
+    let mut cmd = Command::new("syncplay");
+    cmd.kill_on_drop(true).env("MPV_HOME", &dir).args(args);
+    let result = cmd.status().await;
+
+    // Aufräumen, egal wie es ausging.
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+
+    let status = match result {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::Mpv(
+                "syncplay nicht gefunden — bitte installieren und in den PATH legen".into(),
+            ));
+        }
+        Err(e) => return Err(Error::Io(e)),
+    };
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::Mpv(format!("syncplay endete mit Status {status}")))
+    }
+}
+
+/// Unvorhersehbarer Namensteil für das temporäre `MPV_HOME`-Verzeichnis.
+fn epoch_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -640,6 +747,43 @@ mod tests {
         assert!(
             build_player_args(Player::Mpv, "https://ok/v.m3u8", None, None, None, None).is_ok()
         );
+    }
+
+    #[test]
+    fn syncplay_args_privacy_und_keine_haertungsflags() {
+        let url = "https://cdn.example/s.m3u8";
+        let args = build_syncplay_args(url, Some("https://ref"), Some("T"), None, None).unwrap();
+        // URL positional, Player-Pfad gesetzt.
+        assert_eq!(args.first().unwrap(), url);
+        let pp = args.iter().position(|a| a == "--player-path").unwrap();
+        assert_eq!(args[pp + 1], "mpv");
+        // Privacy: Dateiname/-größe nicht senden.
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--filename-privacy", "DontSend"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--file-size-privacy", "DontSend"]));
+        // Nach `--` nur dynamische Optionen, KEINE Härtungsflags (die kommen über MPV_HOME).
+        let sep = args.iter().position(|a| a == "--").unwrap();
+        let after = &args[sep + 1..];
+        assert!(after
+            .iter()
+            .any(|a| a == "--http-header-fields-append=Referer: https://ref"));
+        assert!(!after.iter().any(|a| a == "--no-config"));
+        assert!(!after.iter().any(|a| a == "--ytdl=no"));
+        assert!(!after.iter().any(|a| a == "--load-scripts=no"));
+    }
+
+    #[test]
+    fn syncplay_lehnt_flag_url_ab() {
+        assert!(build_syncplay_args("--evil", None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn syncplay_mpv_conf_haertet() {
+        assert!(SYNCPLAY_MPV_CONF.contains("ytdl=no"));
+        assert!(SYNCPLAY_MPV_CONF.contains("load-scripts=no"));
     }
 
     #[test]

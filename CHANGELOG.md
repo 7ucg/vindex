@@ -9,6 +9,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Watch: synchronisierte Wiedergabe `--syncplay` (`core::mpv::build_syncplay_args`/
+  `play_syncplay`), jetzt sicher umgesetzt. Die tokenisierte Stream-URL geht nicht an den
+  Syncplay-Server/-Raum (`--filename-privacy`/`--file-size-privacy = DontSend`), und die mpv-
+  Härtung ist über ein eigenes `MPV_HOME` (temporäres 0700-Verzeichnis mit `mpv.conf`:
+  `ytdl=no`/`load-scripts=no`) garantiert — unabhängig davon, ob Syncplay die `--`-Flags
+  durchreicht. Arg-/Config-Bau rein getestet; der Lauf gegen echtes Syncplay ist Nutzer-seitig
+  zu bestätigen.
 - API: Bibliotheks-Auto-Sync. `GET /api/library?since=<unix>` liefert nur die seither
   geänderten Einträge (jeder Eintrag trägt jetzt `modified`), plus `server_time` in der Antwort,
   das der Client beim nächsten Abruf als `?since` mitgibt — so holt er inkrementell nur Neues.

@@ -21,10 +21,8 @@ Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund
 - **Vollständig ffmpeg-freies HLS.** Segment-Download (`VINDEX_NATIVE_HLS`) und AES-128 laufen
   nativ, nur das Remuxen nutzt noch ffmpeg. Ein eigener TS-Remuxer würde ffmpeg ersetzen;
   `SAMPLE-AES` bliebe vorerst beim ffmpeg-Pfad. Braucht echte TS-Segmente zum Verifizieren.
-- **Syncplay** (zurückgestellt). Teilt die tokenisierte Stream-URL mit einem Dritt-Server/Raum
-  und reicht die mpv-Härtungsflags nur unverifiziert weiter. Kommt erst mit Privacy-Flags
-  (`--filename-privacy`/`--file-size-privacy`), über `MPV_HOME` garantierter Härtung und einer
-  Live-Prüfung gegen echtes Syncplay zurück.
+- **Syncplay** umgesetzt (Privacy-Flags + MPV_HOME-Härtung); nur der Lauf gegen echtes
+  Syncplay ist noch Nutzer-seitig zu bestätigen.
 - **Mehrstaffel-MAL-ID.** Die Zuordnung Staffel→MAL-ID höherer Staffeln ist eine ID-Sortier-
   Heuristik (`aniskip::resolve_mal_id`), gegen echte Mehrstaffler noch nicht verifiziert (Jikan
   war in der Testumgebung egress-geblockt).
