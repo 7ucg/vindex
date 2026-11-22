@@ -60,11 +60,13 @@ pub struct RateLimiter {
     state: StdMutex<RateState>,
 }
 
-/// Interner Zustand des Limiters; `last_sweep` drosselt den O(n)-Aufräumlauf.
+/// Interner Zustand des Limiters; `last_sweep` drosselt den O(n)-Aufräumlauf,
+/// `overflow` ist der gemeinsame Bucket für neue Keys bei voller Tabelle.
 #[derive(Default)]
 struct RateState {
     map: HashMap<IpAddr, VecDeque<Instant>>,
     last_sweep: Option<Instant>,
+    overflow: VecDeque<Instant>,
 }
 
 /// Obergrenze getrackter Schlüssel, damit die Map nicht unbegrenzt wächst.
@@ -110,10 +112,14 @@ impl RateLimiter {
         let key = normalize_rate_key(ip);
         let mut guard = self.state.lock().expect("Rate-Limit-Mutex nicht vergiftet");
         let st = &mut *guard;
-        // Speicher begrenzen, sobald ein neuer Bucket nötig wäre und die Map voll ist.
-        if !st.map.contains_key(&key) && st.map.len() >= MAX_TRACKED_KEYS {
-            // Veraltete Einträge wegfegen, aber höchstens einmal pro Fenster, damit
-            // der O(n)-Scan nicht bei jedem Request unter dem Lock läuft.
+        // Welcher Bucket? Normalerweise der eigene Key-Bucket. Ist die Tabelle voll
+        // und lässt sich kein veralteter Bucket freigeben, teilen sich neue Keys einen
+        // gemeinsamen Overflow-Bucket. So bleibt der Speicher begrenzt, ohne lebende
+        // Buckets zu löschen (Key-Churn-Bypass) oder neue Keys ganz abzuweisen (Lockout).
+        let use_overflow = if st.map.contains_key(&key) || st.map.len() < MAX_TRACKED_KEYS {
+            false
+        } else {
+            // Höchstens einmal pro Fenster aufräumen (kein O(n)-Scan je Request).
             let due = st
                 .last_sweep
                 .is_none_or(|t| now.duration_since(t) >= self.window);
@@ -124,30 +130,33 @@ impl RateLimiter {
                 });
                 st.last_sweep = Some(now);
             }
-            // Hartes Limit: notfalls den am längsten inaktiven Bucket verdrängen.
-            if st.map.len() >= MAX_TRACKED_KEYS {
-                // Nur einen Bucket verdrängen, dessen letzter Treffer schon außerhalb
-                // des Fensters liegt — einen lebenden Bucket zu löschen, würde per
-                // Key-Churn das Limit aushebeln. Gibt es keinen, wird der neue Request
-                // abgelehnt (fail closed).
-                let victim = st
+            if st.map.len() < MAX_TRACKED_KEYS {
+                false
+            } else {
+                // Einen bereits veralteten Bucket freigeben; gibt es keinen, Overflow.
+                let stale = st
                     .map
                     .iter()
-                    .min_by_key(|(_, dq)| dq.back().copied())
-                    .filter(|(_, dq)| {
+                    .find(|(_, dq)| {
                         dq.back()
                             .is_none_or(|&t| now.duration_since(t) >= self.window)
                     })
                     .map(|(k, _)| *k);
-                match victim {
+                match stale {
                     Some(v) => {
                         st.map.remove(&v);
+                        false
                     }
-                    None => return Err(self.window.as_secs().max(1)),
+                    None => true,
                 }
             }
-        }
-        let dq = st.map.entry(key).or_default();
+        };
+
+        let dq = if use_overflow {
+            &mut st.overflow
+        } else {
+            st.map.entry(key).or_default()
+        };
         // Zeitstempel außerhalb des Fensters verwerfen.
         while let Some(&front) = dq.front() {
             if now.duration_since(front) >= self.window {
@@ -288,8 +297,13 @@ fn client_ip(req: &Request) -> IpAddr {
         (status = 200, description = "OpenAPI-3-Spezifikation dieser API", content_type = "application/json")
     )
 )]
-async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
+async fn openapi_json() -> impl IntoResponse {
+    // Spec einmal serialisieren und zwischenspeichern, damit jeder (offene,
+    // ungedrosselte) Aufruf nur den fertigen String ausliefert statt sie neu
+    // aufzubauen.
+    static SPEC: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| serde_json::to_string(&ApiDoc::openapi()).unwrap_or_default());
+    ([(header::CONTENT_TYPE, "application/json")], SPEC.as_str())
 }
 
 /// Startet den Daemon auf *addr* (z. B. `127.0.0.1:8080`).
