@@ -54,6 +54,11 @@ fn rate_limit_from_env() -> u32 {
 
 /// Sliding-Window-Rate-Limit pro Client-IP. Hält je IP die Zeitstempel der
 /// Zugriffe im Fenster vor; ältere werden bei jedem Zugriff verworfen.
+///
+/// Best-Effort-Schutz im Prozessspeicher (Defense-in-Depth), kein harter
+/// DoS-Schutz: bei voller Tabelle fallen neue Keys in einen gemeinsamen
+/// Overflow-Bucket. Für einen öffentlichen Betrieb gehört davor ein Edge-/
+/// Reverse-Proxy-Rate-Limit (siehe TODO.md).
 pub struct RateLimiter {
     max: u32,
     window: Duration,

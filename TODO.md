@@ -49,8 +49,11 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 - **Persistenter Key-Store.** Statt statischer Keys aus der Umgebung: Keys mit sha256
   speichern, Scopes (read/write/admin) an Methode und Route binden, Login-/Request-
   Throttle mit `429` und `Retry-After`.
-- **Weitere Flächen.** Library, Auto-Sync, OpenAPI (`utoipa`), ein Rate-Limit-Layer
-  (`tower_governor`).
+- **Weitere Flächen.** Library, Auto-Sync, persistenter Key-Store mit Scopes.
+- **Produktions-Rate-Limit.** Das eingebaute Limit ist ein Best-Effort-Schutz im
+  Prozessspeicher. Für einen öffentlichen Betrieb gehört ein echtes Edge-/Reverse-Proxy-
+  Limit davor (bzw. ein verteilter Limiter mit Trusted-Proxy-`X-Forwarded-For`); der
+  In-Memory-Teil bleibt nur Defense-in-Depth.
 
 ## Download & Wiedergabe
 
