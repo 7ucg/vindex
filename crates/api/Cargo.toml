@@ -17,6 +17,8 @@ axum = { workspace = true }
 tower = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+getrandom = { workspace = true }
 reqwest = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

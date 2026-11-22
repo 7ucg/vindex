@@ -104,6 +104,11 @@ Sind über `VINDEX_API_KEYS` (komma-getrennt) Keys gesetzt, verlangen alle
 ohne gültigen Key antwortet die API mit `401`. Ohne gesetzte Keys startet der Daemon
 nur auf `127.0.0.1` — ein öffentlicher Bind ohne Auth wird abgelehnt.
 
+Für feinere Rechte gibt es einen persistenten Key-Store (`VINDEX_API_KEYS_FILE`, JSON):
+pro Key ein `read`/`write`/`admin`-Scope, gespeichert nur als sha256-Hash. GET-Routen
+brauchen `read`, `POST /api/download` `write`; zu wenig Rechte ergeben `403`. Die
+Env-Keys gelten als `admin`-Bootstrap.
+
 ```bash
 VINDEX_API_KEYS=geheim123 vindex serve --addr 0.0.0.0:8080
 curl -H "X-API-Key: geheim123" "http://127.0.0.1:8080/api/search?keyword=naruto"

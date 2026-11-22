@@ -9,6 +9,8 @@
 
 mod auth;
 
+pub use auth::generate_key;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -482,6 +484,7 @@ struct DownloadReq {
         (status = 202, description = "Auftrag angenommen und eingereiht", body = DownloadAccepted),
         (status = 400, description = "Fehlende/ungültige oder nicht erlaubte Quell-URL", body = ErrorResponse),
         (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 403, description = "API-Key ohne Write-Scope", body = ErrorResponse),
         (status = 429, description = "Queue voll oder Rate-Limit überschritten", body = ErrorResponse)
     ),
     security(("api_key" = []))
@@ -798,6 +801,17 @@ mod tests {
         }
     }
 
+    /// Wie [`state`], aber mit Keys samt explizitem Scope (Store-artig).
+    fn state_scoped(keys: &[(&str, auth::Scope)]) -> AppState {
+        AppState {
+            client: reqwest::Client::new(),
+            jobs: Arc::new(Mutex::new(Vec::new())),
+            next_id: Arc::new(AtomicU64::new(1)),
+            auth: auth::AuthConfig::with_scoped(keys),
+            rate: Arc::new(RateLimiter::new(DEFAULT_RATE_LIMIT, RATE_LIMIT_WINDOW)),
+        }
+    }
+
     async fn send(app: Router, req: Request<Body>) -> (StatusCode, String) {
         let resp = app.oneshot(req).await.expect("Router antwortet immer");
         let status = resp.status();
@@ -907,6 +921,53 @@ mod tests {
             .expect("Request baubar");
         let (status, _) = send(router_with(state(&["geheim"])), req).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn read_key_darf_queue_aber_nicht_download_403() {
+        // Read-Key: GET /api/queue → 200, aber POST /api/download → 403.
+        let app = router_with(state_scoped(&[("leser", auth::Scope::Read)]));
+        let (status, _) = send(app.clone(), get_req("/api/queue", Some("leser"))).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut req = post_json(
+            "/api/download",
+            r#"{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1"}"#,
+        );
+        req.headers_mut()
+            .insert("x-api-key", "leser".parse().unwrap());
+        let (status, _) = send(app, req).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn write_key_darf_download_202() {
+        let app = router_with(state_scoped(&[("schreiber", auth::Scope::Write)]));
+        let mut req = post_json(
+            "/api/download",
+            r#"{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1"}"#,
+        );
+        req.headers_mut()
+            .insert("x-api-key", "schreiber".parse().unwrap());
+        let (status, body) = send(app, req).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(body.contains("\"queue_id\""), "{body}");
+    }
+
+    #[tokio::test]
+    async fn admin_key_deckt_read_und_write() {
+        let app = router_with(state_scoped(&[("chef", auth::Scope::Admin)]));
+        let (status, _) = send(app.clone(), get_req("/api/queue", Some("chef"))).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut req = post_json(
+            "/api/download",
+            r#"{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1"}"#,
+        );
+        req.headers_mut()
+            .insert("x-api-key", "chef".parse().unwrap());
+        let (status, _) = send(app, req).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
     }
 
     #[tokio::test]

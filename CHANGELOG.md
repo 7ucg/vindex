@@ -9,6 +9,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- API: persistenter Key-Store mit Scopes. Keys liegen als sha256-Hash (nie im Klartext) in
+  einer JSON-Datei (`VINDEX_API_KEYS_FILE`); jeder Key hat einen Scope `read`/`write`/`admin`
+  (GET braucht `read`, `POST /api/download` `write`, Admin deckt alles). Zu niedriger Scope
+  → `403`. `VINDEX_API_KEYS` (Env) bleibt als Admin-Bootstrap. Ein Store-Ladefehler sperrt
+  die API (deny-all) statt sie zu öffnen; `generate_key` nutzt einen CSPRNG.
 - Nativer HLS-Pfad (`VINDEX_NATIVE_HLS`) entschlüsselt jetzt AES-128-CBC-Playlists selbst
   (Schlüssel über denselben Client + SSRF-Prüfung, IV deklariert oder aus der
   Mediensequenz, PKCS7). `SAMPLE-AES` und andere Methoden fallen weiter auf ffmpeg zurück.
