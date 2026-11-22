@@ -672,27 +672,37 @@ async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
     get,
     path = "/api/library",
     tag = "vindex",
+    params(LibraryQuery),
     responses(
-        (status = 200, description = "Dateien im Download-Verzeichnis", body = LibraryResponse),
+        (status = 200, description = "Dateien im Download-Verzeichnis (optional seit ?since)", body = LibraryResponse),
         (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
         (status = 429, description = "Rate-Limit überschritten", body = ErrorResponse)
     ),
     security(("api_key" = []))
 )]
-async fn library(State(state): State<AppState>) -> Json<LibraryResponse> {
+async fn library(
+    State(state): State<AppState>,
+    Query(q): Query<LibraryQuery>,
+) -> Json<LibraryResponse> {
     let dir = state.download_path.clone();
     // Datei-I/O vom async-Reactor fernhalten.
     let entries = tokio::task::spawn_blocking(move || core::library::list(&dir))
         .await
         .unwrap_or_default();
-    let items = entries
+    // Auto-Sync: nur seit `since` Geändertes.
+    let items = core::library::changed_since(entries, q.since)
         .into_iter()
         .map(|e| LibraryEntry {
             name: e.name,
             size_bytes: e.size_bytes,
+            modified: e.modified,
         })
         .collect();
-    Json(LibraryResponse { items })
+    let server_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Json(LibraryResponse { items, server_time })
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,12 +1016,25 @@ struct LibraryEntry {
     name: String,
     /// Dateigröße in Bytes.
     size_bytes: u64,
+    /// Letzte Änderung (Unix-Sekunden).
+    modified: u64,
 }
 
 /// Antwort von `GET /api/library`.
 #[derive(serde::Serialize, ToSchema)]
 struct LibraryResponse {
     items: Vec<LibraryEntry>,
+    /// Server-Zeit (Unix-Sekunden) dieser Antwort. Für Auto-Sync: beim nächsten
+    /// Abruf als `?since=<server_time>` mitgeben, um nur Neues/Geändertes zu holen.
+    server_time: u64,
+}
+
+/// Query-Parameter für `GET /api/library` (Auto-Sync).
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct LibraryQuery {
+    /// Nur Einträge liefern, die nach dieser Unix-Zeit (Sekunden) geändert wurden.
+    since: Option<u64>,
 }
 
 /// Antwort von `POST /api/keys` (201): der Klartext wird **einmalig** geliefert.

@@ -104,6 +104,8 @@ curl -X POST -H "Content-Type: application/json" \
   http://127.0.0.1:8080/api/download
 curl http://127.0.0.1:8080/api/queue
 curl http://127.0.0.1:8080/api/library   # fertige Downloads im Zielverzeichnis
+# Auto-Sync: nur Änderungen seit der letzten Server-Zeit holen
+curl "http://127.0.0.1:8080/api/library?since=1700000000"
 ```
 
 Die OpenAPI-3-Spezifikation (via `utoipa`) liegt offen — wie `/health`, ohne

@@ -16,11 +16,6 @@ Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund
   öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
   Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
 
-## API
-
-- **Auto-Sync.** Abgleich des Bibliotheks-Stands über mehrere Clients (Design offen). `GET
-  /api/library`, OpenAPI, Rate-Limit, Key-Store/Scopes und `/api/keys` sind erledigt.
-
 ## Download & Wiedergabe
 
 - **Vollständig ffmpeg-freies HLS.** Segment-Download (`VINDEX_NATIVE_HLS`) und AES-128 laufen

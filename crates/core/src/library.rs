@@ -13,6 +13,9 @@ pub struct Entry {
     pub name: String,
     /// Dateigröße in Bytes.
     pub size_bytes: u64,
+    /// Letzte Änderung als Unix-Zeit (Sekunden). 0, wenn unbekannt. Für Delta-Sync:
+    /// Clients fragen „alles seit <Zeit>" ab.
+    pub modified: u64,
 }
 
 /// Höchstzahl Einträge, die ein Scan zurückgibt.
@@ -62,11 +65,30 @@ pub fn list(dir: &Path) -> Vec<Entry> {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        out.push(Entry { name, size_bytes });
+        let meta = entry.metadata().ok();
+        let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified = meta
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        out.push(Entry {
+            name,
+            size_bytes,
+            modified,
+        });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Filtert auf Einträge, die nach *since* (Unix-Sekunden) geändert wurden. `None`
+/// liefert alles. Grundlage für den Delta-/Auto-Sync der Bibliothek.
+pub fn changed_since(entries: Vec<Entry>, since: Option<u64>) -> Vec<Entry> {
+    match since {
+        Some(ts) => entries.into_iter().filter(|e| e.modified > ts).collect(),
+        None => entries,
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +117,24 @@ mod tests {
     #[test]
     fn fehlendes_verzeichnis_ist_leer() {
         assert!(list(Path::new("/nicht/vorhanden/xyz")).is_empty());
+    }
+
+    #[test]
+    fn changed_since_filtert_nach_mtime() {
+        let e = |name: &str, m: u64| Entry {
+            name: name.into(),
+            size_bytes: 1,
+            modified: m,
+        };
+        let all = vec![e("a", 100), e("b", 200), e("c", 300)];
+        // since=150 → nur b (200) und c (300).
+        let got = changed_since(all.clone(), Some(150));
+        assert_eq!(
+            got.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
+        // None → alles.
+        assert_eq!(changed_since(all, None).len(), 3);
     }
 
     #[cfg(unix)]

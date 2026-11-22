@@ -9,6 +9,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- API: Bibliotheks-Auto-Sync. `GET /api/library?since=<unix>` liefert nur die seither
+  geänderten Einträge (jeder Eintrag trägt jetzt `modified`), plus `server_time` in der Antwort,
+  das der Client beim nächsten Abruf als `?since` mitgibt — so holt er inkrementell nur Neues.
+  Scan-/Filterlogik (`core::library::changed_since`) ist rein getestet.
 - filmo.to funktioniert jetzt end-to-end (live verifiziert, `argo` → spielbare HLS-URL): der
   `/n`-CSRF-Flow braucht die beim Film-GET gesetzte Laravel-Session — dafür ist ein Cookie-Store
   aktiviert (reqwest `cookies`-Feature + `cookie_store(true)`, per Domain gescopet). Jahr-Parsing
