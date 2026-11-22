@@ -161,7 +161,7 @@ pub fn browser_client() -> reqwest::Result<reqwest::Client> {
 /// Fester Upstream-DNS. Cloudflare 1.1.1.1 umgeht DNS-Sperren des System-Resolvers,
 /// über die einzelne Portale sonst nicht auflösbar sind. Überschreibbar via
 /// `VINDEX_DNS` (eine oder mehrere IPs, komma-getrennt).
-fn upstream_resolver() -> &'static hickory_resolver::TokioAsyncResolver {
+pub(crate) fn upstream_resolver() -> &'static hickory_resolver::TokioAsyncResolver {
     use std::sync::OnceLock;
     static R: OnceLock<hickory_resolver::TokioAsyncResolver> = OnceLock::new();
     R.get_or_init(|| {

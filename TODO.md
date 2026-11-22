@@ -20,8 +20,10 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## Netzwerk & Anti-Bot
 
-- **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht
-  reicht (echter Browser, z. B. chromiumoxide/headless).
+- **Headless-Browser-Fallback (Stufe 3)** erledigt: obscura (`core::browser`, opt-in
+  `VINDEX_OBSCURA`) hinter einem erzwungenen 1.1.1.1-CONNECT-Proxy mit SSRF-Filter. Live gegen
+  serienstream.to durch Cloudflare verifiziert. Offen: der Proxy braucht einen Listening-Socket
+  (in manchen Sandboxes blockiert) und obscura muss installiert sein.
 
 ## Hoster-Pflege
 

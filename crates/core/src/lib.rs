@@ -19,6 +19,7 @@
 //! - [`watchstate`] — „keep watching": Fortschritt pro Serie merken.
 
 pub mod aniskip;
+pub mod browser;
 pub mod config;
 pub mod download;
 pub mod error;

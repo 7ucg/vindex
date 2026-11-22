@@ -32,6 +32,10 @@ pub struct Settings {
     /// Chrome-Fingerprint wiederholt. Default **aus** (laut README standardmäßig
     /// deaktiviert).
     pub impersonate: bool,
+    /// Pfad zum obscura-Binary für den Headless-Browser-Fallback (Anti-Bot Stufe 3,
+    /// `VINDEX_OBSCURA`). Leer/None = aus. obscura läuft hinter einem erzwungenen
+    /// 1.1.1.1-Resolver-Proxy.
+    pub obscura: Option<String>,
     /// API-Keys für den Daemon (`VINDEX_API_KEYS`, komma-getrennt). Leer = keine
     /// Auth; der Daemon startet dann nur auf localhost.
     pub api_keys: Vec<String>,
@@ -55,6 +59,7 @@ impl std::fmt::Debug for Settings {
             .field("naming_template", &self.naming_template)
             .field("native_hls", &self.native_hls)
             .field("impersonate", &self.impersonate)
+            .field("obscura", &self.obscura)
             .field(
                 "api_keys",
                 &format_args!("[{} redigiert]", self.api_keys.len()),
@@ -80,6 +85,7 @@ impl Default for Settings {
             naming_template: crate::naming::DEFAULT_TEMPLATE.to_string(),
             native_hls: false,
             impersonate: false,
+            obscura: None,
             api_keys: Vec::new(),
         }
     }
@@ -128,6 +134,10 @@ impl Settings {
         s.keep_watching = env_bool("VINDEX_KEEP_WATCHING", s.keep_watching);
         s.native_hls = env_bool("VINDEX_NATIVE_HLS", s.native_hls);
         s.impersonate = env_bool("VINDEX_IMPERSONATE", s.impersonate);
+        if let Some(v) = env("VINDEX_OBSCURA") {
+            let v = v.trim();
+            s.obscura = (!v.is_empty()).then(|| v.to_string());
+        }
         if let Some(v) = env("VINDEX_NAMING_TEMPLATE") {
             s.naming_template = v;
         }
@@ -141,6 +151,8 @@ impl Settings {
         // Impersonate-Schalter prozessweit setzen, damit die Fetch-Schicht ohne
         // Durchreichen von `Settings` an jeden Scraper-Aufruf darauf zugreifen kann.
         crate::http::set_impersonate(s.impersonate);
+        // obscura-Pfad (Stufe 3) ebenso prozessweit hinterlegen.
+        crate::browser::set_obscura_path(s.obscura.clone());
         s
     }
 

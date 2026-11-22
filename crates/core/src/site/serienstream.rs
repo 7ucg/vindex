@@ -76,11 +76,17 @@ pub async fn provider_links(
     let mut body = resp.text().await?;
     if crate::http::looks_like_challenge(&body, status) {
         // Anti-Bot Stufe 2 (opt-in): bei Cloudflare-Verdacht einmalig über den
-        // TLS-Impersonate-Client (Chrome-Fingerprint) wiederholen. Ohne das Flag
-        // bleibt es beim bisherigen Verhalten (Challenge-Fehler).
+        // TLS-Impersonate-Client (Chrome-Fingerprint) wiederholen.
         if crate::http::impersonate_enabled() {
             body = crate::http::get_text_impersonate(episode_url, None).await?;
-        } else {
+        }
+        // Anti-Bot Stufe 3 (opt-in): kommt die Seite weiter nicht durch (oder ist
+        // Impersonate aus), den Headless-Browser obscura versuchen — der rendert JS
+        // und löst JS-/Cloudflare-Interstitials, DNS erzwungen über 1.1.1.1.
+        if crate::http::looks_like_challenge(&body, status) && crate::browser::obscura_enabled() {
+            body = crate::browser::fetch_html(episode_url).await?;
+        }
+        if crate::http::looks_like_challenge(&body, status) {
             return Err(Error::Challenge(episode_url.to_string()));
         }
     }

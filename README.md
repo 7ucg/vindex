@@ -31,6 +31,8 @@ HTTP-API/Daemon und Desktop-Backend.
   User-Agent-Rotation, Cloudflare-Erkennung.
 - TLS-Impersonate-Fallback (Anti-Bot Stufe 2) über `wreq` mit Chrome-Fingerprint —
   opt-in über `VINDEX_IMPERSONATE`, standardmäßig deaktiviert.
+- Headless-Browser-Fallback (Anti-Bot Stufe 3) über `obscura` — opt-in über `VINDEX_OBSCURA`
+  (Pfad zum Binary). obscura läuft hinter einem erzwungenen 1.1.1.1-Resolver-Proxy.
 - Konfiguration über `VINDEX_*`-Variablen und `.env`.
 - AniSkip-Abruf für Intro- und Outro-Zeiten.
 - Watch-Modus: `vindex watch <url>` spielt eine Episode/einen Film direkt in mpv ab

@@ -9,6 +9,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Anti-Bot Stufe 3: Headless-Browser-Fallback über **obscura** (`core::browser`). Kommt eine
+  Portalseite weder über reqwest (Stufe 1) noch über wreq-Impersonate (Stufe 2) durch, rendert
+  obscura sie (JS-Ausführung, löst Cloudflare-JS-Interstitials). obscura nutzt System-DNS und hat
+  keinen DNS-Flag; die Portale brauchen aber 1.1.1.1 — deshalb startet vindex für den Aufruf einen
+  lokalen HTTP-CONNECT-Proxy (nur `127.0.0.1`, ephemerer Port, lebt nur für den Aufruf), der jeden
+  `CONNECT` über den gemeinsamen 1.1.1.1-Resolver auflöst und denselben SSRF-Filter
+  (`is_forbidden_ip`) anwendet; obscura läuft mit `--proxy` dagegen. Opt-in über `VINDEX_OBSCURA`
+  (Pfad zum Binary). Live gegen serienstream.to (hinter Cloudflare) verifiziert.
 - Bibliothek: `vindex library` (CLI) und `GET /api/library` listen die fertigen Downloads im
   konfigurierten Zielverzeichnis (nur Dateiname + Größe, keine Pfade). Gemeinsame Scan-Logik in
   `core::library::list`: nicht rekursiv, nur Medien-Endungen, **folgt keinen Symlinks** (nur
