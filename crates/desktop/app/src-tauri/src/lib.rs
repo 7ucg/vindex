@@ -221,13 +221,30 @@ fn list_downloads(state: State<'_, AppState>) -> Vec<downloads::JobView> {
     state.downloads.list()
 }
 
+/// Bekannte Medien-Endungen — nur solche Dateien zeigt/spielt/löscht die Bibliothek.
+fn is_media(name: &str) -> bool {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "mkv" | "mp4" | "ts" | "webm" | "m4v" | "mov" | "avi" | "m4a" | "mp3" | "aac"
+    )
+}
+
 #[tauri::command]
-fn library(state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
+fn library(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
     let dir = state.backend.settings().download_path;
+    let scope = app.asset_protocol_scope();
     core::library::list(&dir)
         .into_iter()
+        .filter(|e| is_media(&e.name))
         .map(|e| {
             let path = dir.join(&e.name);
+            // Genau diese Mediendatei fürs Asset-Protokoll freigeben (nicht den Ordner).
+            let _ = scope.allow_file(&path);
             LibraryEntryDto {
                 name: e.name,
                 size_bytes: e.size_bytes,
@@ -238,20 +255,32 @@ fn library(state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
         .collect()
 }
 
-/// Löscht eine Datei aus der Bibliothek. `name` ist ein reiner Dateiname — jeder
-/// Pfadtrenner oder `..` wird abgewiesen (kein Ausbruch aus dem Download-Ordner).
+/// Löscht eine Mediendatei aus der Bibliothek. Pfadtrenner, `..`, Symlinks und
+/// Nicht-Medien werden abgewiesen; der kanonisierte Pfad muss direkt im
+/// Download-Ordner liegen.
 #[tauri::command]
 fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." || name == "." {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("ungültiger Dateiname".into());
+    }
+    if !is_media(&name) {
+        return Err("keine Mediendatei".into());
     }
     let dir = state.backend.settings().download_path;
     let path = dir.join(&name);
-    // Doppelt absichern: der aufgelöste Pfad muss direkt im Download-Ordner liegen.
-    if path.parent() != Some(dir.as_path()) {
+
+    // Reguläre Datei verlangen (kein Symlink, kein Verzeichnis).
+    let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("keine reguläre Datei".into());
+    }
+    // Kanonisiert muss der Elternpfad exakt der Download-Ordner sein.
+    let canon = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    if canon.parent() != Some(canon_dir.as_path()) {
         return Err("Pfad außerhalb des Download-Ordners".into());
     }
-    std::fs::remove_file(&path).map_err(|e| e.to_string())
+    std::fs::remove_file(&canon).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -288,16 +317,8 @@ pub fn run() {
                     "Stream-Proxy-Start fehlgeschlagen: {e}"
                 ))
             })?;
-            // Lokale Wiedergabe: den konfigurierten Download-Ordner fürs
-            // Asset-Protokoll freigeben (ergänzt den statischen $DOWNLOAD-Scope).
-            let download_dir = backend.settings().download_path;
-            if let Err(e) = app
-                .asset_protocol_scope()
-                .allow_directory(&download_dir, true)
-            {
-                eprintln!("Asset-Scope für {download_dir:?} nicht erweiterbar: {e}");
-            }
-
+            // Lokale Wiedergabe wird pro Mediendatei freigegeben (siehe `library`),
+            // nicht pauschal für den ganzen Ordner.
             let downloads = Arc::new(downloads::Downloads::default());
             app.manage(AppState {
                 backend,
