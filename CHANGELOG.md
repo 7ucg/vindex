@@ -9,6 +9,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Nativer HLS-Pfad (`VINDEX_NATIVE_HLS`) entschlüsselt jetzt AES-128-CBC-Playlists selbst
+  (Schlüssel über denselben Client + SSRF-Prüfung, IV deklariert oder aus der
+  Mediensequenz, PKCS7). `SAMPLE-AES` und andere Methoden fallen weiter auf ffmpeg zurück.
 - Anti-Bot Stufe 2: TLS-Impersonate-Fallback über `wreq` (BoringSSL-JA3/JA4-
   Fingerprint). Opt-in über `VINDEX_IMPERSONATE` (Default **aus**). Sieht eine
   Portal-Antwort nach einer Cloudflare-Challenge aus (Status 403/429/503 oder

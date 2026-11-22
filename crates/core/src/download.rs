@@ -277,26 +277,32 @@ async fn deliver_hls(
 /// Obergrenze einer HLS-Media-Playlist (viele kurze Segment-Zeilen, aber begrenzt).
 const MAX_MEDIA_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
 
-/// True, wenn die Media-Playlist verschlüsselte Segmente nutzt. Jede `#EXT-X-KEY`-
-/// Zeile wird geparst; verschlüsselt, sobald eine `METHOD` ungleich `NONE` ist oder
-/// sich nicht lesen lässt (fail-closed — solche Streams überlässt vindex ffmpeg).
-fn hls_is_encrypted(text: &str) -> bool {
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(attrs) = line.strip_prefix("#EXT-X-KEY:") else {
-            continue;
-        };
-        match key_method(attrs) {
-            Some(m) if m.eq_ignore_ascii_case("NONE") => continue,
-            _ => return true,
-        }
-    }
-    false
+/// Geparste `#EXT-X-KEY`-Zeile: Verschlüsselungsmethode, optionale Schlüssel-URL
+/// und optionales deklariertes IV.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HlsKey {
+    /// Wert des `METHOD`-Attributs (z. B. `AES-128`, `SAMPLE-AES`, `NONE`).
+    method: String,
+    /// `URI`-Attribut: Fundort des Schlüssels (noch nicht absolut aufgelöst).
+    uri: Option<String>,
+    /// `IV`-Attribut als 16 Bytes, falls deklariert und wohlgeformt (`0x…`).
+    iv: Option<[u8; 16]>,
 }
 
-/// Liest den Wert des `METHOD`-Attributs aus einer `EXT-X-KEY`-Attributliste.
-/// Kommata innerhalb von Anführungszeichen (z. B. in `URI="…"`) trennen nicht.
-fn key_method(attrs: &str) -> Option<String> {
+/// Verschlüsselungszustand einer Media-Playlist.
+enum HlsEncryption {
+    /// Unverschlüsselt (kein `EXT-X-KEY` oder nur `METHOD=NONE`).
+    None,
+    /// Nativ unterstützt: AES-128-CBC mit genau einem Schlüssel.
+    Aes128(HlsKey),
+    /// `SAMPLE-AES`, Schlüsselrotation oder unbekannt/unparsebar → ffmpeg-Fallback.
+    Unsupported,
+}
+
+/// Zerlegt eine `EXT-X-KEY`-Attributliste in `(Schlüssel, Wert)`-Paare. Kommata
+/// innerhalb von Anführungszeichen (z. B. in `URI="…"`) trennen nicht; umschließende
+/// Anführungszeichen werden vom Wert entfernt.
+fn parse_attr_list(attrs: &str) -> Vec<(String, String)> {
     let mut in_quotes = false;
     let mut start = 0usize;
     let mut parts: Vec<&str> = Vec::new();
@@ -311,37 +317,208 @@ fn key_method(attrs: &str) -> Option<String> {
         }
     }
     parts.push(&attrs[start..]);
-    for p in parts {
-        if let Some((k, v)) = p.split_once('=') {
-            if k.trim().eq_ignore_ascii_case("METHOD") {
-                return Some(v.trim().trim_matches('"').to_string());
+    parts
+        .into_iter()
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().trim_matches('"').to_string()))
+        .collect()
+}
+
+/// Parst eine `EXT-X-KEY`-Attributliste zu [`HlsKey`]. Fehlt `METHOD`, bleibt es
+/// leer — der Aufrufer behandelt das fail-closed (kein nativer Pfad).
+fn parse_ext_x_key(attrs: &str) -> HlsKey {
+    let mut method = String::new();
+    let mut uri = None;
+    let mut iv = None;
+    for (k, v) in parse_attr_list(attrs) {
+        if k.eq_ignore_ascii_case("METHOD") {
+            method = v;
+        } else if k.eq_ignore_ascii_case("URI") {
+            uri = Some(v);
+        } else if k.eq_ignore_ascii_case("IV") {
+            iv = parse_hex_iv(&v);
+        }
+    }
+    HlsKey { method, uri, iv }
+}
+
+/// Parst einen `0x…`-IV (32 Hex-Ziffern) in 16 Bytes. `None` bei falscher Länge
+/// oder ungültigen Hex-Zeichen.
+fn parse_hex_iv(s: &str) -> Option<[u8; 16]> {
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Baut das Default-IV aus der Mediensequenz-Nummer: 16 Byte Big-Endian.
+fn iv_from_sequence(seq: u64) -> [u8; 16] {
+    let mut iv = [0u8; 16];
+    iv[8..].copy_from_slice(&seq.to_be_bytes());
+    iv
+}
+
+/// Klassifiziert die Verschlüsselung einer Media-Playlist. Nur ein einziger
+/// AES-128-Schlüssel wird nativ unterstützt; `SAMPLE-AES`, mehrere verschiedene
+/// Schlüssel (Rotation), unbekannte oder unparsebare `METHOD` → ffmpeg-Fallback
+/// (fail-closed).
+fn hls_encryption(text: &str) -> HlsEncryption {
+    let mut aes_key: Option<HlsKey> = None;
+    for line in text.lines() {
+        let Some(attrs) = line.trim().strip_prefix("#EXT-X-KEY:") else {
+            continue;
+        };
+        let key = parse_ext_x_key(attrs);
+        if key.method.eq_ignore_ascii_case("NONE") {
+            continue;
+        }
+        if !key.method.eq_ignore_ascii_case("AES-128") {
+            // SAMPLE-AES, unbekannt oder METHOD fehlt → nicht nativ.
+            return HlsEncryption::Unsupported;
+        }
+        match &aes_key {
+            // Mehrere verschiedene Schlüssel (Rotation) kann der native Pfad nicht.
+            Some(existing) if existing.uri != key.uri || existing.iv != key.iv => {
+                return HlsEncryption::Unsupported;
+            }
+            Some(_) => {}
+            None => aes_key = Some(key),
+        }
+    }
+    match aes_key {
+        Some(k) => HlsEncryption::Aes128(k),
+        None => HlsEncryption::None,
+    }
+}
+
+/// Liest `#EXT-X-MEDIA-SEQUENCE` (Sequenznummer des ersten Segments). Fehlt das
+/// Tag, gilt 0.
+fn parse_media_sequence(text: &str) -> u64 {
+    for line in text.lines() {
+        if let Some(v) = line.trim().strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+            if let Ok(n) = v.trim().parse::<u64>() {
+                return n;
             }
         }
     }
-    None
+    0
+}
+
+/// Löst eine (ggf. relative) URL absolut gegen *base_url* auf. Absolute
+/// http(s)-URLs bleiben unverändert.
+fn resolve_url(target: &str, base_url: &str) -> Option<String> {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        Some(target.to_string())
+    } else {
+        reqwest::Url::parse(base_url)
+            .ok()?
+            .join(target)
+            .ok()
+            .map(|u| u.to_string())
+    }
 }
 
 /// Segment-URLs einer Media-Playlist, absolut aufgelöst gegen *base_url*.
 fn media_segment_urls(text: &str, base_url: &str) -> Vec<String> {
-    let base = reqwest::Url::parse(base_url).ok();
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|seg| {
-            if seg.starts_with("http://") || seg.starts_with("https://") {
-                Some(seg.to_string())
-            } else {
-                base.as_ref()?.join(seg).ok().map(|u| u.to_string())
-            }
-        })
+        .filter_map(|seg| resolve_url(seg, base_url))
         .collect()
 }
 
+/// Entschlüsselungs-Kontext für AES-128-CBC-Segmente.
+struct Aes128Ctx {
+    /// 16-Byte-Schlüssel (über die `URI` geladen).
+    key: [u8; 16],
+    /// Deklariertes IV; fehlt es, dient die Segment-Sequenznummer als IV.
+    declared_iv: Option<[u8; 16]>,
+    /// Sequenznummer des ersten Segments (`#EXT-X-MEDIA-SEQUENCE`).
+    media_sequence: u64,
+}
+
+impl Aes128Ctx {
+    /// IV für das *index*-te Segment: entweder das deklarierte IV oder die
+    /// (inkrementierte) Mediensequenz-Nummer als 16-Byte-Big-Endian.
+    fn iv_for(&self, index: usize) -> [u8; 16] {
+        self.declared_iv
+            .unwrap_or_else(|| iv_from_sequence(self.media_sequence + index as u64))
+    }
+}
+
+/// Entschlüsselt einen AES-128-CBC-Puffer und entfernt das PKCS7-Padding am letzten
+/// Block. Fehler bei ungültiger Länge (kein Vielfaches von 16) oder kaputtem Padding.
+fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &[u8]) -> Result<Vec<u8>> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    type Decryptor = cbc::Decryptor<aes::Aes128>;
+    let dec = Decryptor::new_from_slices(key, iv)
+        .map_err(|_| Error::extract("HLS", "AES-128-Schlüssel/IV ungültig"))?;
+    dec.decrypt_padded_vec_mut::<Pkcs7>(data)
+        .map_err(|_| Error::extract("HLS", "AES-128-Entschlüsselung fehlgeschlagen"))
+}
+
+/// Lädt den 16-Byte-AES-128-Schlüssel und baut den Entschlüsselungs-Kontext. Die
+/// Schlüssel-URL wird absolut aufgelöst und derselben SSRF-Prüfung wie Segmente
+/// unterworfen (nur http/https, kein gesperrtes IP-Literal). Die Antwort ist auf
+/// wenige Bytes gedeckelt.
+async fn load_aes128_ctx(
+    client: &reqwest::Client,
+    key: &HlsKey,
+    text: &str,
+    media_url: &str,
+    referer: Option<&str>,
+) -> Result<Aes128Ctx> {
+    let uri = key
+        .uri
+        .as_deref()
+        .ok_or_else(|| Error::extract("HLS", "EXT-X-KEY ohne URI"))?;
+    let key_url = resolve_url(uri, media_url)
+        .ok_or_else(|| Error::extract("HLS", "Schlüssel-URL unauflösbar"))?;
+    if !is_http_url(&key_url) || crate::http::host_is_forbidden_ip_literal(&key_url) {
+        return Err(Error::extract("HLS", "Schlüssel-URL nicht erlaubt"));
+    }
+
+    // Schlüsselantwort streamen und hart deckeln — ein Schlüssel ist 16 Byte.
+    let resp = crate::http::get_retry(client, &key_url, referer)
+        .await?
+        .error_for_status()?;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if buf.len() + chunk.len() > 1024 {
+            return Err(Error::extract("HLS", "AES-128-Schlüssel zu groß"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    if buf.len() != 16 {
+        return Err(Error::extract(
+            "HLS",
+            "AES-128-Schlüssel ist nicht 16 Byte lang",
+        ));
+    }
+    let mut kb = [0u8; 16];
+    kb.copy_from_slice(&buf);
+    Ok(Aes128Ctx {
+        key: kb,
+        declared_iv: key.iv,
+        media_sequence: parse_media_sequence(text),
+    })
+}
+
 /// Lädt eine HLS-Media-Playlist segmentweise selbst, hängt die Segmente zu einer
-/// `.part.ts` zusammen und remuxt sie mit ffmpeg nach *out_path*.
+/// `.part.ts` zusammen und remuxt sie mit ffmpeg nach *out_path*. Unverschlüsselte
+/// und AES-128-CBC-Playlists werden nativ bedient (Letztere werden nach dem Laden
+/// entschlüsselt).
 ///
-/// `Ok(true)`: erfolgreich. `Ok(false)`: nicht zuständig (verschlüsselt oder keine
-/// Segmente) — der Aufrufer soll auf den normalen ffmpeg-Mux zurückfallen.
+/// `Ok(true)`: erfolgreich (inkl. AES-128). `Ok(false)`: nicht zuständig
+/// (`SAMPLE-AES`/unbekannte Verschlüsselung oder keine Segmente) — der Aufrufer
+/// soll auf den normalen ffmpeg-Mux zurückfallen.
 async fn download_hls_native(
     client: &reqwest::Client,
     media_url: &str,
@@ -359,9 +536,15 @@ async fn download_hls_native(
         }
         fetch_text_capped(req, MAX_MEDIA_PLAYLIST_BYTES).await?
     };
-    if hls_is_encrypted(&text) {
-        return Ok(false);
-    }
+    // Verschlüsselung klassifizieren: AES-128 nativ entschlüsseln, alles andere
+    // (SAMPLE-AES, Schlüsselrotation, unbekannt) ffmpeg überlassen.
+    let cipher = match hls_encryption(&text) {
+        HlsEncryption::None => None,
+        HlsEncryption::Unsupported => return Ok(false),
+        HlsEncryption::Aes128(key) => {
+            Some(load_aes128_ctx(client, &key, &text, media_url, referer).await?)
+        }
+    };
     let segments = media_segment_urls(&text, media_url);
     if segments.is_empty() {
         return Ok(false);
@@ -372,7 +555,8 @@ async fn download_hls_native(
     }
     let part = out_path.with_extension("part.ts");
 
-    let result = fetch_segments_to(client, &segments, referer, &part, cancel).await;
+    let result =
+        fetch_segments_to(client, &segments, referer, cipher.as_ref(), &part, cancel).await;
     if let Err(e) = result {
         tokio::fs::remove_file(&part).await.ok();
         return Err(e);
@@ -394,12 +578,18 @@ const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 /// Holt alle Segmente nacheinander (mit Retry, streamend) und schreibt sie
 /// fortlaufend in *part*. Jedes Segment wird vor dem Abruf validiert (nur
-/// http/https, keine gesperrten IP-Literale), muss mit dem MPEG-TS-Sync-Byte
-/// `0x47` beginnen und unterliegt Pro-Segment- und Gesamt-Größengrenzen.
+/// http/https, keine gesperrten IP-Literale), muss nach einer etwaigen AES-128-
+/// Entschlüsselung mit dem MPEG-TS-Sync-Byte `0x47` beginnen und unterliegt
+/// Pro-Segment- und Gesamt-Größengrenzen.
+///
+/// Ist *cipher* gesetzt, wird jedes (verschlüsselte) Segment vollständig gepuffert,
+/// mit AES-128-CBC entschlüsselt (segmentweises IV) und erst der Klartext geprüft
+/// und geschrieben. Ohne *cipher* läuft der bisherige streamende Pfad.
 async fn fetch_segments_to(
     client: &reqwest::Client,
     segments: &[String],
     referer: Option<&str>,
+    cipher: Option<&Aes128Ctx>,
     part: &Path,
     cancel: &Option<CancellationToken>,
 ) -> Result<()> {
@@ -412,7 +602,7 @@ async fn fetch_segments_to(
     let mut file = tokio::fs::File::create(part).await?;
     let mut total: u64 = 0;
 
-    for seg in segments {
+    for (index, seg) in segments.iter().enumerate() {
         if is_cancelled(cancel) {
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
@@ -426,28 +616,54 @@ async fn fetch_segments_to(
             .error_for_status()?;
         let mut stream = resp.bytes_stream();
         let mut seg_bytes: u64 = 0;
-        let mut first = true;
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if first {
-                if chunk.first() != Some(&0x47) {
+        if let Some(ctx) = cipher {
+            // Verschlüsseltes Segment vollständig puffern — der Sync-Byte-Check und
+            // das Schreiben greifen erst auf dem entschlüsselten Klartext.
+            let mut enc: Vec<u8> = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                seg_bytes += chunk.len() as u64;
+                total += chunk.len() as u64;
+                if seg_bytes > MAX_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
                     return Err(Error::extract(
                         "HLS",
-                        "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
+                        "Segment-Download überschreitet Größenlimit",
                     ));
                 }
-                first = false;
+                enc.extend_from_slice(&chunk);
             }
-            seg_bytes += chunk.len() as u64;
-            total += chunk.len() as u64;
-            if seg_bytes > MAX_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
+            let plain = aes128_cbc_decrypt(&ctx.key, &ctx.iv_for(index), &enc)?;
+            if plain.first() != Some(&0x47) {
                 return Err(Error::extract(
                     "HLS",
-                    "Segment-Download überschreitet Größenlimit",
+                    "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
                 ));
             }
-            file.write_all(&chunk).await?;
+            file.write_all(&plain).await?;
+        } else {
+            let mut first = true;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                if first {
+                    if chunk.first() != Some(&0x47) {
+                        return Err(Error::extract(
+                            "HLS",
+                            "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
+                        ));
+                    }
+                    first = false;
+                }
+                seg_bytes += chunk.len() as u64;
+                total += chunk.len() as u64;
+                if seg_bytes > MAX_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
+                    return Err(Error::extract(
+                        "HLS",
+                        "Segment-Download überschreitet Größenlimit",
+                    ));
+                }
+                file.write_all(&chunk).await?;
+            }
         }
     }
     file.flush().await?;
@@ -647,20 +863,121 @@ mod tests {
         );
     }
 
+    /// Klassifiziert eine Playlist und bricht ab, wenn das Ergebnis kein AES-128 ist.
+    fn aes128_key_of(text: &str) -> HlsKey {
+        match hls_encryption(text) {
+            HlsEncryption::Aes128(k) => k,
+            _ => panic!("erwartete AES-128-Klassifikation"),
+        }
+    }
+
     #[test]
-    fn detects_encrypted_playlist() {
-        let enc = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k\"\nseg0.ts\n";
-        assert!(hls_is_encrypted(enc));
-        assert!(!hls_is_encrypted(
-            "#EXTM3U\nseg0.ts\n#EXT-X-KEY:METHOD=NONE\n"
+    fn klassifiziert_verschluesselung() {
+        // Unverschlüsselt: kein KEY bzw. nur METHOD=NONE.
+        assert!(matches!(
+            hls_encryption("#EXTM3U\nseg0.ts\n"),
+            HlsEncryption::None
         ));
-        assert!(!hls_is_encrypted("#EXTM3U\nseg0.ts\n"));
+        assert!(matches!(
+            hls_encryption("#EXTM3U\nseg0.ts\n#EXT-X-KEY:METHOD=NONE\n"),
+            HlsEncryption::None
+        ));
+        // AES-128 → nativ.
+        assert!(matches!(
+            hls_encryption("#EXT-X-KEY:METHOD=AES-128,URI=\"k\"\nseg0.ts\n"),
+            HlsEncryption::Aes128(_)
+        ));
         // Bypass-Versuch: METHOD=NONE nur als Substring in einer Quoted-URI.
-        assert!(hls_is_encrypted(
-            "#EXT-X-KEY:METHOD=AES-128,URI=\"https://x/k?a=METHOD=NONE\"\nseg0.ts\n"
+        assert!(matches!(
+            hls_encryption(
+                "#EXT-X-KEY:METHOD=AES-128,URI=\"https://x/k?a=METHOD=NONE\"\nseg0.ts\n"
+            ),
+            HlsEncryption::Aes128(_)
         ));
-        // Unparsebare KEY-Zeile ohne METHOD → fail-closed (verschlüsselt).
-        assert!(hls_is_encrypted("#EXT-X-KEY:URI=\"k\"\nseg0.ts\n"));
+        // Unparsebare KEY-Zeile ohne METHOD → fail-closed (nicht nativ).
+        assert!(matches!(
+            hls_encryption("#EXT-X-KEY:URI=\"k\"\nseg0.ts\n"),
+            HlsEncryption::Unsupported
+        ));
+        // Mehrere verschiedene Schlüssel (Rotation) → nicht nativ.
+        assert!(matches!(
+            hls_encryption(
+                "#EXT-X-KEY:METHOD=AES-128,URI=\"k1\"\nseg0.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"k2\"\nseg1.ts\n"
+            ),
+            HlsEncryption::Unsupported
+        ));
+    }
+
+    #[test]
+    fn parst_ext_x_key_mit_iv() {
+        let key = aes128_key_of(
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"https://cdn/key.bin\",IV=0x000102030405060708090A0B0C0D0E0F\nseg0.ts\n",
+        );
+        assert_eq!(key.method, "AES-128");
+        assert_eq!(key.uri.as_deref(), Some("https://cdn/key.bin"));
+        assert_eq!(
+            key.iv,
+            Some([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        );
+    }
+
+    #[test]
+    fn parst_ext_x_key_ohne_iv() {
+        let key = aes128_key_of("#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\nseg0.ts\n");
+        assert_eq!(key.method, "AES-128");
+        assert_eq!(key.uri.as_deref(), Some("key.bin"));
+        assert_eq!(key.iv, None);
+    }
+
+    #[test]
+    fn sample_aes_bleibt_ffmpeg() {
+        assert!(matches!(
+            hls_encryption("#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"k\"\nseg0.ts\n"),
+            HlsEncryption::Unsupported
+        ));
+    }
+
+    #[test]
+    fn iv_aus_sequenznummer() {
+        assert_eq!(iv_from_sequence(0), [0u8; 16]);
+        // Sequenz 1 → letzte 8 Byte Big-Endian = …00 01.
+        let mut erwartet = [0u8; 16];
+        erwartet[15] = 1;
+        assert_eq!(iv_from_sequence(1), erwartet);
+        // Höherwertige Bytes landen im Big-Endian-Teil ab Byte 8.
+        let iv = iv_from_sequence(0x0102_0304_0506_0708);
+        assert_eq!(&iv[8..], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&iv[..8], &[0u8; 8]);
+    }
+
+    #[test]
+    fn media_sequence_default_und_wert() {
+        assert_eq!(parse_media_sequence("#EXTM3U\nseg0.ts\n"), 0);
+        assert_eq!(
+            parse_media_sequence("#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:42\nseg0.ts\n"),
+            42
+        );
+    }
+
+    #[test]
+    fn aes128_cbc_roundtrip() {
+        use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        type Encryptor = cbc::Encryptor<aes::Aes128>;
+
+        let key = [0x11u8; 16];
+        let iv = [0x22u8; 16];
+        let klartext = b"Genau 16 Byte!!!"; // exakt ein Block
+
+        let enc = Encryptor::new_from_slices(&key, &iv).unwrap();
+        let geheim = enc.encrypt_padded_vec_mut::<Pkcs7>(klartext);
+        // PKCS7 fügt bei voller Blockgröße einen weiteren Padding-Block an.
+        assert_eq!(geheim.len(), 32);
+
+        let zurueck = aes128_cbc_decrypt(&key, &iv, &geheim).unwrap();
+        assert_eq!(zurueck, klartext);
+
+        // Falscher Schlüssel → Padding stimmt (fast sicher) nicht → Fehler.
+        assert!(aes128_cbc_decrypt(&[0x33u8; 16], &iv, &geheim).is_err());
     }
 
     #[test]
