@@ -24,6 +24,10 @@ use vindex_core as core;
 /// nicht unbegrenzt füllen kann.
 const MAX_INFLIGHT_JOBS: usize = 100;
 
+/// Obergrenze der gesamten Job-Liste (inkl. fertiger). Darüber werden die
+/// abgeschlossenen Einträge verworfen, damit die Liste nicht unbegrenzt wächst.
+const MAX_JOBS_RETAINED: usize = 500;
+
 /// Status eines Queue-Eintrags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
@@ -244,6 +248,11 @@ async fn download(
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({ "error": "Queue voll, bitte später erneut versuchen" })),
             );
+        }
+        // Fertige Jobs beschneiden, sobald die Liste zu lang wird. Aktive Jobs
+        // sind durch MAX_INFLIGHT_JOBS begrenzt, bleiben also erhalten.
+        if jobs.len() >= MAX_JOBS_RETAINED {
+            jobs.retain(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running));
         }
         jobs.push(Job {
             id,

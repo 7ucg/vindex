@@ -33,7 +33,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Filemoon (Legacy-Pfad). Streamtape/Luluvdo/LoadX als offene Aufgaben.
 - `core::extract` — HLS-Master-Parsing (m3u8-rs + Regex-Fallback), Qualitäts-Tiers.
 - `core::download` — ffmpeg-Mux (Reconnect, Retry, Cleanup), Qualitäts-Sweep und
-  Fallback-Kette Sprache → Hoster → Qualität, Abbruch über CancellationToken.
+  Fallback-Kette Sprache → Hoster → Qualität, Abbruch über CancellationToken. Einzel-MP4-
+  Streams werden per ffprobe auf ihre Höhe geprüft und unter der Mindestqualität
+  übersprungen.
 - `core::ratelimit` — Throttle pro Hoster (governor) und Backoff mit Jitter (backon).
 - `core::config` — Einstellungen aus `VINDEX_*` und `.env`.
 - `core::naming` — Datei-Templates (Jellyfin-Layout) und Episoden-Nummerierung.
@@ -61,10 +63,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - API-Key-Auth für den Daemon: `/api/*` verlangt bei gesetztem `VINDEX_API_KEYS` den
   Header `X-API-Key` bzw. `Authorization: Bearer` (konstanter Vergleich, `401` bei
   Fehler). Ohne Keys lässt sich nur auf localhost binden; ein öffentlicher Bind ohne
-  Auth bricht den Start ab. Dazu ein Queue-Limit gegen Flutung und knappe
-  Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
-- Noch offen: Revalidierung einzelner Redirect-Hops; persistenter Key-Store mit Scopes,
-  Login-Throttle und SSO (bisher nur statische Keys aus der Umgebung).
+  Auth bricht den Start ab. Dazu ein Queue-Limit gegen Flutung, eine Obergrenze der
+  gesamten Job-Liste und knappe Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
+- Redirect-Policy für den HTTP-Client: jeder Hop muss `http`/`https` sein und darf nicht
+  auf private, loopback, link-local oder CGNAT-IP-Ziele zeigen (inkl. IPv4-mapped IPv6),
+  höchstens zehn Hops. Schließt SSRF über eine Umleitung von einem erlaubten Portal.
+- Noch offen: persistenter Key-Store mit Scopes, Login-Throttle und SSO (bisher nur
+  statische Keys aus der Umgebung); DNS-Rebinding auf eine private IP (bräuchte einen
+  eigenen Resolver).
 
 [Unreleased]: https://github.com/baron/vindex/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/baron/vindex/releases/tag/v0.1.0

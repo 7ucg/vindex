@@ -215,7 +215,22 @@ async fn try_download_resolved(
         }
         Ok(false)
     } else {
-        // Direkte Datei (MP4). Best effort (ffprobe-Gate: siehe TODO).
+        // Einzel-MP4: Höhe per ffprobe prüfen und unterhalb der Mindestqualität
+        // überspringen, damit nicht versehentlich 360p statt des Minimums landet.
+        // Ohne ffprobe (None) wird best effort gemuxt.
+        if is_cancelled(cancel) {
+            return Err(Error::Ffmpeg("abgebrochen".into()));
+        }
+        if let Some(h) = ffprobe_height(&resolved.url, resolved.referer.as_deref()).await {
+            if Quality::from_height(h) < prefs.min_quality {
+                tracing::debug!(
+                    "MP4 {}p unter Mindestqualität {:?}, überspringe",
+                    h,
+                    prefs.min_quality
+                );
+                return Ok(false);
+            }
+        }
         mux(resolved, out_path, cancel).await.map(|_| true)
     }
 }
@@ -234,7 +249,7 @@ pub async fn mux(
 
     // Nur http/https als ffmpeg-Eingabe zulassen. Ein manipulierter Hoster darf
     // ffmpeg nicht auf file:, pipe: oder andere Protokolle lenken.
-    if !(stream.url.starts_with("http://") || stream.url.starts_with("https://")) {
+    if !is_http_url(&stream.url) {
         return Err(Error::Ffmpeg(format!(
             "nicht unterstütztes Stream-Schema (nur http/https): {}",
             stream.url
@@ -251,8 +266,10 @@ pub async fn mux(
         }
 
         let mut cmd = Command::new("ffmpeg");
+        cmd.kill_on_drop(true);
         if let Some(referer) = &stream.referer {
-            cmd.arg("-headers").arg(format!("Referer: {referer}\r\n"));
+            cmd.arg("-headers")
+                .arg(format!("Referer: {}\r\n", sanitize_header_value(referer)));
         }
         // Eingabe ist oben auf http/https begrenzt; die Protokoll-Allowlist hält
         // ffmpeg beim Nachladen von HLS-Segmenten auf denselben Protokollen.
@@ -298,13 +315,35 @@ pub async fn mux(
     )))
 }
 
+/// True für `http(s)`-URLs. Alles andere darf nicht an ffmpeg/ffprobe gehen.
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// Entfernt CR/LF, damit ein Referer keine zusätzlichen ffmpeg-Header einschleust.
+fn sanitize_header_value(v: &str) -> String {
+    v.chars().filter(|c| *c != '\r' && *c != '\n').collect()
+}
+
 /// Ermittelt die Video-Höhe eines Streams via ffprobe (nur Header). `None`, wenn
-/// ffprobe fehlt oder nichts gefunden wird.
+/// ffprobe fehlt, das Schema nicht http/https ist, die Sonde abläuft oder nichts
+/// gefunden wird. Die Eingabe ist auf http/https + Protokoll-Allowlist begrenzt
+/// und der Prozess mit Timeout gedeckelt (wird bei Drop gekillt).
 pub async fn ffprobe_height(url: &str, referer: Option<&str>) -> Option<u32> {
+    if !is_http_url(url) {
+        return None;
+    }
     let mut cmd = Command::new("ffprobe");
-    cmd.args(["-v", "error"]);
+    cmd.kill_on_drop(true);
+    cmd.args([
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "https,tls,tcp,crypto,http",
+    ]);
     if let Some(r) = referer {
-        cmd.arg("-headers").arg(format!("Referer: {r}\r\n"));
+        cmd.arg("-headers")
+            .arg(format!("Referer: {}\r\n", sanitize_header_value(r)));
     }
     cmd.args([
         "-select_streams",
@@ -316,7 +355,10 @@ pub async fn ffprobe_height(url: &str, referer: Option<&str>) -> Option<u32> {
         "-i",
         url,
     ]);
-    let out = cmd.output().await.ok()?;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     text.lines().find_map(|l| l.trim().parse::<u32>().ok())
 }

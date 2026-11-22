@@ -6,10 +6,6 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Als Nächstes
 
-- **Redirect-Hops revalidieren.** `validate_source_url` prüft nur die Einstiegs-URL;
-  der reqwest-Client folgt Redirects danach ungeprüft. Eine `redirect::Policy::custom`
-  soll jeden Hop gegen Schema (https), Host und private/loopback/link-local IP-Ranges
-  prüfen, bevor er gefolgt wird.
 - **Fehlende Hoster-Resolver.** Streamtape, Luluvdo und LoadX haben noch keinen
   Extraktor. Keine Vorlage zum Abschreiben; die Algorithmen müssen live ermittelt
   werden. Baumuster: Streamtape wie Doodstream (Token aus HTML + Referer), Luluvdo wie
@@ -17,6 +13,11 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Netzwerk & Anti-Bot
 
+- **DNS-Rebinding.** Die Redirect-Policy sperrt IP-Literale in privaten Ranges, aber
+  kein Hostname, der erst per DNS auf eine private IP zeigt. Dafür bräuchte es einen
+  eigenen Resolver/Connector, der die aufgelöste IP vor dem Connect prüft.
+- **Transient-Retry.** Der Referenz-Client wiederholt bei 429/5xx mit Backoff; vindex
+  hat `with_backoff`, nutzt es für die Scrape-/Resolve-Fetches aber noch nicht.
 - **TLS-Impersonate (Stufe 2).** Bei Cloudflare-Verdacht den Abruf über `wreq` mit
   Chrome-Fingerprint wiederholen. Erkennung steht schon in `core::http`.
 - **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht
