@@ -1,9 +1,12 @@
 //! HTTP-API / Daemon für vindex (axum).
 //!
 //! Funktionsfähige Teilmenge der Referenz-API (`docs/http-api.md`): Suche,
-//! Provider-Metadaten, Download-Queue. Auth (API-Keys/SSO), Library, Auto-Sync,
-//! OpenAPI (`utoipa`) und ein `tower_governor`-Rate-Limit folgen gemäß
+//! Provider-Metadaten, Download-Queue. Die `/api/*`-Routen liegen hinter einer
+//! API-Key-Prüfung (siehe [`auth`]). SSO, Library, Auto-Sync, OpenAPI
+//! (`utoipa`) und ein `tower_governor`-Rate-Limit folgen gemäß
 //! `ARCHITECTURE.md` §9 (Schritt 11).
+
+mod auth;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,6 +19,10 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
 use vindex_core as core;
+
+/// Obergrenze gleichzeitig wartender/laufender Jobs, damit ein Client die Queue
+/// nicht unbegrenzt füllen kann.
+const MAX_INFLIGHT_JOBS: usize = 100;
 
 /// Status eines Queue-Eintrags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,35 +59,68 @@ pub struct AppState {
     client: reqwest::Client,
     jobs: Arc<Mutex<Vec<Job>>>,
     next_id: Arc<AtomicU64>,
+    auth: auth::AuthConfig,
 }
 
 impl AppState {
     fn new() -> Self {
+        let settings = core::config::Settings::load();
         AppState {
             client: core::http::browser_client().expect("http client"),
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
+            auth: auth::AuthConfig::from_settings(&settings),
         }
     }
 }
 
-/// Baut den Router.
+/// Baut den Router mit frisch geladenem Zustand.
 pub fn router() -> Router {
-    let state = AppState::new();
-    Router::new()
-        .route("/health", get(health))
+    router_with(AppState::new())
+}
+
+/// Baut den Router um einen gegebenen Zustand. `/health` bleibt offen, die
+/// `/api/*`-Routen liegen hinter der API-Key-Middleware.
+fn router_with(state: AppState) -> Router {
+    let api = Router::new()
         .route("/api/search", get(search))
         .route("/api/providers", get(providers))
         .route("/api/download", post(download))
         .route("/api/queue", get(queue))
+        .layer(axum::middleware::from_fn_with_state(
+            state.auth.clone(),
+            auth::require_api_key,
+        ));
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(api)
         .with_state(state)
 }
 
 /// Startet den Daemon auf *addr* (z. B. `127.0.0.1:8080`).
+///
+/// Ohne konfigurierte API-Keys wird nur ein localhost-Bind zugelassen; ein
+/// öffentlicher Bind ohne Auth bricht mit Fehler ab.
 pub async fn serve(addr: &str) -> anyhow::Result<()> {
+    let state = AppState::new();
+    let open = state.auth.is_open();
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("vindex API lauscht auf http://{addr}");
-    axum::serve(listener, router()).await?;
+    let local = listener.local_addr()?;
+
+    if open && !local.ip().is_loopback() {
+        anyhow::bail!(
+            "Daemon würde öffentlich auf {local} lauschen, aber VINDEX_API_KEYS ist \
+             nicht gesetzt. Entweder an 127.0.0.1 binden oder API-Keys konfigurieren."
+        );
+    }
+    if open {
+        tracing::warn!("Kein API-Key gesetzt — /api ist ungeschützt (nur localhost).");
+    }
+
+    tracing::info!("vindex API lauscht auf http://{local}");
+    axum::serve(listener, router_with(state)).await?;
     Ok(())
 }
 
@@ -195,6 +235,16 @@ async fn download(
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     {
         let mut jobs = state.jobs.lock().await;
+        let inflight = jobs
+            .iter()
+            .filter(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running))
+            .count();
+        if inflight >= MAX_INFLIGHT_JOBS {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "Queue voll, bitte später erneut versuchen" })),
+            );
+        }
         jobs.push(Job {
             id,
             url: req.url.clone(),
@@ -227,7 +277,10 @@ async fn download(
                 )
                 .await
             }
-            Err(e) => set_status(&worker_state, id, JobStatus::Failed, &e.to_string()).await,
+            Err(e) => {
+                tracing::warn!("Job {id} fehlgeschlagen: {e}");
+                set_status(&worker_state, id, JobStatus::Failed, &e.to_string()).await
+            }
         }
     });
 
@@ -256,11 +309,25 @@ async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
                 "id": j.id,
                 "url": j.url,
                 "status": j.status.as_str(),
-                "detail": j.detail,
+                "detail": public_detail(j),
             })
         })
         .collect();
     Json(json!({ "items": items }))
+}
+
+/// Nach außen sichtbares Detail eines Jobs. Für fertige Downloads nur der
+/// Dateiname statt des vollen lokalen Pfads; fehlgeschlagene Jobs geben eine
+/// knappe Meldung ohne internen Fehlertext/Pfad zurück.
+fn public_detail(job: &Job) -> String {
+    match job.status {
+        JobStatus::Completed => std::path::Path::new(&job.detail)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        JobStatus::Failed => "Download fehlgeschlagen".to_string(),
+        JobStatus::Queued | JobStatus::Running => String::new(),
+    }
 }
 
 /// Leitet einen Dateinamen aus einer URL ab:

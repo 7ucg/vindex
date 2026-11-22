@@ -24,6 +24,9 @@ pub struct Settings {
     pub aniskip: bool,
     pub keep_watching: bool,
     pub naming_template: String,
+    /// API-Keys für den Daemon (`VINDEX_API_KEYS`, komma-getrennt). Leer = keine
+    /// Auth; der Daemon startet dann nur auf localhost.
+    pub api_keys: Vec<String>,
 }
 
 impl Default for Settings {
@@ -41,6 +44,7 @@ impl Default for Settings {
             aniskip: false,
             keep_watching: false,
             naming_template: crate::naming::DEFAULT_TEMPLATE.to_string(),
+            api_keys: Vec::new(),
         }
     }
 }
@@ -88,6 +92,13 @@ impl Settings {
         s.keep_watching = env_bool("VINDEX_KEEP_WATCHING", s.keep_watching);
         if let Some(v) = env("VINDEX_NAMING_TEMPLATE") {
             s.naming_template = v;
+        }
+        if let Some(v) = env("VINDEX_API_KEYS") {
+            s.api_keys = v
+                .split(',')
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+                .collect();
         }
         s
     }

@@ -58,8 +58,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Protokoll-Allowlist, damit ein manipulierter Hoster ffmpeg nicht auf `file:` o. Ä.
   lenkt. Die HLS-Playlist wird über den konfigurierten Client (mit Timeout) und mit
   Größenlimit geladen.
-- Noch offen: Revalidierung einzelner Redirect-Hops; der Daemon bindet per Default an
-  localhost und hat noch keine Auth.
+- API-Key-Auth für den Daemon: `/api/*` verlangt bei gesetztem `VINDEX_API_KEYS` den
+  Header `X-API-Key` bzw. `Authorization: Bearer` (konstanter Vergleich, `401` bei
+  Fehler). Ohne Keys lässt sich nur auf localhost binden; ein öffentlicher Bind ohne
+  Auth bricht den Start ab. Dazu ein Queue-Limit gegen Flutung und knappe
+  Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
+- Noch offen: Revalidierung einzelner Redirect-Hops; persistenter Key-Store mit Scopes,
+  Login-Throttle und SSO (bisher nur statische Keys aus der Umgebung).
 
 [Unreleased]: https://github.com/baron/vindex/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/baron/vindex/releases/tag/v0.1.0

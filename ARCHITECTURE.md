@@ -207,7 +207,8 @@ etwaige Captcha-Funktionen sind AGB-kritisch und standardmäßig deaktiviert.
 Umgesetzt: Workspace, Modell, HTTP + Cloudflare-Erkennung, SerienStream- und
 Filmo-Scraper, sechs Hoster-Resolver, HLS-Parsing + Qualitäts-Sweep, ffmpeg-Download
 mit Fallback-Kette, Rate-Limiting, Config, AniSkip-Abruf, CLI (census/search/download/
-menu/serve) und ein HTTP-API-Daemon (Suche/Provider/Download/Queue).
+menu/serve) und ein HTTP-API-Daemon (Suche/Provider/Download/Queue) mit
+API-Key-Auth, Queue-Limit und localhost-Bind-Schutz.
 
 Offen (u. a.):
 
@@ -217,5 +218,6 @@ Offen (u. a.):
 4. Watch via mpv/IINA, Syncplay, Anime4K.
 5. Nativer HLS-Downloader (ffmpeg-frei).
 … (10.) weitere API-Flächen: Library, Auto-Sync, OpenAPI, Rate-Limit-Layer.
-(11.) API-Auth (API-Keys/SSO) und erweiterte Endpunkte.
+(11.) Erweiterte API-Auth: persistenter Key-Store mit Scopes, Login-Throttle, SSO
+(statische Keys aus der Umgebung sind vorhanden); weitere Endpunkte.
 (12.) Desktop-Fenster-Frontend (z. B. tauri/egui) auf der `core`-Facade.

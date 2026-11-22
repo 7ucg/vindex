@@ -83,6 +83,16 @@ curl http://127.0.0.1:8080/api/queue
 Jede Quell-URL wird gegen eine Host-Allowlist geprüft (nur die unterstützten
 Portale); alles andere lehnt die API mit `400` ab.
 
+Sind über `VINDEX_API_KEYS` (komma-getrennt) Keys gesetzt, verlangen alle
+`/api/*`-Routen den Header `X-API-Key: <key>` (oder `Authorization: Bearer <key>`);
+ohne gültigen Key antwortet die API mit `401`. Ohne gesetzte Keys startet der Daemon
+nur auf `127.0.0.1` — ein öffentlicher Bind ohne Auth wird abgelehnt.
+
+```bash
+VINDEX_API_KEYS=geheim123 vindex serve --addr 0.0.0.0:8080
+curl -H "X-API-Key: geheim123" "http://127.0.0.1:8080/api/search?keyword=naruto"
+```
+
 ## Build
 
 ```bash
