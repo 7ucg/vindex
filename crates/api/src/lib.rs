@@ -505,6 +505,29 @@ struct DownloadReq {
     quality: Option<String>,
 }
 
+/// Reiht einen Job ein, wenn der Queue-Cap es zulässt. `false` (→ `429`), wenn die
+/// Zahl aktiver Jobs (`Queued`/`Running`) den Cap erreicht. Fertige Jobs werden
+/// beschnitten, sobald die Liste zu lang wird; aktive bleiben erhalten. Rein testbar.
+fn try_admit_job(jobs: &mut Vec<Job>, id: u64, url: String) -> bool {
+    let inflight = jobs
+        .iter()
+        .filter(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running))
+        .count();
+    if inflight >= MAX_INFLIGHT_JOBS {
+        return false;
+    }
+    if jobs.len() >= MAX_JOBS_RETAINED {
+        jobs.retain(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running));
+    }
+    jobs.push(Job {
+        id,
+        url,
+        status: JobStatus::Queued,
+        detail: String::new(),
+    });
+    true
+}
+
 /// Reiht einen Download in die Queue ein und startet ihn im Hintergrund.
 #[utoipa::path(
     post,
@@ -555,27 +578,12 @@ async fn download(
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     {
         let mut jobs = state.jobs.lock().await;
-        let inflight = jobs
-            .iter()
-            .filter(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running))
-            .count();
-        if inflight >= MAX_INFLIGHT_JOBS {
+        if !try_admit_job(&mut jobs, id, req.url.clone()) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({ "error": "Queue voll, bitte später erneut versuchen" })),
             );
         }
-        // Fertige Jobs beschneiden, sobald die Liste zu lang wird. Aktive Jobs
-        // sind durch MAX_INFLIGHT_JOBS begrenzt, bleiben also erhalten.
-        if jobs.len() >= MAX_JOBS_RETAINED {
-            jobs.retain(|j| matches!(j.status, JobStatus::Queued | JobStatus::Running));
-        }
-        jobs.push(Job {
-            id,
-            url: req.url.clone(),
-            status: JobStatus::Queued,
-            detail: String::new(),
-        });
     }
 
     // Hintergrund-Worker.
@@ -1053,6 +1061,65 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
+
+    fn job(id: u64, status: JobStatus) -> Job {
+        Job {
+            id,
+            url: "https://aniworld.to/anime/stream/x/staffel-1/episode-1".into(),
+            status,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn queue_cap_lehnt_bei_vollen_aktiven_jobs_ab() {
+        let mut jobs: Vec<Job> = (0..MAX_INFLIGHT_JOBS as u64)
+            .map(|i| job(i, JobStatus::Queued))
+            .collect();
+        // Voll → der nächste Job wird abgelehnt (→ 429).
+        assert!(!try_admit_job(
+            &mut jobs,
+            999,
+            "https://aniworld.to/x".into()
+        ));
+        assert_eq!(jobs.len(), MAX_INFLIGHT_JOBS);
+        // Wird einer fertig, ist wieder Platz.
+        jobs[0].status = JobStatus::Completed;
+        assert!(try_admit_job(
+            &mut jobs,
+            1000,
+            "https://aniworld.to/y".into()
+        ));
+        assert!(jobs.iter().any(|j| j.id == 1000));
+    }
+
+    #[test]
+    fn laufende_jobs_zaehlen_zum_cap() {
+        let mut jobs: Vec<Job> = (0..MAX_INFLIGHT_JOBS as u64)
+            .map(|i| job(i, JobStatus::Running))
+            .collect();
+        assert!(!try_admit_job(
+            &mut jobs,
+            999,
+            "https://aniworld.to/x".into()
+        ));
+    }
+
+    #[test]
+    fn fertige_jobs_werden_beschnitten() {
+        // Volle Liste aus fertigen Jobs (inflight = 0): Admission beschneidet sie.
+        let mut jobs: Vec<Job> = (0..MAX_JOBS_RETAINED as u64)
+            .map(|i| job(i, JobStatus::Completed))
+            .collect();
+        assert!(try_admit_job(
+            &mut jobs,
+            10_000,
+            "https://aniworld.to/z".into()
+        ));
+        // Nur der neue (aktive) Job bleibt übrig.
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, 10_000);
+    }
 
     fn state(keys: &[&str]) -> AppState {
         state_mit_limit(keys, DEFAULT_RATE_LIMIT)

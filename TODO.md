@@ -62,7 +62,8 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 ## Tests & Produkt-Entscheidungen
 
 - **Mehr Scraper-Fixtures.** aniworld-Parser (`parse_episodes`) und weitere Hoster gegen
-  synthetische Fixtures absichern; Daemon-Integrationstests für Queue-Cap (`429`) ergänzen.
+  synthetische Fixtures absichern. (Queue-Cap: Admission-Logik ist als reine Funktion
+  `try_admit_job` ausgelagert und mit Unit-Tests für den `429`-Fall abgedeckt.)
 - **Offene Entscheidungen** (Default: so lassen): Suche ist reiner Substring (Punkt zählt);
   `--quality` deckelt Single-MP4-Hoster nicht nach oben; `naming::clean_title` schreibt klein.
 
