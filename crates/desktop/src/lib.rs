@@ -145,9 +145,16 @@ impl Backend {
                     })
                     .collect())
             }
-            "filmo" => Err(core::error::Error::Parse(
-                "filmo ist eine JS-Seite; Katalog-Anbindung folgt".into(),
-            )),
+            "filmo" => {
+                let entries = site::filmo::fetch_catalog(&self.client, 1).await?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{}/movies/{}", site::filmo::BASE, e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"
             ))),

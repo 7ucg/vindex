@@ -12,10 +12,50 @@ use scraper::{Html, Selector};
 use serde_json::json;
 
 use crate::error::{Error, Result};
-use crate::model::{Hoster, Language};
+use crate::model::{CatalogEntry, Hoster, Language};
 
 /// Basis-URL von Filmo.
 pub const BASE: &str = "https://filmo.to";
+
+/// Lädt eine Katalogseite (`/movies?page=N`, serverseitig gerendert, 42 Filme/Seite).
+pub async fn fetch_catalog(client: &reqwest::Client, page: u32) -> Result<Vec<CatalogEntry>> {
+    let url = format!("{BASE}/movies?page={page}");
+    let body = super::fetch_text(client, &url).await?;
+    Ok(parse_catalog(&body))
+}
+
+/// Reine HTML→Katalog-Logik: Filmkarten `a.movie-poster-grid-card` mit
+/// `/movies/<slug>`-Link und `.movie-poster-grid-card__title`-Text.
+fn parse_catalog(body: &str) -> Vec<CatalogEntry> {
+    let doc = Html::parse_document(body);
+    let card = Selector::parse("a.movie-poster-grid-card").unwrap();
+    let title_sel = Selector::parse(".movie-poster-grid-card__title").unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for el in doc.select(&card) {
+        let href = el.value().attr("href").unwrap_or("");
+        // href ist absolut oder relativ; den Slug nach „/movies/" nehmen.
+        let Some(idx) = href.find("/movies/") else {
+            continue;
+        };
+        let slug = &href[idx + "/movies/".len()..];
+        let slug = slug.split(['/', '?', '#']).next().unwrap_or("");
+        if slug.is_empty() || !seen.insert(slug.to_string()) {
+            continue;
+        }
+        let title = el
+            .select(&title_sel)
+            .next()
+            .map(|t| t.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| slug.replace('-', " "));
+        out.push(CatalogEntry {
+            title,
+            slug: slug.to_string(),
+        });
+    }
+    out
+}
 
 /// Ein Filmo-Film mit Metadaten und Quellen (Sprache → Hoster → `data-p`-Token).
 #[derive(Debug, Clone)]
@@ -204,6 +244,25 @@ fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn katalog_parst_filmkarten() {
+        let html = r#"
+            <a href="https://filmo.to/movies/perfekte-lugner" class="movie-poster-grid-card">
+                <figure class="movie-poster-grid-card__figure"><img class="movie-poster-grid-card__img"></figure>
+                <div class="movie-poster-grid-card__title">Perfekte Lügner</div>
+            </a>
+            <a href="/movies/argo" class="movie-poster-grid-card">
+                <div class="movie-poster-grid-card__title">Argo</div>
+            </a>
+            <a href="https://filmo.to/movies/perfekte-lugner" class="movie-poster-grid-card">dup</a>
+        "#;
+        let cat = parse_catalog(html);
+        assert_eq!(cat.len(), 2);
+        assert_eq!(cat[0].slug, "perfekte-lugner");
+        assert_eq!(cat[0].title, "Perfekte Lügner");
+        assert_eq!(cat[1].slug, "argo");
+    }
 
     #[test]
     fn lang_mapping() {

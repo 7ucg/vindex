@@ -37,7 +37,10 @@ export function Detail(): JSX.Element {
     return <div class="wrap" />;
   }
 
-  const [seasonList] = createResource(() => sel.url, seasons);
+  // filmo listet Filme (keine Staffeln/Folgen) — eigener „Film-Modus".
+  const isMovie = sel.url.includes("/movies/");
+
+  const [seasonList] = createResource(() => (isMovie ? null : sel.url), seasons);
   const [meta] = createResource(() => sel.url, titleMeta);
   const [active, setActive] = createSignal<number | null>(null);
 
@@ -54,6 +57,28 @@ export function Detail(): JSX.Element {
 
   const [busy, setBusy] = createSignal<string | null>(null);
   const [playErr, setPlayErr] = createSignal<string | null>(null);
+
+  // Film-Modus: direkt die Film-URL abspielen bzw. laden.
+  const watchMovie = async () => {
+    setBusy(sel.url);
+    setPlayErr(null);
+    try {
+      const src = await resolvePlayback(sel.url);
+      openPlayer({ title: sel.title, url: src.url, isHls: src.is_hls });
+    } catch (e) {
+      setPlayErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const loadMovie = async () => {
+    try {
+      await startDownload(sel.url, sanitize(sel.title), sel.title);
+      setView("downloads");
+    } catch (e) {
+      setPlayErr(String(e));
+    }
+  };
 
   const [bulk, setBulk] = createSignal(false);
   const [saved, setSaved] = createSignal(inWatchlist(sel.url));
@@ -153,6 +178,17 @@ export function Detail(): JSX.Element {
           <Show when={meta()?.description}>
             <p class="detail-desc">{meta()!.description}</p>
           </Show>
+        </div>
+      </Show>
+
+      <Show when={isMovie}>
+        <div class="controls" style={{ "margin-bottom": "16px" }}>
+          <button class="chip on" disabled={busy() === sel.url} onClick={watchMovie}>
+            {busy() === sel.url ? "löst auf …" : "▶ Ansehen"}
+          </button>
+          <button class="chip" onClick={loadMovie}>
+            Laden
+          </button>
         </div>
       </Show>
 
