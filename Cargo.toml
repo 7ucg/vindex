@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/cli", "crates/api", "crates/desktop"]
+# Die Tauri-App ist ein eigenständiges Paket: ihre GUI-Deps brauchen WebKitGTK zum
+# Linken, der Workspace-Build (core/cli/api/desktop) soll aber webkit-frei grün bleiben.
+exclude = ["crates/desktop/app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

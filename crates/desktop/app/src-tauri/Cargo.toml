@@ -1,0 +1,33 @@
+[package]
+name = "vindex-desktop-app"
+description = "vindex Desktop (Tauri-Frontend auf der vindex-desktop-Facade)."
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Baron"]
+# Bewusst NICHT im Root-Workspace (siehe root Cargo.toml `exclude`): die GUI-Deps
+# brauchen WebKitGTK zum Linken, der Workspace-Build soll webkit-frei grün bleiben.
+
+# Eigener Workspace-Root, damit die App ganz unabhängig vom vindex-Workspace baut
+# (eigener Lockfile, eigenes target/).
+[workspace]
+
+[lib]
+name = "vindex_desktop_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+# Die headless-testbare Facade — der ganze Scraper/Download-Kern lebt dort.
+vindex-desktop = { path = "../../" }
+
+[features]
+# Vom tauri-cli im Dev-Modus gesetzt.
+custom-protocol = ["tauri/custom-protocol"]
