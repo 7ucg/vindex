@@ -7,6 +7,7 @@ import {
   setSleepTimer,
   type Playback,
 } from "../lib/store";
+import { saveProgress, getProgress, clearProgress } from "../lib/progress";
 
 function epLabel(show: string, season: number, idx: number): string {
   const s = season === 0 ? "Filme" : `Staffel ${season}`;
@@ -62,11 +63,32 @@ export function Player(props: { playback: Playback }): JSX.Element {
   };
 
   const onEnded = () => {
+    // Durchgesehen → Fortschritt löschen (nicht mehr „weiterschauen").
+    const ref = props.playback.skipRef;
+    if (ref) clearProgress(ref.url);
     if (stopAfter()) {
       closePlayer();
       return;
     }
     if (hasNext()) void next();
+  };
+
+  // Position regelmäßig (gedrosselt) sichern.
+  let lastSave = 0;
+  const saveNow = (el: HTMLVideoElement) => {
+    const ref = props.playback.skipRef;
+    if (!ref || !el.duration || el.currentTime < 5) return;
+    const now = Date.now();
+    if (now - lastSave < 5000) return;
+    lastSave = now;
+    saveProgress(ref.url, {
+      title: props.playback.title,
+      pos: el.currentTime,
+      dur: el.duration,
+      ts: now,
+      season: ref.season,
+      episode: ref.episode,
+    });
   };
 
   // Lokalen Timer am gespeicherten Deadline neu bewaffnen (übersteht Remount).
@@ -164,6 +186,16 @@ export function Player(props: { playback: Playback }): JSX.Element {
       const t = el.currentTime;
       const hit = skips().find((s) => t >= s.start && t < s.end - 0.3);
       setSkipTarget(hit ? { end: hit.end, label: hit.kind === "ed" ? "Outro" : "Intro" } : null);
+      saveNow(el);
+    });
+    // An die zuletzt gesehene Stelle springen (wenn sinnvoll).
+    el.addEventListener("loadedmetadata", () => {
+      const ref = props.playback.skipRef;
+      if (!ref) return;
+      const saved = getProgress(ref.url);
+      if (saved && saved.pos > 30 && el.duration && saved.pos < el.duration * 0.95) {
+        el.currentTime = saved.pos;
+      }
     });
     window.addEventListener("keydown", keys);
 

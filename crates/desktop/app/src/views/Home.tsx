@@ -1,7 +1,8 @@
 import { createSignal, For, Show, type JSX } from "solid-js";
-import { search, type SearchHit } from "../lib/api";
+import { search, resolvePlayback, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
-import { openTitle } from "../lib/store";
+import { openTitle, openPlayer } from "../lib/store";
+import { recentProgress, type Resume } from "../lib/progress";
 
 // Home: eine funktionierende Katalog-Suche über den echten Kern.
 // „Weiterschauen"/Empfehlungen folgen, sobald der Watch-State im Frontend hängt.
@@ -11,6 +12,22 @@ export function Home(): JSX.Element {
   const [loading, setLoading] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
   const [searched, setSearched] = createSignal(false);
+  const [recent] = createSignal(recentProgress());
+
+  const resume = async (url: string, r: Resume) => {
+    setErr(null);
+    try {
+      const src = await resolvePlayback(url);
+      openPlayer({
+        title: r.title,
+        url: src.url,
+        isHls: src.is_hls,
+        skipRef: { url, season: r.season, episode: r.episode },
+      });
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
 
   let timer: number | undefined;
   const onInput = (v: string) => {
@@ -54,6 +71,41 @@ export function Home(): JSX.Element {
         </div>
       </div>
 
+      <Show when={!searched() && recent().length > 0}>
+        <div class="row-h">
+          <h2>Weiterschauen</h2>
+        </div>
+        <div class="grid">
+          <For each={recent()}>
+            {(it) => (
+              <div class="card" title={it.url} onClick={() => resume(it.url, it.r)}>
+                <div class="poster">
+                  <div class="ph" />
+                  <div class="play-ov">
+                    <button class="play-btn">
+                      <IconPlay />
+                    </button>
+                  </div>
+                  <div class="card-progress">
+                    <i
+                      style={{
+                        width: `${it.r.dur ? Math.min(100, (it.r.pos / it.r.dur) * 100) : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div class="t">{it.r.title}</div>
+                <div class="s">
+                  {it.r.dur
+                    ? `${Math.round((it.r.pos / it.r.dur) * 100)}% gesehen`
+                    : "weiterschauen"}
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <Show when={err()}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>
           Fehler: {err()}
@@ -93,7 +145,7 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
-      <Show when={!searched() && !loading()}>
+      <Show when={!searched() && !loading() && recent().length === 0}>
         <div class="empty">
           Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links
           zeigen den Katalog als Grid.

@@ -312,6 +312,19 @@ a {
   height: 18px;
   margin-left: 2px;
 }
+.poster .card-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.poster .card-progress i {
+  display: block;
+  height: 100%;
+  background: var(--grad);
+}
 .poster .tag {
   position: absolute;
   top: 8px;
