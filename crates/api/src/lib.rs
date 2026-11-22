@@ -338,20 +338,34 @@ fn trusted_proxies() -> &'static [IpAddr] {
     })
 }
 
+/// Parst ein `X-Forwarded-For`-Element zu einer IP: bare IP, `[ipv6]`/`[ipv6]:port`
+/// oder `ipv4:port`. `None`, wenn nichts davon passt.
+fn parse_forwarded_ip(s: &str) -> Option<IpAddr> {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split(']').next()?.parse().ok();
+    }
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    s.parse::<SocketAddr>().ok().map(|sa| sa.ip())
+}
+
 /// Reine Logik: echte Client-IP aus Peer + Trusted-Proxy-Liste + `X-Forwarded-For`.
-/// Steht der *peer* in *trusted*, wird die XFF-Kette von rechts nach links gelesen
-/// und die erste **nicht** vertrauenswürdige IP genommen (der echte Client) — so kann
-/// ein Client die Kette nicht mit vorangestellten Fake-IPs fälschen. Sonst: *peer*.
+/// Steht der *peer* in *trusted*, wird die XFF-Kette von rechts nach links gelesen:
+/// die erste **nicht** vertrauenswürdige IP ist der Client. Ein unparsebares Element
+/// ist ein harter Stopp (→ *peer*), damit eine manipulierte Kette den Limiter nicht
+/// umgeht. Steht *peer* nicht in *trusted*, wird XFF ignoriert.
 fn real_client_ip(peer: IpAddr, trusted: &[IpAddr], xff: Option<&str>) -> IpAddr {
     if trusted.is_empty() || !trusted.contains(&peer) {
         return peer;
     }
     if let Some(xff) = xff {
         for part in xff.split(',').rev() {
-            if let Ok(ip) = part.trim().parse::<IpAddr>() {
-                if !trusted.contains(&ip) {
-                    return ip;
-                }
+            match parse_forwarded_ip(part) {
+                Some(ip) if !trusted.contains(&ip) => return ip,
+                Some(_) => continue, // vertrauenswürdiger Hop → weiter nach links
+                None => return peer, // unparsebar → harter Stopp
             }
         }
     }
@@ -364,10 +378,16 @@ fn client_ip(req: &Request) -> IpAddr {
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    let xff = req
+    // Alle `X-Forwarded-For`-Instanzen zu einer Kette zusammenführen (sonst ließe sich
+    // über mehrere Header-Zeilen ein Parser-Unterschied ausnutzen).
+    let joined = req
         .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok());
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",");
+    let xff = (!joined.is_empty()).then_some(joined.as_str());
     real_client_ip(peer, trusted_proxies(), xff)
 }
 
@@ -1548,6 +1568,34 @@ mod tests {
             real_client_ip(proxy, &trusted, Some("1.1.1.1, 203.0.113.7, 10.0.0.1")),
             client
         );
+        // Unparsebares Element von rechts → harter Stopp (Peer), kein Weiterlaufen.
+        assert_eq!(
+            real_client_ip(proxy, &trusted, Some("203.0.113.7, junk")),
+            proxy
+        );
+        // ipv4:port und [ipv6] werden korrekt geparst.
+        assert_eq!(
+            real_client_ip(proxy, &trusted, Some("203.0.113.7:51000, 10.0.0.1")),
+            client
+        );
+    }
+
+    #[test]
+    fn forwarded_ip_formen() {
+        use std::net::IpAddr;
+        assert_eq!(
+            parse_forwarded_ip(" 203.0.113.7 "),
+            Some("203.0.113.7".parse::<IpAddr>().unwrap())
+        );
+        assert_eq!(
+            parse_forwarded_ip("203.0.113.7:8080"),
+            Some("203.0.113.7".parse::<IpAddr>().unwrap())
+        );
+        assert_eq!(
+            parse_forwarded_ip("[2001:db8::1]:443"),
+            Some("2001:db8::1".parse::<IpAddr>().unwrap())
+        );
+        assert_eq!(parse_forwarded_ip("junk"), None);
     }
 
     #[tokio::test]
