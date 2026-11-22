@@ -1,5 +1,11 @@
-import { createSignal, For, Show, type JSX } from "solid-js";
-import { search, resolvePlayback, type SearchHit } from "../lib/api";
+import { createResource, createSignal, For, Show, type JSX } from "solid-js";
+import {
+  search,
+  resolvePlayback,
+  library,
+  localMediaUrl,
+  type SearchHit,
+} from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
@@ -16,6 +22,20 @@ export function Home(): JSX.Element {
   const [searched, setSearched] = createSignal(false);
   const [recent] = createSignal(recentProgress());
   const [saved] = createSignal(watchlist());
+  // Zuletzt heruntergeladene Dateien (neueste zuerst).
+  const [lib] = createResource(async () => {
+    const all = await library().catch(() => []);
+    return all.sort((a, b) => b.modified - a.modified).slice(0, 12);
+  });
+
+  const playFile = async (name: string, title: string) => {
+    try {
+      const url = await localMediaUrl(name);
+      openPlayer({ title, url, isHls: false });
+    } catch {
+      /* nichts */
+    }
+  };
 
   const resume = async (url: string, r: Resume) => {
     setErr(null);
@@ -133,6 +153,30 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
+      <Show when={!searched() && (lib()?.length ?? 0) > 0}>
+        <div class="row-h">
+          <h2>Zuletzt geladen</h2>
+        </div>
+        <div class="grid">
+          <For each={lib()}>
+            {(f) => (
+              <div class="card" title={f.name} onClick={() => void playFile(f.name, f.name)}>
+                <div class="poster">
+                  <div class="ph" />
+                  <div class="play-ov">
+                    <button class="play-btn">
+                      <IconPlay />
+                    </button>
+                  </div>
+                </div>
+                <div class="t">{f.name}</div>
+                <div class="s">in der Bibliothek</div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <Show when={err()}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>
           Fehler: {err()}
@@ -172,7 +216,15 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
-      <Show when={!searched() && !loading() && recent().length === 0 && saved().length === 0}>
+      <Show
+        when={
+          !searched() &&
+          !loading() &&
+          recent().length === 0 &&
+          saved().length === 0 &&
+          (lib()?.length ?? 0) === 0
+        }
+      >
         <div class="empty">
           Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links
           zeigen den Katalog als Grid.
