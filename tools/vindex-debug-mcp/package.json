@@ -1,0 +1,16 @@
+{
+  "name": "vindex-debug-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP-Server zum Debuggen der vindex-Desktop-App: Streams headless auflösen und Erreichbarkeit proben.",
+  "bin": {
+    "vindex-debug-mcp": "index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  }
+}
