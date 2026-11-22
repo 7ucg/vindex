@@ -90,6 +90,11 @@ pub async fn fetch_html(url: &str) -> Result<String> {
     if !is_http_url(url) {
         return Err(Error::extract("obscura", "URL ist nicht http/https"));
     }
+    // Defense-in-Depth: kein IP-Literal auf eine gesperrte/interne Adresse (falls der
+    // Proxy doch umgangen würde). obscura blockt private Netze zusätzlich selbst.
+    if crate::http::host_is_forbidden_ip_literal(url) {
+        return Err(Error::extract("obscura", "Ziel-IP ist gesperrt"));
+    }
     // Fail-closed: ein konfigurierter Egress-Proxy darf nicht umgangen werden. Der
     // lokale 1.1.1.1-Proxy verbindet direkt zum Ziel; mit VINDEX_PROXY wäre das ein
     // Policy-Bypass, also Stufe 3 in dem Fall ablehnen.
@@ -110,11 +115,19 @@ pub async fn fetch_html(url: &str) -> Result<String> {
 
     // Proxy (inkl. Token) NICHT über argv — das `cmdline` ist oft world-readable —,
     // sondern über die Child-Env (`environ` ist nur für den Besitzer lesbar). obscura
-    // honoriert `HTTPS_PROXY`/`HTTP_PROXY`.
+    // honoriert `HTTPS_PROXY`/`HTTP_PROXY`. Alle Proxy-Env-Formen auf den eigenen Proxy
+    // setzen und `NO_PROXY` leeren, damit ein geerbtes `NO_PROXY`/`ALL_PROXY` den Proxy
+    // nicht umgehen kann (Fail-closed gegen Egress-Bypass).
     let proxy_url = format!("http://vindex:{token}@{addr}");
     let spawned = Command::new(bin)
         .env("HTTPS_PROXY", &proxy_url)
         .env("HTTP_PROXY", &proxy_url)
+        .env("https_proxy", &proxy_url)
+        .env("http_proxy", &proxy_url)
+        .env("ALL_PROXY", &proxy_url)
+        .env("all_proxy", &proxy_url)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
         .arg("fetch")
         .arg(url)
         .arg("--dump")
@@ -128,14 +141,19 @@ pub async fn fetch_html(url: &str) -> Result<String> {
         .kill_on_drop(true)
         .spawn();
 
-    let result = run_obscura(spawned).await;
+    // Token zum Redigieren an run_obscura geben (obscura könnte den Proxy-URL in
+    // stderr echoen).
+    let result = run_obscura(spawned, &token).await;
     proxy.abort();
     result
 }
 
 /// Startet obscura, leert stderr nebenläufig (gegen Pipe-Deadlock), liest stdout
 /// gedeckelt und erzwingt einen Gesamt-Timeout (tötet das Kind bei Ablauf/Überlauf).
-async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<String> {
+async fn run_obscura(
+    spawned: std::io::Result<tokio::process::Child>,
+    redact: &str,
+) -> Result<String> {
     let mut child = spawned.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => {
             Error::extract("obscura", "Binary nicht gefunden (VINDEX_OBSCURA prüfen)")
@@ -146,15 +164,24 @@ async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
 
-    // stderr nebenläufig leeren, sonst kann obscura beim Vollschreiben der stderr-Pipe
-    // blockieren, während wir auf stdout warten (Deadlock).
+    // stderr nebenläufig **bis EOF** leeren (sonst Pipe-Deadlock), dabei nur die ersten
+    // MAX_STDERR_BYTES behalten — der Rest wird verworfen, aber weiter gelesen.
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = (&mut stderr)
-            .take(MAX_STDERR_BYTES)
-            .read_to_end(&mut buf)
-            .await;
-        buf
+        let mut kept: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let cap = MAX_STDERR_BYTES as usize;
+        loop {
+            match stderr.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if kept.len() < cap {
+                        let room = cap - kept.len();
+                        kept.extend_from_slice(&chunk[..n.min(room)]);
+                    }
+                }
+            }
+        }
+        kept
     });
 
     // stdout lesen + auf Exit warten, alles unter einem Gesamt-Timeout.
@@ -192,12 +219,12 @@ async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<
 
     if !status.success() {
         let err = stderr_task.await.unwrap_or_default();
+        // Proxy-Token aus der Fehlermeldung redigieren (obscura könnte den Proxy-URL
+        // in stderr echoen).
+        let msg = String::from_utf8_lossy(&err).replace(redact, "***");
         return Err(Error::extract(
             "obscura",
-            format!(
-                "Aufruf fehlgeschlagen: {}",
-                String::from_utf8_lossy(&err).trim()
-            ),
+            format!("Aufruf fehlgeschlagen: {}", msg.trim()),
         ));
     }
     Ok(String::from_utf8_lossy(&html).into_owned())
