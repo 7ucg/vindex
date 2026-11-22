@@ -138,12 +138,33 @@ pub fn load(path: &Path) -> WatchState {
 
 /// Speichert den Store. Legt bei Bedarf das übergeordnete Verzeichnis an.
 pub fn save(path: &Path, state: &WatchState) -> std::io::Result<()> {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)?;
+            // Die Historie ist privat — Verzeichnis auf 0700, Datei auf 0600.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
         }
     }
-    std::fs::write(path, state.to_json())
+    // Atomar schreiben: erst in eine temporäre Datei (0600), dann umbenennen.
+    let tmp = path.with_extension("tmp");
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(state.to_json().as_bytes())?;
+        f.flush()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
