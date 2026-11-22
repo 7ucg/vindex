@@ -126,7 +126,10 @@ pub fn validate_source_url(url: &str) -> Result<(), String> {
 /// Extrahiert den Serien-Slug aus einer aniworld-/serienstream.to-URL
 /// (`…/anime/stream/<slug>/…` bzw. `…/serie/stream/<slug>/…`).
 pub fn slug_from_url(url: &str) -> Option<String> {
-    for marker in ["/anime/stream/", "/serie/stream/"] {
+    // Reihenfolge wichtig: die spezifischeren `…/stream/`-Marker zuerst, damit ein
+    // `/serie/stream/<slug>` nicht fälschlich den Slug „stream" ergibt. Das echte
+    // serienstream.to nutzt `/serie/<slug>` (ohne `/stream/`), aniworld `/anime/stream/`.
+    for marker in ["/anime/stream/", "/serie/stream/", "/serie/"] {
         if let Some(rest) = url.split(marker).nth(1) {
             let slug = rest.split('/').next().unwrap_or("").trim();
             if !slug.is_empty() {
@@ -140,6 +143,33 @@ pub fn slug_from_url(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slug_aus_allen_url_formen() {
+        // aniworld: /anime/stream/<slug>
+        assert_eq!(
+            slug_from_url("https://aniworld.to/anime/stream/one-piece/staffel-1/episode-1")
+                .as_deref(),
+            Some("one-piece")
+        );
+        // serienstream REAL: /serie/<slug> (ohne /stream/)
+        assert_eq!(
+            slug_from_url("https://serienstream.to/serie/black-clover/staffel-2/episode-8")
+                .as_deref(),
+            Some("black-clover")
+        );
+        // altes /serie/stream/<slug> ergibt weiter den echten Slug (nicht „stream")
+        assert_eq!(
+            slug_from_url("https://serienstream.to/serie/stream/dark/staffel-1").as_deref(),
+            Some("dark")
+        );
+        // Serien-Übersicht ohne Pfad-Tiefe
+        assert_eq!(
+            slug_from_url("https://serienstream.to/serie/arrow").as_deref(),
+            Some("arrow")
+        );
+        assert_eq!(slug_from_url("https://serienstream.to/"), None);
+    }
 
     #[test]
     fn allows_supported_hosts() {

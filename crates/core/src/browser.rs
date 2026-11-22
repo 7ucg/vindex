@@ -218,7 +218,13 @@ async fn run_obscura(
     };
 
     if !status.success() {
-        let err = stderr_task.await.unwrap_or_default();
+        // stderr-Task kurz gedeckelt abwarten (das Kind ist beendet → Pipe sollte EOF
+        // liefern; der Timeout schützt gegen einen hängenden Reader).
+        let err = tokio::time::timeout(Duration::from_secs(2), stderr_task)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
         // Proxy-Token aus der Fehlermeldung redigieren (obscura könnte den Proxy-URL
         // in stderr echoen).
         let msg = String::from_utf8_lossy(&err).replace(redact, "***");
