@@ -134,9 +134,20 @@ impl Backend {
                     })
                     .collect())
             }
-            "serienstream" | "filmo" => Err(core::error::Error::Parse(format!(
-                "Katalog für {portal} ist im Kern noch nicht angebunden"
-            ))),
+            "serienstream" => {
+                let entries =
+                    site::serienstream::fetch_catalog(&self.client, core::model::BASE_STO).await?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{}/serie/{}", core::model::BASE_STO, e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
+            "filmo" => Err(core::error::Error::Parse(
+                "filmo ist eine JS-Seite; Katalog-Anbindung folgt".into(),
+            )),
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"
             ))),

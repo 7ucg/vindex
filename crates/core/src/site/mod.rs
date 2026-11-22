@@ -74,13 +74,15 @@ pub async fn og_meta(
     Ok(parse_og(&body, base.as_ref()))
 }
 
-/// Reine HTML→Open-Graph-Logik von [`og_meta`] (ohne Netz, testbar). Das
-/// `og:image` wird gegen die Seiten-URL absolut aufgelöst und muss `https` sein —
-/// sonst `None` (keine rohe, gescrapte URL ans Frontend).
+/// Reine HTML→Meta-Logik von [`og_meta`] (ohne Netz, testbar): echtes Poster +
+/// Kurzbeschreibung. Poster-Reihenfolge: `img[itemprop=image]` (aniworld-Cover) →
+/// serienstream-„channel"-Bild → `og:image` (Fallback). Alles absolut aufgelöst
+/// und auf `https` geprüft — sonst `None`.
 fn parse_og(body: &str, base: Option<&reqwest::Url>) -> (Option<String>, Option<String>) {
     use scraper::{Html, Selector};
     let doc = Html::parse_document(body);
-    let pick = |prop: &str| -> Option<String> {
+
+    let meta = |prop: &str| -> Option<String> {
         let sel = Selector::parse(&format!(r#"meta[property="{prop}"]"#)).ok()?;
         doc.select(&sel)
             .next()
@@ -88,10 +90,24 @@ fn parse_og(body: &str, base: Option<&reqwest::Url>) -> (Option<String>, Option<
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    (
-        pick("og:image").and_then(|raw| validate_https_url(&raw, base)),
-        pick("og:description"),
-    )
+    // `data-src` (lazy) bevorzugt, sonst `src`.
+    let img_attr = |css: &str| -> Option<String> {
+        let sel = Selector::parse(css).ok()?;
+        doc.select(&sel).find_map(|el| {
+            el.value()
+                .attr("data-src")
+                .or_else(|| el.value().attr("src"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && !s.starts_with("data:"))
+        })
+    };
+
+    let poster = img_attr(r#"img[itemprop="image"]"#)
+        .or_else(|| img_attr(r#"img[data-src*="/media/images/channel/"]"#))
+        .or_else(|| meta("og:image"))
+        .and_then(|raw| validate_https_url(&raw, base));
+
+    (poster, meta("og:description"))
 }
 
 /// Löst eine evtl. relative URL gegen `base` auf und akzeptiert nur `https`.
@@ -206,6 +222,21 @@ mod tests {
         let html = r#"<meta property="og:image" content="/img/cover.jpg">"#;
         let (img, _) = parse_og(html, Some(&base));
         assert_eq!(img.as_deref(), Some("https://aniworld.to/img/cover.jpg"));
+    }
+
+    #[test]
+    fn poster_bevorzugt_itemprop_cover_vor_og_image() {
+        let base = reqwest::Url::parse("https://aniworld.to/anime/stream/x").unwrap();
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://aniworld.to/public/img/facebook.jpg">
+            </head><body>
+            <img itemprop="image" data-src="/public/img/cover/x-stream-cover-ABC_220x330.jpg">
+            </body></html>"#;
+        let (img, _) = parse_og(html, Some(&base));
+        assert_eq!(
+            img.as_deref(),
+            Some("https://aniworld.to/public/img/cover/x-stream-cover-ABC_220x330.jpg")
+        );
     }
 
     #[test]

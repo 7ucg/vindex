@@ -14,8 +14,43 @@ use regex::Regex;
 use scraper::{Html, Selector};
 
 use crate::error::{Error, Result};
-use crate::model::{Episode, Hoster, Language, ProviderLinks};
+use crate::model::{CatalogEntry, Episode, Hoster, Language, ProviderLinks};
 use crate::naming::{episode_number_from_title, strip_episode_marker};
+
+/// Lädt den Serien-Katalog von `/serien?by=alpha` (alphabetisch, voller Katalog).
+pub async fn fetch_catalog(client: &reqwest::Client, base: &str) -> Result<Vec<CatalogEntry>> {
+    let url = format!("{base}/serien?by=alpha");
+    let body = super::fetch_text(client, &url).await?;
+    Ok(parse_catalog(&body))
+}
+
+/// Reine HTML→Katalog-Logik: `<a href="/serie/<slug>">Titel`, dedupliziert,
+/// nur Basis-Links (keine `/serie/<slug>/staffel-…`).
+fn parse_catalog(body: &str) -> Vec<CatalogEntry> {
+    let doc = Html::parse_document(body);
+    let sel = Selector::parse(r#"a[href^="/serie/"]"#).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for el in doc.select(&sel) {
+        let href = el.value().attr("href").unwrap_or("");
+        let slug = href.trim_start_matches("/serie/");
+        if slug.is_empty() || slug.contains('/') {
+            continue;
+        }
+        if !seen.insert(slug.to_string()) {
+            continue;
+        }
+        let title = el.text().collect::<String>().trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        out.push(CatalogEntry {
+            title,
+            slug: slug.to_string(),
+        });
+    }
+    out
+}
 
 /// Liefert die Staffel-Nummern eines Titels (`0` = Filme-Tab).
 pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> Result<Vec<u32>> {
@@ -288,6 +323,22 @@ mod tests {
     use super::*;
 
     const BASE_T: &str = "https://example.test";
+
+    #[test]
+    fn katalog_parst_serie_links_dedupliziert() {
+        let html = r#"
+            <a href="/serie/breaking-bad">Breaking Bad</a>
+            <a href="/serie/breaking-bad/staffel-1">S1</a>
+            <a href="/serie/breaking-bad">Breaking Bad</a>
+            <a href="/serie/dark">Dark</a>
+            <a href="/anleitung">Hilfe</a>
+        "#;
+        let cat = parse_catalog(html);
+        assert_eq!(cat.len(), 2);
+        assert_eq!(cat[0].slug, "breaking-bad");
+        assert_eq!(cat[0].title, "Breaking Bad");
+        assert_eq!(cat[1].slug, "dark");
+    }
 
     #[test]
     fn hoster_links_nach_sprache_gruppiert() {
