@@ -62,6 +62,15 @@ export function aniskip(url: string, season: number, episode: number): Promise<S
   return invoke<SkipInterval[]>("aniskip", { url, season, episode });
 }
 
+export interface TitleMeta {
+  poster: string | null;
+  description: string | null;
+}
+
+export function titleMeta(url: string): Promise<TitleMeta> {
+  return invoke<TitleMeta>("title_meta", { url });
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

@@ -170,6 +170,12 @@ impl Backend {
         site::serienstream::list_episodes(&self.client, base, &slug, season).await
     }
 
+    /// Poster und Kurzbeschreibung eines Titels (Open-Graph-Meta der Detailseite).
+    pub async fn title_meta(&self, url: &str) -> Result<(Option<String>, Option<String>)> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        site::og_meta(&self.client, url).await
+    }
+
     /// AniSkip-Intervalle (Intro/Outro) für eine Episode. Braucht die MAL-ID
     /// (über Jikan aufgelöst) und die Episodennummer der Staffel. Leere Liste,
     /// wenn nichts gefunden wird (oder Jikan nicht erreichbar ist).

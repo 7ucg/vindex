@@ -170,6 +170,25 @@ async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<Pla
     })
 }
 
+#[derive(Serialize)]
+struct TitleMetaDto {
+    poster: Option<String>,
+    description: Option<String>,
+}
+
+#[tauri::command]
+async fn title_meta(url: String, state: State<'_, AppState>) -> Result<TitleMetaDto, String> {
+    let (poster, description) = state
+        .backend
+        .title_meta(&url)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(TitleMetaDto {
+        poster,
+        description,
+    })
+}
+
 #[tauri::command]
 async fn aniskip(
     url: String,
@@ -234,52 +253,61 @@ fn is_media(name: &str) -> bool {
     )
 }
 
+/// Validiert einen Bibliotheks-Dateinamen und gibt den **kanonisierten** Pfad
+/// zurück: reiner Mediendateiname (keine Trenner/`..`), reguläre Datei (kein
+/// Symlink/Verzeichnis), und der kanonisierte Elternpfad ist exakt `canon_dir`.
+fn safe_media_path(
+    dir: &std::path::Path,
+    canon_dir: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+    if !is_media(name) {
+        return None;
+    }
+    let path = dir.join(name);
+    if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let canon = std::fs::canonicalize(&path).ok()?;
+    if canon.parent() != Some(canon_dir) {
+        return None;
+    }
+    Some(canon)
+}
+
 #[tauri::command]
 fn library(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
     let dir = state.backend.settings().download_path;
+    let Ok(canon_dir) = std::fs::canonicalize(&dir) else {
+        return Vec::new();
+    };
     let scope = app.asset_protocol_scope();
     core::library::list(&dir)
         .into_iter()
-        .filter(|e| is_media(&e.name))
-        .map(|e| {
-            let path = dir.join(&e.name);
-            // Genau diese Mediendatei fürs Asset-Protokoll freigeben (nicht den Ordner).
-            let _ = scope.allow_file(&path);
-            LibraryEntryDto {
+        .filter_map(|e| {
+            // Nur die validierte, kanonisierte Datei freigeben (kein Symlink-Ausbruch).
+            let canon = safe_media_path(&dir, &canon_dir, &e.name)?;
+            let _ = scope.allow_file(&canon);
+            Some(LibraryEntryDto {
                 name: e.name,
                 size_bytes: e.size_bytes,
                 modified: e.modified,
-                path: path.to_string_lossy().into_owned(),
-            }
+                path: canon.to_string_lossy().into_owned(),
+            })
         })
         .collect()
 }
 
-/// Löscht eine Mediendatei aus der Bibliothek. Pfadtrenner, `..`, Symlinks und
-/// Nicht-Medien werden abgewiesen; der kanonisierte Pfad muss direkt im
-/// Download-Ordner liegen.
+/// Löscht eine Mediendatei aus der Bibliothek — gleiche Validierung wie `library`.
 #[tauri::command]
 fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err("ungültiger Dateiname".into());
-    }
-    if !is_media(&name) {
-        return Err("keine Mediendatei".into());
-    }
     let dir = state.backend.settings().download_path;
-    let path = dir.join(&name);
-
-    // Reguläre Datei verlangen (kein Symlink, kein Verzeichnis).
-    let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("keine reguläre Datei".into());
-    }
-    // Kanonisiert muss der Elternpfad exakt der Download-Ordner sein.
-    let canon = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
     let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
-    if canon.parent() != Some(canon_dir.as_path()) {
-        return Err("Pfad außerhalb des Download-Ordners".into());
-    }
+    let canon = safe_media_path(&dir, &canon_dir, &name)
+        .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())?;
     std::fs::remove_file(&canon).map_err(|e| e.to_string())
 }
 
@@ -334,6 +362,7 @@ pub fn run() {
             seasons,
             episodes,
             resolve_playback,
+            title_meta,
             aniskip,
             start_download,
             cancel_download,

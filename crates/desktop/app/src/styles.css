@@ -381,6 +381,30 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Detail header (poster + description) ---------- */
+.detail-head {
+  display: flex;
+  gap: 18px;
+  margin: 6px 2px 20px;
+  align-items: flex-start;
+}
+.detail-poster {
+  width: 132px;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  flex: none;
+  background: var(--surface-2);
+}
+.detail-desc {
+  margin: 2px 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-width: 70ch;
+}
+
 /* ---------- List rows (episodes, downloads) ---------- */
 .dl {
   display: flex;

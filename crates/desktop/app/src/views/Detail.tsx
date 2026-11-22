@@ -6,7 +6,14 @@ import {
   Show,
   type JSX,
 } from "solid-js";
-import { seasons, episodes, resolvePlayback, startDownload, type Episode } from "../lib/api";
+import {
+  seasons,
+  episodes,
+  resolvePlayback,
+  startDownload,
+  titleMeta,
+  type Episode,
+} from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
 
 function pad(n: number): string {
@@ -30,6 +37,7 @@ export function Detail(): JSX.Element {
   }
 
   const [seasonList] = createResource(() => sel.url, seasons);
+  const [meta] = createResource(() => sel.url, titleMeta);
   const [active, setActive] = createSignal<number | null>(null);
 
   // Sobald die Staffeln da sind, die erste vorauswählen.
@@ -125,6 +133,17 @@ export function Detail(): JSX.Element {
         </button>
         <h2 style={{ margin: 0 }}>{sel.title}</h2>
       </div>
+
+      <Show when={meta()?.poster || meta()?.description}>
+        <div class="detail-head">
+          <Show when={meta()?.poster}>
+            <img class="detail-poster" src={meta()!.poster!} alt={sel.title} loading="lazy" />
+          </Show>
+          <Show when={meta()?.description}>
+            <p class="detail-desc">{meta()!.description}</p>
+          </Show>
+        </div>
+      </Show>
 
       <Show when={seasonList.loading}>
         <div class="spinner" />

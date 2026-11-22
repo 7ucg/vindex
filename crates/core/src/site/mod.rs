@@ -63,6 +63,31 @@ pub async fn fetch_text(client: &reqwest::Client, url: &str) -> crate::error::Re
     Ok(body)
 }
 
+/// Liest Open-Graph-Meta (`og:image`, `og:description`) einer Portalseite — für
+/// Poster und Kurzbeschreibung in der Titel-Detailansicht. Fehlt etwas, `None`.
+pub async fn og_meta(
+    client: &reqwest::Client,
+    url: &str,
+) -> crate::error::Result<(Option<String>, Option<String>)> {
+    let body = fetch_text(client, url).await?;
+    Ok(parse_og(&body))
+}
+
+/// Reine HTML→Open-Graph-Logik von [`og_meta`] (ohne Netz, testbar).
+fn parse_og(body: &str) -> (Option<String>, Option<String>) {
+    use scraper::{Html, Selector};
+    let doc = Html::parse_document(body);
+    let pick = |prop: &str| -> Option<String> {
+        let sel = Selector::parse(&format!(r#"meta[property="{prop}"]"#)).ok()?;
+        doc.select(&sel)
+            .next()
+            .and_then(|el| el.value().attr("content"))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    (pick("og:image"), pick("og:description"))
+}
+
 /// Normalisierter Host einer URL (ohne Trailing-Dot, lowercase). `None`, wenn die
 /// URL nicht parst oder keinen Host hat.
 fn host_of(url: &str) -> Option<String> {
@@ -143,6 +168,25 @@ pub fn slug_from_url(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn og_meta_liest_image_und_description() {
+        let html = r#"<html><head>
+            <meta property="og:title" content="X">
+            <meta property="og:image" content="https://cdn.example/poster.jpg">
+            <meta property="og:description" content="  Eine Beschreibung.  ">
+            </head><body></body></html>"#;
+        let (img, desc) = parse_og(html);
+        assert_eq!(img.as_deref(), Some("https://cdn.example/poster.jpg"));
+        assert_eq!(desc.as_deref(), Some("Eine Beschreibung."));
+    }
+
+    #[test]
+    fn og_meta_fehlend_ist_none() {
+        let (img, desc) = parse_og("<html><head></head><body>x</body></html>");
+        assert!(img.is_none());
+        assert!(desc.is_none());
+    }
 
     #[test]
     fn slug_aus_allen_url_formen() {
