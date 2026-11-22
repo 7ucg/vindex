@@ -24,8 +24,9 @@ HTTP-API/Daemon und Desktop-Backend.
 - Sprachauswahl (German Dub, German Sub, English Sub, je nach Portal) mit
   Fallback über Hoster und Sprache.
 - Qualitäts-Sweep zwischen Max- und Min-Grenze (4K bis 360p).
-- Download-Engine auf ffmpeg-Basis, mit Retry, Reconnect und Abbruch; optionaler
-  nativer HLS-Segment-Download (`VINDEX_NATIVE_HLS`) inkl. AES-128-Entschlüsselung.
+- Download-Engine auf ffmpeg-Basis, mit Retry, Reconnect, Abbruch und
+  Fortschrittsmeldungen (CLI-Statuszeile, Progress-Kanal für das Desktop-Backend);
+  optionaler nativer HLS-Segment-Download (`VINDEX_NATIVE_HLS`) inkl. AES-128-Entschlüsselung.
 - Naming-Templates im Jellyfin-Layout, Rate-Limiting pro Hoster, Backoff,
   User-Agent-Rotation, Cloudflare-Erkennung.
 - TLS-Impersonate-Fallback (Anti-Bot Stufe 2) über `wreq` mit Chrome-Fingerprint —

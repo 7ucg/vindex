@@ -69,14 +69,47 @@ impl DownloadPrefs {
 
 /// Lädt eine Episode herunter: probiert Sprachen, Hoster und Qualitäten in der
 /// konfigurierten Reihenfolge und muxt den ersten erfolgreichen Stream.
+/// Fortschrittsmeldung eines laufenden Downloads. Gedacht für die CLI-Anzeige und
+/// das Desktop-GUI; die Kern-Logik bleibt davon unberührt, wenn keine Senke gesetzt ist.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Progress {
+    /// Der Stream wird aufgelöst (Sprach-/Hoster-Kette).
+    Resolving,
+    /// Der Segment-Download beginnt; `total_segments` ist bekannt, wenn die
+    /// Media-Playlist vorliegt (nativer HLS-Pfad).
+    Started { total_segments: Option<usize> },
+    /// Ein Segment ist fertig: `done` von `total`, plus bisher geschriebene Bytes.
+    Segment {
+        done: usize,
+        total: usize,
+        bytes: u64,
+    },
+    /// Das Remuxen/Muxen (ffmpeg) läuft.
+    Muxing,
+    /// Der Download ist abgeschlossen.
+    Finished,
+}
+
+/// Threadsichere, klonbare Senke für [`Progress`]-Meldungen.
+pub type ProgressSink = std::sync::Arc<dyn Fn(Progress) + Send + Sync>;
+
+/// Schickt ein Ereignis an die Senke, falls eine gesetzt ist.
+fn report(progress: Option<&ProgressSink>, event: Progress) {
+    if let Some(sink) = progress {
+        sink(event);
+    }
+}
+
 pub async fn download_episode(
     client: &reqwest::Client,
     episode_url: &str,
     prefs: &DownloadPrefs,
     cancel: Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
     // SSRF-Schutz: nur unterstützte Portale als Einstiegs-URL zulassen.
     site::validate_source_url(episode_url).map_err(Error::Parse)?;
+    report(progress, Progress::Resolving);
     let base = site::base_for_url(episode_url);
     let links = site::serienstream::provider_links(client, base, episode_url).await?;
     let out_path = prefs.out_dir.join(&prefs.file_name);
@@ -100,13 +133,15 @@ pub async fn download_episode(
                 }
             };
 
-            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel).await? {
+            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel, progress).await?
+            {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
                     lang.as_str(),
                     hoster.as_str()
                 );
+                report(progress, Progress::Finished);
                 return Ok(out_path);
             }
         }
@@ -120,8 +155,10 @@ pub async fn download_movie(
     movie_url: &str,
     prefs: &DownloadPrefs,
     cancel: Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
     site::validate_source_url(movie_url).map_err(Error::Parse)?;
+    report(progress, Progress::Resolving);
     let movie = site::filmo::movie(client, movie_url).await?;
     let csrf = movie
         .csrf
@@ -154,13 +191,15 @@ pub async fn download_movie(
                     continue;
                 }
             };
-            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel).await? {
+            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel, progress).await?
+            {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
                     lang.as_str(),
                     hoster.as_str()
                 );
+                report(progress, Progress::Finished);
                 return Ok(out_path);
             }
         }
@@ -174,14 +213,15 @@ pub async fn download_url(
     url: &str,
     prefs: &DownloadPrefs,
     cancel: Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
     // Von Hand getippte URLs vorab korrigieren (Schema, Host-Tippfehler, Müll).
     let corrected = site::autocorrect::autocorrect(url).map(|c| c.url);
     let url = corrected.as_deref().unwrap_or(url);
     if site::is_filmo(url) {
-        download_movie(client, url, prefs, cancel).await
+        download_movie(client, url, prefs, cancel, progress).await
     } else {
-        download_episode(client, url, prefs, cancel).await
+        download_episode(client, url, prefs, cancel, progress).await
     }
 }
 
@@ -298,6 +338,7 @@ async fn try_download_resolved(
     prefs: &DownloadPrefs,
     out_path: &Path,
     cancel: &Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<bool> {
     if resolved.is_hls {
         // Master-Playlist über den konfigurierten Client (Timeout/UA) laden und die
@@ -319,12 +360,23 @@ async fn try_download_resolved(
                 prefs.native_hls,
                 out_path,
                 cancel,
+                progress,
             )
             .await);
         }
         for q in prefs.quality_sweep() {
             if let Some(url) = variants.get(&q) {
-                if deliver_hls(client, url, referer, prefs.native_hls, out_path, cancel).await {
+                if deliver_hls(
+                    client,
+                    url,
+                    referer,
+                    prefs.native_hls,
+                    out_path,
+                    cancel,
+                    progress,
+                )
+                .await
+                {
                     return Ok(true);
                 }
             }
@@ -347,6 +399,7 @@ async fn try_download_resolved(
                 return Ok(false);
             }
         }
+        report(progress, Progress::Muxing);
         mux(resolved, out_path, cancel).await.map(|_| true)
     }
 }
@@ -364,9 +417,10 @@ async fn deliver_hls(
     native: bool,
     out_path: &Path,
     cancel: &Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> bool {
     if native {
-        match download_hls_native(client, url, referer, out_path, cancel).await {
+        match download_hls_native(client, url, referer, out_path, cancel, progress).await {
             Ok(true) => return true,
             Ok(false) => {} // verschlüsselt/leer → ffmpeg
             Err(e) => tracing::debug!("nativer HLS-Download fehlgeschlagen: {e}"),
@@ -377,6 +431,7 @@ async fn deliver_hls(
         referer: referer.map(str::to_string),
         is_hls: true,
     };
+    report(progress, Progress::Muxing);
     mux(&variant, out_path, cancel).await.is_ok()
 }
 
@@ -653,6 +708,7 @@ async fn download_hls_native(
     referer: Option<&str>,
     out_path: &Path,
     cancel: &Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<bool> {
     if !is_http_url(media_url) {
         return Ok(false);
@@ -681,8 +737,22 @@ async fn download_hls_native(
     }
     let part = out_path.with_extension("part.ts");
 
-    let result =
-        fetch_segments_to(client, &segments, referer, cipher.as_ref(), &part, cancel).await;
+    report(
+        progress,
+        Progress::Started {
+            total_segments: Some(segments.len()),
+        },
+    );
+    let result = fetch_segments_to(
+        client,
+        &segments,
+        referer,
+        cipher.as_ref(),
+        &part,
+        cancel,
+        progress,
+    )
+    .await;
     if let Err(e) = result {
         tokio::fs::remove_file(&part).await.ok();
         return Err(e);
@@ -690,6 +760,7 @@ async fn download_hls_native(
 
     // Zusammengesetzten TS-Stream nach out_path remuxen; die lokale Datei ist
     // vertrauenswürdig, daher file-Protokoll erlaubt.
+    report(progress, Progress::Muxing);
     let remux = remux_local(&part, out_path, cancel).await;
     tokio::fs::remove_file(&part).await.ok();
     remux.map(|_| true)
@@ -720,6 +791,7 @@ async fn fetch_segments_to(
     cipher: Option<&Aes128Ctx>,
     part: &Path,
     cancel: &Option<CancellationToken>,
+    progress: Option<&ProgressSink>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
@@ -729,6 +801,7 @@ async fn fetch_segments_to(
 
     let mut file = tokio::fs::File::create(part).await?;
     let mut total: u64 = 0;
+    let total_segments = segments.len();
 
     for (index, seg) in segments.iter().enumerate() {
         if is_cancelled(cancel) {
@@ -795,6 +868,14 @@ async fn fetch_segments_to(
                 file.write_all(&chunk).await?;
             }
         }
+        report(
+            progress,
+            Progress::Segment {
+                done: index + 1,
+                total: total_segments,
+                bytes: total,
+            },
+        );
     }
     file.flush().await?;
     Ok(())
@@ -975,6 +1056,49 @@ pub async fn ffprobe_height(url: &str, referer: Option<&str>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_senke_erhaelt_events() {
+        use std::sync::{Arc, Mutex};
+        let log: Arc<Mutex<Vec<Progress>>> = Arc::new(Mutex::new(Vec::new()));
+        let log2 = log.clone();
+        let sink: ProgressSink = Arc::new(move |e| log2.lock().unwrap().push(e));
+        report(Some(&sink), Progress::Resolving);
+        report(
+            Some(&sink),
+            Progress::Started {
+                total_segments: Some(3),
+            },
+        );
+        report(
+            Some(&sink),
+            Progress::Segment {
+                done: 1,
+                total: 3,
+                bytes: 100,
+            },
+        );
+        report(Some(&sink), Progress::Finished);
+        let got = log.lock().unwrap().clone();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0], Progress::Resolving);
+        assert_eq!(
+            got[2],
+            Progress::Segment {
+                done: 1,
+                total: 3,
+                bytes: 100
+            }
+        );
+        assert_eq!(got[3], Progress::Finished);
+    }
+
+    #[test]
+    fn progress_none_ist_noop() {
+        // Ohne Senke darf report nichts tun und nicht paniken.
+        report(None, Progress::Resolving);
+        report(None, Progress::Finished);
+    }
 
     #[test]
     fn sweep_respects_bounds() {

@@ -116,7 +116,7 @@ pub async fn run() -> anyhow::Result<()> {
     };
 
     println!("Lade „{file_name}\" ({}) ...", language.as_str());
-    match download_episode(&client, &episode.url, &prefs, None).await {
+    match download_episode(&client, &episode.url, &prefs, None, None).await {
         Ok(path) => println!("Fertig: {}", path.display()),
         Err(e) => println!("Fehlgeschlagen: {e}"),
     }

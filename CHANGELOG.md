@@ -9,6 +9,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Download: Fortschritts-Reporting (`core::download::Progress`/`ProgressSink`). Ein optionaler,
+  threadsicherer Sink wird durch die ganze Kette (`download_url`/`_episode`/`_movie` →
+  `try_download_resolved` → nativer HLS-Segment-Loop) gereicht und meldet Auflösen, Start mit
+  Segmentzahl, jedes fertige Segment (inkl. Bytes), Remux und Abschluss. Die CLI zeigt daraus
+  eine einzeilige Statuszeile; die Desktop-Facade bekommt `download_with_progress` fürs GUI. Ohne
+  Sink bleibt die Engine unverändert.
 - Hoster/Filemoon: moderner Byse-API-Pfad (`/api/videos/<code>`). Die AES-256-GCM-
   verschlüsselten `playback`-Daten werden entschlüsselt — der 32-Byte-Key wird aus `key_parts`
   und der `version` zusammengesetzt (versionsabhängige Hälften, beide Reihenfolgen als

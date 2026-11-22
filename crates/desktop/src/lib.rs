@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use core::config::Settings;
 use core::download::DownloadPrefs;
+pub use core::download::{Progress, ProgressSink};
 use core::error::Result;
 use core::hoster::Resolved;
 use core::model::{Hoster, Language, ProviderLinks, Quality};
@@ -136,7 +137,20 @@ impl Backend {
         prefs: &DownloadPrefs,
         cancel: Option<CancellationToken>,
     ) -> Result<PathBuf> {
-        core::download::download_url(&self.client, url, prefs, cancel).await
+        core::download::download_url(&self.client, url, prefs, cancel, None).await
+    }
+
+    /// Wie [`Backend::download`], meldet den Fortschritt aber an eine Senke — das
+    /// GUI-Frontend hängt hier seinen Progress-Kanal ein (z. B. einen
+    /// `std::sync::mpsc::Sender`, in den Closure verpackt).
+    pub async fn download_with_progress(
+        &self,
+        url: &str,
+        prefs: &DownloadPrefs,
+        cancel: Option<CancellationToken>,
+        progress: Option<&ProgressSink>,
+    ) -> Result<PathBuf> {
+        core::download::download_url(&self.client, url, prefs, cancel, progress).await
     }
 
     /// Bequemlichkeits-Variante: baut aus [`Settings`] + [`DownloadOverrides`]

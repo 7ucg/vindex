@@ -601,7 +601,7 @@ async fn download(
             file_name,
             native_hls: settings.native_hls,
         };
-        match core::download::download_url(&worker_state.client, &url, &prefs, None).await {
+        match core::download::download_url(&worker_state.client, &url, &prefs, None, None).await {
             Ok(path) => {
                 set_status(
                     &worker_state,

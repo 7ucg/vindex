@@ -211,11 +211,44 @@ async fn download_one(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let path = download_url(client, url, &prefs, None)
+    let progress = cli_progress_sink();
+    let path = download_url(client, url, &prefs, None, Some(&progress))
         .await
         .map_err(|e| anyhow::anyhow!("Download fehlgeschlagen: {e}"))?;
     record_watch_progress(url);
     Ok(path)
+}
+
+/// Baut einen Fortschritts-Sink, der eine einzeilige Statuszeile ausgibt
+/// (Segment-Zähler überschreibt sich per `\r`; Phasen stehen in eigenen Zeilen).
+fn cli_progress_sink() -> vindex_core::download::ProgressSink {
+    use std::io::Write as _;
+    use vindex_core::download::Progress;
+    std::sync::Arc::new(|event: Progress| {
+        let mut out = std::io::stdout().lock();
+        match event {
+            Progress::Resolving => {
+                let _ = writeln!(out, "  Stream auflösen ...");
+            }
+            Progress::Started {
+                total_segments: Some(n),
+            } => {
+                let _ = writeln!(out, "  {n} Segmente, lade nativ ...");
+            }
+            Progress::Started {
+                total_segments: None,
+            } => {}
+            Progress::Segment { done, total, bytes } => {
+                let mib = bytes as f64 / 1_048_576.0;
+                let _ = write!(out, "\r  Segment {done}/{total} ({mib:.1} MiB)   ");
+                let _ = out.flush();
+            }
+            Progress::Muxing => {
+                let _ = writeln!(out, "\r  Remux ...                         ");
+            }
+            Progress::Finished => {}
+        }
+    })
 }
 
 /// Aktualisiert nach erfolgreichem Episoden-Download den Watch-State (Slug +

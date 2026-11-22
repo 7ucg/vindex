@@ -55,9 +55,11 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## Desktop
 
-- **Fenster-Frontend** (tauri oder egui) auf der `core`-Facade. Die Facade reicht bereits
-  Suche, Provider, Download, Config und Hoster-Auflösung durch; fürs GUI fehlt noch
-  Fortschritts-Reporting (Progress-Kanal) und das Fenster selbst.
+- **Fenster-Frontend** (tauri oder egui) auf der `core`-Facade. Die Facade reicht Suche,
+  Provider, Download, Config und Hoster-Auflösung durch; das **Fortschritts-Reporting** ist
+  erledigt (`core::download::Progress`/`ProgressSink`, durch die ganze Download-Kette verdrahtet,
+  `Backend::download_with_progress`). Offen bleibt nur das Fenster selbst (Event-Loop + Widgets),
+  das wegen der System-Bibliotheken (WebKitGTK bzw. GPU) bewusst außerhalb des Workspaces liegt.
 
 ## Tests & Produkt-Entscheidungen
 
