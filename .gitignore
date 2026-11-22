@@ -22,3 +22,6 @@ target/
 /docs
 /dev-fixtures/
 /.claude/worktrees/
+/crates/desktop/design
+crates/desktop/DESKTOP-APP.md
+crates/desktop/TODO.md
