@@ -22,6 +22,8 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -66,15 +68,71 @@ async function toolResolve({ url, provider, language }) {
   };
 }
 
+// Private/lokale/reservierte IP? (v4 inkl. IPv4-mapped-v6, CGNAT, link-local …)
+function isPrivateIp(ip) {
+  let a = ip;
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (m) a = m[1];
+  if (isIP(a) === 4) {
+    const o = a.split(".").map(Number);
+    return (
+      o[0] === 0 ||
+      o[0] === 10 ||
+      o[0] === 127 ||
+      (o[0] === 100 && o[1] >= 64 && o[1] <= 127) || // CGNAT 100.64/10
+      (o[0] === 169 && o[1] === 254) || // link-local
+      (o[0] === 172 && o[1] >= 16 && o[1] <= 31) ||
+      (o[0] === 192 && o[1] === 168) ||
+      (o[0] === 198 && (o[1] === 18 || o[1] === 19)) || // benchmarking
+      o[0] >= 224 // multicast/reserved
+    );
+  }
+  const l = a.toLowerCase();
+  return (
+    l === "::1" ||
+    l === "::" ||
+    l.startsWith("fc") ||
+    l.startsWith("fd") || // unique local
+    l.startsWith("fe80") // link-local
+  );
+}
+
+async function hostAllowed(host) {
+  const bare = host.replace(/^\[|\]$/g, "");
+  if (["localhost", "metadata", "metadata.google.internal"].includes(bare.toLowerCase())) {
+    return false;
+  }
+  if (isIP(bare)) return !isPrivateIp(bare);
+  try {
+    const addrs = await lookup(bare, { all: true });
+    return addrs.length > 0 && addrs.every((r) => !isPrivateIp(r.address));
+  } catch {
+    return false;
+  }
+}
+
 async function toolProbe({ url, referer }) {
   const headers = { "User-Agent": UA };
   if (referer) headers["Referer"] = referer;
   const started = Date.now();
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 30000);
-    const res = await fetch(url, { headers, redirect: "follow", signal: ctrl.signal });
-    clearTimeout(t);
+    // SSRF-Bremse: wie der App-Proxy. http/https, keine privaten/lokalen Ziele,
+    // Redirects manuell und pro Hop neu geprüft (max. 5).
+    let current = new URL(url);
+    let res;
+    for (let hop = 0; hop <= 5; hop++) {
+      if (!/^https?:$/.test(current.protocol)) return { error: "nur http/https erlaubt" };
+      if (!(await hostAllowed(current.hostname))) return { error: `Ziel blockiert: ${current.hostname}` };
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 30000);
+      res = await fetch(current, { headers, redirect: "manual", signal: ctrl.signal });
+      clearTimeout(t);
+      if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+        current = new URL(res.headers.get("location"), current);
+        continue;
+      }
+      break;
+    }
     const buf = Buffer.from(await res.arrayBuffer());
     const ct = res.headers.get("content-type") || "";
     const isText = /mpegurl|text|json|xml/i.test(ct);
@@ -84,7 +142,7 @@ async function toolProbe({ url, referer }) {
       content_type: ct,
       bytes: buf.length,
       ms: Date.now() - started,
-      final_url: res.url,
+      final_url: current.toString(),
       head: isText ? buf.subarray(0, 600).toString("utf8") : `<${buf.length} bytes binär>`,
     };
   } catch (e) {

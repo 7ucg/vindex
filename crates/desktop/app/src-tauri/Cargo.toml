@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Lokaler Stream-Proxy: injiziert den Referer, den <video>/hls.js nicht setzen kann,
 # und schreibt HLS-Playlists auf proxied Segment-URLs um.
 axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
 reqwest = { version = "0.13", features = ["stream"] }
 futures-util = "0.3"
 base64 = "0.22"

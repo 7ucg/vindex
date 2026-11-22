@@ -80,7 +80,18 @@ pub async fn start() -> std::io::Result<Arc<Proxy>> {
         client,
         base: base.clone(),
     });
-    let router = Router::new().route("/s", get(serve)).with_state(state);
+    // Der WebView holt die Streams cross-origin (tauri://localhost → 127.0.0.1).
+    // Ohne CORS blockt der Browser die Antwort (hls.js: manifestLoadError). Der
+    // Zugriff ist ohnehin durch das Token + localhost-Bind geschützt.
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any)
+        .expose_headers(tower_http::cors::Any);
+    let router = Router::new()
+        .route("/s", get(serve))
+        .with_state(state)
+        .layer(cors);
 
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

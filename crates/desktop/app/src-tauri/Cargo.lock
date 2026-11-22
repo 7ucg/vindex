@@ -5958,6 +5958,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "vindex-desktop",
