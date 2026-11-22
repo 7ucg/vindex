@@ -1,12 +1,6 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import {
-  library,
-  deleteLibraryItem,
-  localFileUrl,
-  type LibraryEntry,
-} from "../lib/api";
-import { openPlayer } from "../lib/store";
+import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
+import { library, deleteLibraryItem, type LibraryEntry } from "../lib/api";
 
 function size(bytes: number): string {
   const m = bytes / (1024 * 1024);
@@ -21,8 +15,10 @@ export function Library(): JSX.Element {
   const [entries, { refetch }] = createResource(library);
   const [busy, setBusy] = createSignal<string | null>(null);
 
+  // Lokale Dateien (MKV/TS) spielt der System-Player zuverlässig — das WebView
+  // kommt mit dem MKV-Container nicht klar. In-Window-Offline folgt mit libmpv.
   const play = (e: LibraryEntry) => {
-    openPlayer({ title: e.name, url: localFileUrl(e.path), isHls: false });
+    void openPath(e.path).catch(() => {});
   };
 
   const remove = async (e: LibraryEntry) => {
@@ -95,8 +91,8 @@ export function Library(): JSX.Element {
       </Show>
 
       <p class="note">
-        Lokale Wiedergabe über das WebView — Container/Codec-Unterstützung hängt davon ab (MP4
-        läuft sicher, für MKV/TS kommt später der libmpv-Pfad). Löschen entfernt die Datei vom
+        „Abspielen" öffnet die Datei im System-Player (spielt MKV/TS zuverlässig). In-Window-
+        Wiedergabe lokaler Dateien folgt mit dem libmpv-Pfad. Löschen entfernt die Datei vom
         Datenträger.
       </p>
     </div>

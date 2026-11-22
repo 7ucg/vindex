@@ -8,6 +8,10 @@
     {
       "identifier": "opener:allow-reveal-item-in-dir",
       "allow": [{ "path": "$DOWNLOAD/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$DOWNLOAD/**" }]
     }
   ]
 }
