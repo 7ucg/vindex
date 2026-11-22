@@ -5,17 +5,24 @@
 //! injiziert den Referer beim Upstream-Abruf. HLS-Playlists werden umgeschrieben,
 //! sodass auch Segmente und Varianten wieder durch den Proxy (mit Referer) laufen.
 //! Range-Header werden durchgereicht, damit MP4-Streams spulbar sind.
+//!
+//! SSRF-Härtung: Redirects werden manuell verfolgt und **jeder** Hop neu geprüft
+//! (Schema + DNS-Auflösung + alle aufgelösten IPs gegen private/lokale Bereiche);
+//! der Bind ist localhost-only, jede Anfrage braucht das (CSPRNG-)Token, und der
+//! `Host`-Header muss auf localhost zeigen.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use axum::{
     body::Body,
     extract::{Query, State},
-    http::HeaderMap,
     http::{
-        header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, REFERER},
-        HeaderValue, StatusCode,
+        header::{
+            ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, HOST, LOCATION, RANGE,
+            REFERER,
+        },
+        HeaderMap, HeaderValue, StatusCode,
     },
     response::{IntoResponse, Response},
     routing::get,
@@ -27,6 +34,8 @@ use serde::Deserialize;
 
 const DESKTOP_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
      Chrome/124.0 Safari/537.36";
+
+const MAX_REDIRECTS: u8 = 6;
 
 /// Griff auf den laufenden Proxy: nur Basis-URL und Token, um Player-URLs zu bauen.
 pub struct Proxy {
@@ -48,12 +57,15 @@ impl Proxy {
 }
 
 /// Startet den Proxy auf einem freien lokalen Port. Lebt für die Programmdauer.
+/// Fail-closed: ohne CSPRNG-Token startet der Proxy nicht.
 pub async fn start() -> std::io::Result<Arc<Proxy>> {
-    let token = random_token();
+    let token = random_token()?;
+    // Redirects werden bewusst manuell verfolgt (Re-Validierung pro Hop).
     let client = reqwest::Client::builder()
         .user_agent(DESKTOP_UA)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .map_err(std::io::Error::other)?;
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
@@ -84,6 +96,11 @@ async fn serve(
     headers: HeaderMap,
     Query(q): Query<Q>,
 ) -> Response {
+    // Nur localhost: der Host-Header muss auf den lokalen Proxy zeigen (gegen
+    // DNS-Rebinding einer fremden Seite auf 127.0.0.1:<port>).
+    if !host_is_local(&headers) {
+        return (StatusCode::FORBIDDEN, "bad host").into_response();
+    }
     if !ct_eq(q.t.as_bytes(), st.token.as_bytes()) {
         return (StatusCode::FORBIDDEN, "bad token").into_response();
     }
@@ -92,31 +109,69 @@ async fn serve(
     };
     let referer = q.r.as_deref().and_then(b64d);
 
-    let Ok(url) = reqwest::Url::parse(&upstream) else {
+    let Ok(start_url) = reqwest::Url::parse(&upstream) else {
         return (StatusCode::BAD_REQUEST, "bad url").into_response();
     };
-    if !matches!(url.scheme(), "http" | "https") {
-        return (StatusCode::BAD_REQUEST, "scheme").into_response();
-    }
-    if is_private_host(url.host_str()) {
-        return (StatusCode::FORBIDDEN, "private host").into_response();
-    }
 
-    let mut req = st.client.get(url.clone());
-    if let Some(r) = &referer {
-        if let Ok(hv) = HeaderValue::from_str(r) {
-            req = req.header(REFERER, hv);
+    let range = headers.get(RANGE).cloned();
+    match fetch_validated(&st.client, start_url, referer.as_deref(), range.as_ref()).await {
+        Ok((final_url, resp)) => deliver(resp, &final_url, referer.as_deref(), &st).await,
+        Err((code, msg)) => (code, msg).into_response(),
+    }
+}
+
+/// Holt die Upstream-Antwort und verfolgt Redirects manuell, wobei jeder Hop neu
+/// gegen private/lokale Ziele geprüft wird. Gibt die finale URL (für die
+/// HLS-Basis) und die nicht-weiterleitende Antwort zurück.
+async fn fetch_validated(
+    client: &reqwest::Client,
+    start_url: reqwest::Url,
+    referer: Option<&str>,
+    range: Option<&HeaderValue>,
+) -> Result<(reqwest::Url, reqwest::Response), (StatusCode, &'static str)> {
+    let mut current = start_url;
+    for _ in 0..=MAX_REDIRECTS {
+        ensure_public(&current).await?;
+
+        let mut req = client.get(current.clone());
+        if let Some(r) = referer {
+            if let Ok(hv) = HeaderValue::from_str(r) {
+                req = req.header(REFERER, hv);
+            }
         }
-    }
-    // Range für Spulen durchreichen.
-    if let Some(range) = headers.get(RANGE) {
-        req = req.header(RANGE, range.clone());
-    }
+        if let Some(rg) = range {
+            req = req.header(RANGE, rg.clone());
+        }
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("upstream: {e}")).into_response(),
-    };
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "upstream"))?;
+
+        if resp.status().is_redirection() {
+            let loc = resp
+                .headers()
+                .get(LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or((StatusCode::BAD_GATEWAY, "redirect ohne location"))?;
+            current = current
+                .join(loc)
+                .map_err(|_| (StatusCode::BAD_GATEWAY, "bad redirect"))?;
+            continue;
+        }
+        return Ok((current, resp));
+    }
+    Err((StatusCode::BAD_GATEWAY, "zu viele redirects"))
+}
+
+/// Liefert die (nicht-weiterleitende) Antwort aus: HLS-Playlists umgeschrieben,
+/// alles andere mit erhaltenen Headern durchgestreamt.
+async fn deliver(
+    resp: reqwest::Response,
+    final_url: &reqwest::Url,
+    referer: Option<&str>,
+    st: &ProxyState,
+) -> Response {
     let status = resp.status();
     let ct = resp
         .headers()
@@ -127,18 +182,17 @@ async fn serve(
 
     let is_hls = ct.contains("mpegurl")
         || ct.contains("vnd.apple")
-        || url.path().to_ascii_lowercase().ends_with(".m3u8");
+        || final_url.path().to_ascii_lowercase().ends_with(".m3u8");
 
     if is_hls {
         let text = match resp.text().await {
             Ok(t) => t,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("body: {e}")).into_response(),
+            Err(_) => return (StatusCode::BAD_GATEWAY, "body").into_response(),
         };
-        let body = rewrite_playlist(&text, &url, referer.as_deref(), &st.base, &st.token);
+        let body = rewrite_playlist(&text, final_url, referer, &st.base, &st.token);
         return ([(CONTENT_TYPE, "application/vnd.apple.mpegurl")], body).into_response();
     }
 
-    // Direkte Datei: Status + relevante Header erhalten, Body durchstreamen.
     let mut builder = Response::builder().status(status);
     for name in [CONTENT_TYPE, CONTENT_LENGTH, CONTENT_RANGE, ACCEPT_RANGES] {
         if let Some(v) = resp.headers().get(&name) {
@@ -149,6 +203,104 @@ async fn serve(
         Ok(r) => r,
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "body").into_response(),
     }
+}
+
+/// Prüft Schema, Hostname-Allowlist und — über DNS-Auflösung — alle Ziel-IPs.
+/// Blockt private/lokale Ziele, IPv4-mapped-v6, CGNAT, Benchmarking u. a.
+async fn ensure_public(url: &reqwest::Url) -> Result<(), (StatusCode, &'static str)> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err((StatusCode::BAD_REQUEST, "scheme"));
+    }
+    let host = url.host_str().ok_or((StatusCode::BAD_REQUEST, "no host"))?;
+    if is_blocked_hostname(host) {
+        return Err((StatusCode::FORBIDDEN, "blocked host"));
+    }
+    // IP-Literal direkt prüfen, sonst alle aufgelösten IPs.
+    let bare = host.trim_matches(|c| c == '[' || c == ']');
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        return if is_private_ip(ip) {
+            Err((StatusCode::FORBIDDEN, "private ip"))
+        } else {
+            Ok(())
+        };
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    let mut any = false;
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "dns"))?;
+    for a in addrs {
+        any = true;
+        if is_private_ip(a.ip()) {
+            return Err((StatusCode::FORBIDDEN, "private ip"));
+        }
+    }
+    if !any {
+        return Err((StatusCode::BAD_GATEWAY, "dns leer"));
+    }
+    Ok(())
+}
+
+fn is_blocked_hostname(host: &str) -> bool {
+    let h = host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+    h == "localhost"
+        || h.ends_with(".localhost")
+        || h == "metadata"
+        || h == "metadata.google.internal"
+}
+
+/// Private/lokale/reservierte IP? Kanonisiert zuerst (IPv4-mapped-v6 → v4).
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_multicast()
+                || v4.octets()[0] == 0
+                || is_cgnat(v4)
+                || is_benchmarking(v4)
+                || is_ietf_protocol(v4)
+        }
+        IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
+                || (seg[0] & 0xffc0) == 0xfe80 // link local fe80::/10
+        }
+    }
+}
+
+fn is_cgnat(v4: Ipv4Addr) -> bool {
+    // 100.64.0.0/10
+    let o = v4.octets();
+    o[0] == 100 && (o[1] & 0xc0) == 64
+}
+fn is_benchmarking(v4: Ipv4Addr) -> bool {
+    // 198.18.0.0/15
+    let o = v4.octets();
+    o[0] == 198 && (o[1] & 0xfe) == 18
+}
+fn is_ietf_protocol(v4: Ipv4Addr) -> bool {
+    // 192.0.0.0/24 (IETF protocol assignments)
+    let o = v4.octets();
+    o[0] == 192 && o[1] == 0 && o[2] == 0
+}
+
+fn host_is_local(headers: &HeaderMap) -> bool {
+    let Some(h) = headers.get(HOST).and_then(|v| v.to_str().ok()) else {
+        // Kein Host-Header: HTTP/1.0-Client gibt es im WebView nicht — ablehnen.
+        return false;
+    };
+    let host = h.split(':').next().unwrap_or("");
+    host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1"
 }
 
 /// Schreibt eine HLS-Playlist so um, dass alle Kind-URLs wieder durch den Proxy laufen.
@@ -167,7 +319,6 @@ fn rewrite_playlist(
             continue;
         }
         if let Some(stripped) = t.strip_prefix('#') {
-            // Tags mit URI="..." (EXT-X-KEY, EXT-X-MEDIA, EXT-X-MAP) umschreiben.
             if let Some(rw) = rewrite_uri_attr(stripped, base, referer, proxy_base, token) {
                 out.push('#');
                 out.push_str(&rw);
@@ -177,7 +328,6 @@ fn rewrite_playlist(
             out.push('\n');
             continue;
         }
-        // Segment- oder Varianten-URI.
         match base.join(t) {
             Ok(abs) => out.push_str(&proxy_url(proxy_base, token, abs.as_str(), referer)),
             Err(_) => out.push_str(t),
@@ -235,47 +385,9 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Grobe SSRF-Bremse: offensichtlich private/lokale Hosts ablehnen. Der Proxy
-/// bindet ohnehin nur auf localhost und verlangt das Token.
-fn is_private_host(host: Option<&str>) -> bool {
-    let Some(h) = host else {
-        return true;
-    };
-    let h = h
-        .trim_matches(|c| c == '[' || c == ']')
-        .to_ascii_lowercase();
-    if h == "localhost" || h == "0.0.0.0" || h == "::1" || h.ends_with(".localhost") {
-        return true;
-    }
-    if h == "metadata" || h == "metadata.google.internal" {
-        return true;
-    }
-    if let Ok(v4) = h.parse::<std::net::Ipv4Addr>() {
-        return v4.is_loopback()
-            || v4.is_private()
-            || v4.is_link_local()
-            || v4.is_unspecified()
-            || v4.octets()[0] == 0;
-    }
-    if let Ok(v6) = h.parse::<std::net::Ipv6Addr>() {
-        let seg = v6.segments();
-        return v6.is_loopback()
-            || v6.is_unspecified()
-            || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
-            || (seg[0] & 0xffc0) == 0xfe80; // link local fe80::/10
-    }
-    false
-}
-
-fn random_token() -> String {
+/// CSPRNG-Token. Fail-closed: schlägt getrandom fehl, startet der Proxy nicht.
+fn random_token() -> std::io::Result<String> {
     let mut buf = [0u8; 24];
-    if getrandom::getrandom(&mut buf).is_err() {
-        // Fallback: Zeit-basiert (nur Notnagel; der Bind ist ohnehin localhost).
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        return format!("t{nanos:x}");
-    }
-    URL_SAFE_NO_PAD.encode(buf)
+    getrandom::getrandom(&mut buf).map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(buf))
 }
