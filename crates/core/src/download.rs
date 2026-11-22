@@ -54,6 +54,10 @@ pub struct DownloadPrefs {
     /// HLS-Segmente selbst holen (robust gegen 429) statt ffmpeg die Playlist
     /// ziehen zu lassen. ffmpeg remuxt weiterhin die zusammengesetzte Datei.
     pub native_hls: bool,
+    /// Ganz ohne ffmpeg: der native HLS-Download wird als roher MPEG-TS-Stream
+    /// (`.ts`) finalisiert statt remuxt (`VINDEX_NO_FFMPEG`). Greift nur auf dem
+    /// nativen HLS-Pfad; Einzel-MP4 und SAMPLE-AES brauchen weiter ffmpeg.
+    pub no_ffmpeg: bool,
 }
 
 impl DownloadPrefs {
@@ -100,6 +104,21 @@ fn report(progress: Option<&ProgressSink>, event: Progress) {
     }
 }
 
+/// Wählt den tatsächlich geschriebenen Pfad. Bei `VINDEX_NO_FFMPEG` finalisiert der
+/// native HLS-Pfad als `.ts` statt unter der ursprünglichen Endung — dann existiert
+/// die `.ts`-Variante statt `out_path`.
+fn final_output_path(out_path: PathBuf) -> PathBuf {
+    if out_path.exists() {
+        return out_path;
+    }
+    let ts = out_path.with_extension("ts");
+    if ts.exists() {
+        ts
+    } else {
+        out_path
+    }
+}
+
 pub async fn download_episode(
     client: &reqwest::Client,
     episode_url: &str,
@@ -142,7 +161,7 @@ pub async fn download_episode(
                     hoster.as_str()
                 );
                 report(progress, Progress::Finished);
-                return Ok(out_path);
+                return Ok(final_output_path(out_path));
             }
         }
     }
@@ -203,7 +222,7 @@ pub async fn download_movie(
                     hoster.as_str()
                 );
                 report(progress, Progress::Finished);
-                return Ok(out_path);
+                return Ok(final_output_path(out_path));
             }
         }
     }
@@ -366,6 +385,7 @@ async fn try_download_resolved(
                 out_path,
                 cancel,
                 progress,
+                prefs.no_ffmpeg,
             )
             .await);
         }
@@ -379,6 +399,7 @@ async fn try_download_resolved(
                     out_path,
                     cancel,
                     progress,
+                    prefs.no_ffmpeg,
                 )
                 .await
                 {
@@ -415,6 +436,7 @@ fn is_cancelled(cancel: &Option<CancellationToken>) -> bool {
 
 /// Liefert eine HLS-Variante aus: bei `native` erst der eigene Segment-Download,
 /// sonst oder bei Fehlschlag der ffmpeg-Mux. Gibt Erfolg als `bool` zurück.
+#[allow(clippy::too_many_arguments)]
 async fn deliver_hls(
     client: &reqwest::Client,
     url: &str,
@@ -423,12 +445,19 @@ async fn deliver_hls(
     out_path: &Path,
     cancel: &Option<CancellationToken>,
     progress: Option<&ProgressSink>,
+    no_ffmpeg: bool,
 ) -> bool {
     if native {
-        match download_hls_native(client, url, referer, out_path, cancel, progress).await {
+        match download_hls_native(client, url, referer, out_path, cancel, progress, no_ffmpeg).await
+        {
             Ok(true) => return true,
             Ok(false) => {} // verschlüsselt/leer → ffmpeg
             Err(e) => tracing::debug!("nativer HLS-Download fehlgeschlagen: {e}"),
+        }
+        // Ohne ffmpeg gibt es keinen Mux-Fallback (SAMPLE-AES/Unsupported bleiben offen).
+        if no_ffmpeg {
+            tracing::debug!("VINDEX_NO_FFMPEG: nativer Pfad nicht anwendbar, kein ffmpeg-Fallback");
+            return false;
         }
     }
     let variant = Resolved {
@@ -714,6 +743,7 @@ async fn download_hls_native(
     out_path: &Path,
     cancel: &Option<CancellationToken>,
     progress: Option<&ProgressSink>,
+    no_ffmpeg: bool,
 ) -> Result<bool> {
     if !is_http_url(media_url) {
         return Ok(false);
@@ -761,6 +791,16 @@ async fn download_hls_native(
     if let Err(e) = result {
         tokio::fs::remove_file(&part).await.ok();
         return Err(e);
+    }
+
+    if no_ffmpeg {
+        // Ganz ohne ffmpeg: den zusammengesetzten MPEG-TS-Stream direkt als `.ts`
+        // finalisieren (der Inhalt ist bereits valides TS; mpv/VLC spielen das).
+        let ts_path = out_path.with_extension("ts");
+        tokio::fs::rename(&part, &ts_path)
+            .await
+            .map_err(Error::Io)?;
+        return Ok(true);
     }
 
     // Zusammengesetzten TS-Stream nach out_path remuxen; die lokale Datei ist
@@ -1106,6 +1146,26 @@ mod tests {
     }
 
     #[test]
+    fn final_output_path_waehlt_ts_variante() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("vindex-finalpath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("Film.mkv");
+        let ts = dir.join("Film.ts");
+
+        // Nichts existiert → out_path unverändert.
+        assert_eq!(final_output_path(out.clone()), out);
+        // Nur .ts existiert (VINDEX_NO_FFMPEG-Fall) → .ts gewählt.
+        std::fs::write(&ts, b"x").unwrap();
+        assert_eq!(final_output_path(out.clone()), ts);
+        // out_path existiert → Vorrang.
+        std::fs::write(&out, b"y").unwrap();
+        assert_eq!(final_output_path(out.clone()), out);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn sweep_respects_bounds() {
         let prefs = DownloadPrefs {
             languages: vec![],
@@ -1115,6 +1175,7 @@ mod tests {
             out_dir: PathBuf::from("/tmp"),
             file_name: "x.mkv".into(),
             native_hls: false,
+            no_ffmpeg: false,
         };
         assert_eq!(
             prefs.quality_sweep(),

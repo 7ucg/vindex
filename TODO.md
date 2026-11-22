@@ -18,9 +18,9 @@ Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund
 
 ## Download & Wiedergabe
 
-- **Vollständig ffmpeg-freies HLS.** Segment-Download (`VINDEX_NATIVE_HLS`) und AES-128 laufen
-  nativ, nur das Remuxen nutzt noch ffmpeg. Ein eigener TS-Remuxer würde ffmpeg ersetzen;
-  `SAMPLE-AES` bliebe vorerst beim ffmpeg-Pfad. Braucht echte TS-Segmente zum Verifizieren.
+- **Vollständig ffmpeg-freies HLS** umgesetzt: `VINDEX_NO_FFMPEG` finalisiert den nativen
+  HLS-Download als rohen MPEG-TS (.ts) ohne ffmpeg. Offen (optional): echter TS→MKV-Remuxer für
+  .mkv-Container ohne ffmpeg; SAMPLE-AES bleibt am ffmpeg-Pfad.
 - **Syncplay** umgesetzt (Privacy-Flags + MPV_HOME-Härtung); nur der Lauf gegen echtes
   Syncplay ist noch Nutzer-seitig zu bestätigen.
 - **Mehrstaffel-MAL-ID.** Die Zuordnung Staffel→MAL-ID höherer Staffeln ist eine ID-Sortier-

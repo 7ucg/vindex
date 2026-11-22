@@ -113,6 +113,7 @@ pub async fn run() -> anyhow::Result<()> {
         out_dir: settings.download_path.clone(),
         file_name: file_name.clone(),
         native_hls: settings.native_hls,
+        no_ffmpeg: settings.no_ffmpeg,
     };
 
     println!("Lade „{file_name}\" ({}) ...", language.as_str());

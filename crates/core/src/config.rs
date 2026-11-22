@@ -27,6 +27,9 @@ pub struct Settings {
     /// Segmente von HLS-Streams selbst holen (robust gegen 429), statt ffmpeg die
     /// Playlist ziehen zu lassen (`VINDEX_NATIVE_HLS`). ffmpeg remuxt weiterhin.
     pub native_hls: bool,
+    /// Ganz ohne ffmpeg: nativer HLS-Download wird als roher MPEG-TS (`.ts`) finalisiert
+    /// statt remuxt (`VINDEX_NO_FFMPEG`).
+    pub no_ffmpeg: bool,
     /// TLS-Impersonate-Fallback (Anti-Bot Stufe 2) einschalten (`VINDEX_IMPERSONATE`).
     /// Bei Cloudflare-Verdacht wird die Anfrage einmalig über einen `wreq`-Client mit
     /// Chrome-Fingerprint wiederholt. Default **aus** (laut README standardmäßig
@@ -84,6 +87,7 @@ impl Default for Settings {
             keep_watching: false,
             naming_template: crate::naming::DEFAULT_TEMPLATE.to_string(),
             native_hls: false,
+            no_ffmpeg: false,
             impersonate: false,
             obscura: None,
             api_keys: Vec::new(),
@@ -133,6 +137,7 @@ impl Settings {
         s.aniskip = env_bool("VINDEX_ANISKIP", s.aniskip);
         s.keep_watching = env_bool("VINDEX_KEEP_WATCHING", s.keep_watching);
         s.native_hls = env_bool("VINDEX_NATIVE_HLS", s.native_hls);
+        s.no_ffmpeg = env_bool("VINDEX_NO_FFMPEG", s.no_ffmpeg);
         s.impersonate = env_bool("VINDEX_IMPERSONATE", s.impersonate);
         if let Some(v) = env("VINDEX_OBSCURA") {
             let v = v.trim();

@@ -73,6 +73,7 @@ pub fn prefs_from_settings(
             .unwrap_or_else(|| settings.download_path.clone()),
         file_name: file_name.into(),
         native_hls: overrides.native_hls.unwrap_or(settings.native_hls),
+        no_ffmpeg: settings.no_ffmpeg,
     }
 }
 

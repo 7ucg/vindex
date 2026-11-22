@@ -9,6 +9,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Download: ffmpeg-freier HLS-Pfad (`VINDEX_NO_FFMPEG`). Der native HLS-Download
+  (`VINDEX_NATIVE_HLS`, inkl. AES-128-Entschlüsselung) wird dann als roher MPEG-TS-Stream in eine
+  `.ts`-Datei finalisiert, statt mit ffmpeg zu remuxen — der zusammengesetzte TS ist bereits
+  abspielbar. Einzel-MP4 und SAMPLE-AES bleiben am ffmpeg-Pfad; ist nur der native Pfad nicht
+  anwendbar, bricht der Download ohne ffmpeg-Fallback ab. `final_output_path` wählt die tatsächlich
+  geschriebene Datei (`.ts` statt der ursprünglichen Endung).
 - Watch: synchronisierte Wiedergabe `--syncplay` (`core::mpv::build_syncplay_args`/
   `play_syncplay`), jetzt sicher umgesetzt. Die tokenisierte Stream-URL geht nicht an den
   Syncplay-Server/-Raum (`--filename-privacy`/`--file-size-privacy = DontSend`), und die mpv-

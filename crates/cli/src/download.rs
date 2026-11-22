@@ -78,6 +78,7 @@ pub(crate) struct ResolvedPrefs {
     min_quality: Quality,
     out_dir: PathBuf,
     native_hls: bool,
+    no_ffmpeg: bool,
 }
 
 impl ResolvedPrefs {
@@ -91,6 +92,7 @@ impl ResolvedPrefs {
             out_dir: self.out_dir.clone(),
             file_name: file_name_from_url(url),
             native_hls: self.native_hls,
+            no_ffmpeg: self.no_ffmpeg,
         }
     }
 }
@@ -140,6 +142,7 @@ pub(crate) fn resolve_prefs_from(
         min_quality: settings.min_quality,
         out_dir,
         native_hls: settings.native_hls,
+        no_ffmpeg: settings.no_ffmpeg,
     })
 }
 
