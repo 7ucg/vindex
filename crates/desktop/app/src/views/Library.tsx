@@ -1,4 +1,5 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   library,
   deleteLibraryItem,
@@ -79,6 +80,9 @@ export function Library(): JSX.Element {
                 <div class="act">
                   <button class="chip" onClick={() => play(e)}>
                     Abspielen
+                  </button>
+                  <button class="chip" onClick={() => void revealItemInDir(e.path).catch(() => {})}>
+                    Ordner
                   </button>
                   <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
                     {busy() === e.name ? "…" : "Löschen"}

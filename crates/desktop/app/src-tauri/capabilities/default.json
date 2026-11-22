@@ -1,9 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimale Rechte fürs Hauptfenster: nur Core-Plugins. Opener/FS werden erst gewährt, wenn eine Ansicht sie braucht — dann eng scoped (z. B. opener:allow-reveal-item-in-dir auf den Download-Ordner).",
+  "description": "Minimale Rechte fürs Hauptfenster: Core-Plugins und — eng scoped — das Anzeigen einer Datei im Dateimanager (nur im Download-Ordner).",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    {
+      "identifier": "opener:allow-reveal-item-in-dir",
+      "allow": [{ "path": "$DOWNLOAD/**" }]
+    }
   ]
 }
