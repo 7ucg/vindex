@@ -34,7 +34,24 @@ static PROXY_CURSOR: AtomicUsize = AtomicUsize::new(0);
 /// Parser wie der Consumer (`reqwest::Proxy::all`), damit Validator und Verbraucher
 /// nicht auseinanderlaufen; zusätzlich werden gesperrte IP-Literale abgewiesen.
 fn proxy_entry_ok(entry: &str) -> bool {
-    reqwest::Proxy::all(entry).is_ok() && !host_is_forbidden_ip_literal(entry)
+    // Erst normalisieren und prüfen (verlangt ein bekanntes Schema — schließt
+    // schemalose Einträge wie "127.0.0.1:8080" aus, die sonst die IP-Prüfung
+    // umgehen würden), dann die Grammatik des Consumers (`Proxy::all`) bestätigen.
+    let Ok(url) = reqwest::Url::parse(entry) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
+        return false;
+    }
+    if let Some(host) = url.host_str() {
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if is_forbidden_ip(ip) {
+                return false;
+            }
+        }
+    }
+    reqwest::Proxy::all(entry).is_ok()
 }
 
 /// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge werden
@@ -506,6 +523,9 @@ mod tests {
         assert!(proxy_entry_ok("socks5://1.1.1.1:1080"));
         assert!(!proxy_entry_ok("http://127.0.0.1:8080")); // gesperrtes IP-Literal
         assert!(!proxy_entry_ok("http://169.254.169.254:3128")); // Metadata-IP
+        assert!(!proxy_entry_ok("127.0.0.1:8080")); // schemalos → abgewiesen
+        assert!(!proxy_entry_ok("169.254.169.254:3128")); // schemalos + Metadata
+        assert!(!proxy_entry_ok("ftp://proxy:21")); // Schema nicht erlaubt
         assert!(!proxy_entry_ok("kein url")); // nicht parsebar
     }
 
