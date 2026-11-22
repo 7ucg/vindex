@@ -20,23 +20,28 @@ use crate::naming::{episode_number_from_title, strip_episode_marker};
 pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> Result<Vec<u32>> {
     let url = format!("{base}/anime/stream/{slug}");
     let body = super::fetch_text(client, &url).await?;
-    let seasons = {
-        let doc = Html::parse_document(&body);
-        let nav_sel =
-            Selector::parse("div.hosterSiteDirectNav ul li a:not([data-episode-id])").unwrap();
-        let mut out = std::collections::BTreeSet::new();
-        for el in doc.select(&nav_sel) {
-            let text = el.text().collect::<String>();
-            let text = text.trim();
-            if text.eq_ignore_ascii_case("Filme") {
-                out.insert(0);
-            } else if let Ok(n) = text.parse::<u32>() {
-                out.insert(n);
-            }
+    Ok(parse_season_nav(&body))
+}
+
+/// Reine HTML→Staffel-Logik von [`list_seasons`]. Liest die Staffel-Navigation
+/// (`div.hosterSiteDirectNav`): numerische Einträge sind Staffeln, „Filme" ist
+/// Staffel 0. Episoden-Links (`data-episode-id`) werden ausgelassen. Sortiert &
+/// dedupliziert.
+fn parse_season_nav(body: &str) -> Vec<u32> {
+    let doc = Html::parse_document(body);
+    let nav_sel =
+        Selector::parse("div.hosterSiteDirectNav ul li a:not([data-episode-id])").unwrap();
+    let mut out = std::collections::BTreeSet::new();
+    for el in doc.select(&nav_sel) {
+        let text = el.text().collect::<String>();
+        let text = text.trim();
+        if text.eq_ignore_ascii_case("Filme") {
+            out.insert(0);
+        } else if let Ok(n) = text.parse::<u32>() {
+            out.insert(n);
         }
-        out.into_iter().collect::<Vec<_>>()
-    };
-    Ok(seasons)
+    }
+    out.into_iter().collect()
 }
 
 /// Liefert die Episoden einer Staffel (`season = 0` ⇒ Filme-Tab).
@@ -411,5 +416,77 @@ mod tests {
     #[test]
     fn episoden_unbekannte_staffel_ist_leer() {
         assert!(parse_episodes(episoden_html(), BASE_T, 7).is_empty());
+    }
+
+    #[test]
+    fn episoden_filme_tab_ist_staffel_null() {
+        // Der Filme-Tab trägt keine [Episode N]-Marker; Titel bleiben wie sie sind,
+        // die Reihenfolge bestimmt index_in_season.
+        let html = r#"<table><tbody id="season0">
+          <tr><td class="seasonEpisodeTitle"><a href="/anime/stream/x/filme/film-1"><span>Der erste Film</span></a></td></tr>
+          <tr><td class="seasonEpisodeTitle"><a href="/anime/stream/x/filme/film-2"><span>Zweiter Film</span></a></td></tr>
+        </tbody></table>"#;
+        let eps = parse_episodes(html, BASE_T, 0);
+        assert_eq!(eps.len(), 2);
+        assert_eq!(eps[0].season, 0);
+        assert_eq!(eps[0].title, "Der erste Film");
+        assert_eq!(eps[0].explicit_number, None);
+        assert_eq!(eps[0].index_in_season, 1);
+        assert_eq!(
+            eps[1].url,
+            "https://example.test/anime/stream/x/filme/film-2"
+        );
+        assert_eq!(eps[1].index_in_season, 2);
+    }
+
+    // Synthetische Staffel-Navigation im serienstream/aniworld-Layout.
+    const NAV_HTML: &str = r#"
+    <div class="hosterSiteDirectNav">
+      <ul>
+        <li><a href="/anime/stream/x/filme" title="Filme">Filme</a></li>
+        <li><a href="/anime/stream/x/staffel-1">1</a></li>
+        <li><a href="/anime/stream/x/staffel-2">2</a></li>
+        <li><a href="/anime/stream/x/staffel-3">3</a></li>
+        <li><a href="/anime/stream/x/staffel-1/episode-1" data-episode-id="501">1</a></li>
+        <li><a href="/anime/stream/x/staffel-1/episode-2" data-episode-id="502">2</a></li>
+      </ul>
+    </div>"#;
+
+    #[test]
+    fn staffel_nav_filme_und_staffeln() {
+        // Filme → 0, Staffeln numerisch, Episoden-Links (data-episode-id) ignoriert.
+        assert_eq!(parse_season_nav(NAV_HTML), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn staffel_nav_sortiert_und_dedupliziert() {
+        let html = r##"
+        <div class="hosterSiteDirectNav"><ul>
+          <li><a href="#">3</a></li>
+          <li><a href="#">1</a></li>
+          <li><a href="#">3</a></li>
+          <li><a href="#">2</a></li>
+        </ul></div>"##;
+        assert_eq!(parse_season_nav(html), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn staffel_nav_ohne_filme_tab() {
+        let html = r##"
+        <div class="hosterSiteDirectNav"><ul>
+          <li><a href="#">1</a></li>
+          <li><a href="#">2</a></li>
+        </ul></div>"##;
+        assert_eq!(parse_season_nav(html), vec![1, 2]);
+    }
+
+    #[test]
+    fn staffel_nav_leer_oder_fremd_ist_leer() {
+        assert!(parse_season_nav("").is_empty());
+        // Nav fehlt → nichts; nicht-numerische Labels werden ignoriert.
+        assert!(parse_season_nav(
+            r##"<div class="hosterSiteDirectNav"><ul><li><a href="#">Staffel A</a></li></ul></div>"##
+        )
+        .is_empty());
     }
 }
