@@ -230,6 +230,11 @@ fn extract_key(headers: &HeaderMap) -> Option<String> {
 }
 
 /// sha256-Hash eines Strings als Hex (lowercase, 64 Zeichen).
+///
+/// Bewusst ein schneller Hash, kein langsamer KDF (argon2/scrypt): die Keys sind
+/// hochentropisch (256-Bit-Zufall aus [`generate_key`]), da ist ein Offline-
+/// Bruteforce nicht praktikabel und ein Password-KDF wäre fehl am Platz. Keys
+/// sollten daher ausschließlich aus `generate_key` stammen, nicht aus Passwörtern.
 fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(64);

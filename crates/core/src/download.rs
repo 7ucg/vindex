@@ -415,10 +415,11 @@ fn parse_media_sequence(text: &str) -> u64 {
     0
 }
 
-/// True, wenn beide URLs denselben (vorhandenen) Host haben.
-fn same_host(a: &str, b: &str) -> bool {
+/// True, wenn beide URLs denselben Origin haben (Schema + Host + Port). Das deckt
+/// auch einen Schema-Downgrade ab (https-Playlist, http-Schlüssel → anderer Origin).
+fn same_origin(a: &str, b: &str) -> bool {
     match (reqwest::Url::parse(a).ok(), reqwest::Url::parse(b).ok()) {
-        (Some(ua), Some(ub)) => ua.host_str().is_some() && ua.host_str() == ub.host_str(),
+        (Some(ua), Some(ub)) => ua.host_str().is_some() && ua.origin() == ub.origin(),
         _ => false,
     }
 }
@@ -496,16 +497,21 @@ async fn load_aes128_ctx(
     if !is_http_url(&key_url) || crate::http::host_is_forbidden_ip_literal(&key_url) {
         return Err(Error::extract("HLS", "Schlüssel-URL nicht erlaubt"));
     }
-    // Schlüssel nur vom selben Host wie die Playlist laden — sonst könnte ein
+    // Schlüssel nur vom selben Origin wie die Playlist laden — sonst könnte ein
     // manipuliertes EXT-X-KEY den Request (samt Referer) auf einen fremden Host lenken.
-    if !same_host(&key_url, media_url) {
-        return Err(Error::extract("HLS", "Schlüssel-URL auf fremdem Host"));
+    if !same_origin(&key_url, media_url) {
+        return Err(Error::extract("HLS", "Schlüssel-URL auf fremdem Origin"));
     }
 
     // Schlüsselantwort streamen und hart deckeln — ein Schlüssel ist 16 Byte.
     let resp = crate::http::get_retry(client, &key_url, referer)
         .await?
         .error_for_status()?;
+    // Nach etwaigen Redirects erneut prüfen: landet der Abruf auf einem fremden
+    // Origin, wird er verworfen (die Host-Pin darf nicht per Umleitung fallen).
+    if !same_origin(resp.url().as_str(), media_url) {
+        return Err(Error::extract("HLS", "Schlüssel-Abruf wurde umgeleitet"));
+    }
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
