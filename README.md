@@ -67,7 +67,8 @@ vindex download --continue "https://aniworld.to/anime/stream/<slug>"
 # Episode/Film direkt in mpv abspielen statt laden (Referer + AniSkip-Kapitel)
 vindex watch "https://aniworld.to/anime/stream/<slug>/staffel-1/episode-1" \
   --language "German Dub" --provider VOE
-# Voraussetzung: mpv ist installiert und im PATH.
+# Player wählbar: --player mpv (Standard) oder --player iina (macOS).
+# Voraussetzung: mpv (bzw. iina-cli) ist installiert und im PATH.
 
 # Interaktives Menü
 vindex menu

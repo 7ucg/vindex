@@ -9,6 +9,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Watch: Player-Auswahl `--player mpv|iina` (`core::mpv::Player`). IINA läuft über `iina-cli`
+  und bekommt dieselben (gehärteten) mpv-Optionen als `--mpv-…`; die URL bleibt ein eigenes
+  letztes Argument. Standard bleibt mpv.
 - Download: Fortschritts-Reporting (`core::download::Progress`/`ProgressSink`). Ein optionaler,
   threadsicherer Sink wird durch die ganze Kette (`download_url`/`_episode`/`_movie` →
   `try_download_resolved` → nativer HLS-Segment-Loop) gereicht und meldet Auflösen, Start mit

@@ -8,7 +8,7 @@ use vindex_core::aniskip::{self, skip_times};
 use vindex_core::config::Settings;
 use vindex_core::download::resolve_playable;
 use vindex_core::http;
-use vindex_core::mpv::{build_mpv_args, play, AniSkipTimes};
+use vindex_core::mpv::{build_player_args, play_with, AniSkipTimes, Player};
 use vindex_core::watchstate::episode_from_url;
 
 use crate::download::{file_name_from_url, resolve_prefs_from};
@@ -26,6 +26,9 @@ pub struct WatchArgs {
     /// Höchste Qualität (360p..4K). Bei HLS wählt mpv die Variante selbst.
     #[arg(long)]
     pub quality: Option<String>,
+    /// Player: `mpv` (Standard) oder `iina` (nur macOS).
+    #[arg(long)]
+    pub player: Option<String>,
 }
 
 pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
@@ -75,16 +78,23 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
         None
     };
 
+    let player = match args.player.as_deref() {
+        None => Player::Mpv,
+        Some(name) => Player::from_name(name)
+            .ok_or_else(|| anyhow::anyhow!("Unbekannter Player: {name} (nutze mpv oder iina)"))?,
+    };
+
     let title = title_from_url(&args.url);
-    let mpv_args = build_mpv_args(
+    let player_args = build_player_args(
+        player,
         &stream.url,
         stream.referer.as_deref(),
         title.as_deref(),
         aniskip.as_ref(),
     );
 
-    println!("Starte mpv ...");
-    play(&mpv_args)
+    println!("Starte {} ...", player.binary());
+    play_with(player, &player_args)
         .await
         .map_err(|e| anyhow::anyhow!("Wiedergabe fehlgeschlagen: {e}"))?;
     Ok(())

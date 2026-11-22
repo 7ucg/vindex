@@ -96,8 +96,38 @@ fn sanitize(v: &str) -> String {
 /// AniSkip-Kapitel werden über mpvs `memory://`-Protokoll inline an
 /// `--chapters-file` gehängt (kein Temp-File nötig): die ffmetadata-Kapitelliste
 /// steht direkt im Argument.
-pub fn build_mpv_args(
-    stream_url: &str,
+/// Externer Player für den Watch-Modus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Player {
+    /// mpv (Standard, alle Plattformen).
+    #[default]
+    Mpv,
+    /// IINA (nur macOS); über `iina-cli`, mpv-Optionen als `--mpv-…`.
+    Iina,
+}
+
+impl Player {
+    /// Das zu startende Binary.
+    pub fn binary(&self) -> &'static str {
+        match self {
+            Player::Mpv => "mpv",
+            Player::Iina => "iina-cli",
+        }
+    }
+
+    /// Parst einen Player-Namen (`mpv`, `iina`/`iina-cli`), case-insensitiv.
+    pub fn from_name(name: &str) -> Option<Player> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "mpv" => Some(Player::Mpv),
+            "iina" | "iina-cli" => Some(Player::Iina),
+            _ => None,
+        }
+    }
+}
+
+/// Baut die mpv-Options-Tokens (Härtung, Referer, Titel, AniSkip-Kapitel) — ohne
+/// `--`-Trenner und ohne URL. Gemeinsame Basis für mpv und IINA.
+fn mpv_option_tokens(
     referer: Option<&str>,
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
@@ -127,10 +157,43 @@ pub fn build_mpv_args(
             args.push(format!("--chapters-file=memory://{}", a.to_ffmetadata()));
         }
     }
+    args
+}
+
+pub fn build_mpv_args(
+    stream_url: &str,
+    referer: Option<&str>,
+    title: Option<&str>,
+    aniskip: Option<&AniSkipTimes>,
+) -> Vec<String> {
+    let mut args = mpv_option_tokens(referer, title, aniskip);
     // Optionen-Ende: alles danach ist die (nicht als Option gedeutete) URL.
     args.push("--".to_string());
     args.push(stream_url.to_string());
     args
+}
+
+/// Baut die Argumente für den gewählten Player. Für mpv wie [`build_mpv_args`];
+/// für IINA werden dieselben Optionen als `--mpv-<opt>` an `iina-cli` übergeben und
+/// die URL als letztes Argument angehängt (kein `--`-Trenner, iina-cli kennt ihn nicht).
+pub fn build_player_args(
+    player: Player,
+    stream_url: &str,
+    referer: Option<&str>,
+    title: Option<&str>,
+    aniskip: Option<&AniSkipTimes>,
+) -> Vec<String> {
+    match player {
+        Player::Mpv => build_mpv_args(stream_url, referer, title, aniskip),
+        Player::Iina => {
+            let mut args: Vec<String> = mpv_option_tokens(referer, title, aniskip)
+                .into_iter()
+                .map(|opt| format!("--mpv-{}", opt.trim_start_matches("--")))
+                .collect();
+            args.push(stream_url.to_string());
+            args
+        }
+    }
 }
 
 /// Startet mpv mit den gebauten Argumenten und wartet auf das Ende der Wiedergabe.
@@ -139,22 +202,28 @@ pub fn build_mpv_args(
 /// Fehlt mpv im PATH, kommt ein sauberer Fehler statt eines Panics; ein
 /// Nicht-Null-Exit wird ebenfalls als Fehler gemeldet.
 pub async fn play(args: &[String]) -> Result<()> {
-    let mut cmd = Command::new("mpv");
+    play_with(Player::Mpv, args).await
+}
+
+/// Wie [`play`], aber für einen frei gewählten [`Player`] (mpv oder IINA).
+pub async fn play_with(player: Player, args: &[String]) -> Result<()> {
+    let bin = player.binary();
+    let mut cmd = Command::new(bin);
     cmd.kill_on_drop(true);
     cmd.args(args);
     let status = match cmd.status().await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Error::Mpv(
-                "mpv nicht gefunden — bitte installieren und in den PATH legen".into(),
-            ));
+            return Err(Error::Mpv(format!(
+                "{bin} nicht gefunden — bitte installieren und in den PATH legen"
+            )));
         }
         Err(e) => return Err(Error::Io(e)),
     };
     if status.success() {
         Ok(())
     } else {
-        Err(Error::Mpv(format!("mpv endete mit Status {status}")))
+        Err(Error::Mpv(format!("{bin} endete mit Status {status}")))
     }
 }
 
@@ -323,5 +392,46 @@ mod tests {
         assert_eq!(args.last().unwrap(), url);
         // Es gibt genau ein URL-Argument (keine Aufspaltung).
         assert_eq!(args.iter().filter(|a| a.as_str() == url).count(), 1);
+    }
+
+    #[test]
+    fn player_from_name_parst_varianten() {
+        assert_eq!(Player::from_name("mpv"), Some(Player::Mpv));
+        assert_eq!(Player::from_name("IINA"), Some(Player::Iina));
+        assert_eq!(Player::from_name("iina-cli"), Some(Player::Iina));
+        assert_eq!(Player::from_name(" MPV "), Some(Player::Mpv));
+        assert_eq!(Player::from_name("vlc"), None);
+        assert_eq!(Player::Mpv.binary(), "mpv");
+        assert_eq!(Player::Iina.binary(), "iina-cli");
+    }
+
+    #[test]
+    fn iina_args_praefixen_mpv_optionen() {
+        let url = "https://cdn.example/s.m3u8";
+        let args = build_player_args(Player::Iina, url, Some("https://ref"), Some("Titel"), None);
+        // Jede mpv-Option trägt das --mpv-Präfix …
+        assert!(args.contains(&"--mpv-no-config".to_string()));
+        assert!(args.contains(&"--mpv-ytdl=no".to_string()));
+        assert!(args.contains(&"--mpv-load-scripts=no".to_string()));
+        assert!(args.contains(&"--mpv-force-media-title=Titel".to_string()));
+        assert!(args
+            .iter()
+            .any(|a| a == "--mpv-http-header-fields-append=Referer: https://ref"));
+        // … kein nacktes --option bleibt übrig, und die URL ist das letzte Argument.
+        assert!(!args.iter().any(|a| a.starts_with("--no-")));
+        assert_eq!(args.last().unwrap(), url);
+        // iina-cli kennt keinen `--`-Trenner.
+        assert!(!args.iter().any(|a| a == "--"));
+    }
+
+    #[test]
+    fn mpv_und_iina_tragen_dieselben_optionen() {
+        let url = "https://cdn.example/s.m3u8";
+        let mpv = build_player_args(Player::Mpv, url, Some("https://r"), Some("T"), None);
+        let iina = build_player_args(Player::Iina, url, Some("https://r"), Some("T"), None);
+        // Gleiche Zahl Optionen (mpv hat zusätzlich den `--`-Trenner).
+        assert_eq!(mpv.len(), iina.len() + 1);
+        assert_eq!(mpv.last().unwrap(), url);
+        assert_eq!(iina.last().unwrap(), url);
     }
 }
