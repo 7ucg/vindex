@@ -1,15 +1,45 @@
-import { createResource, Show, type JSX } from "solid-js";
+import { createResource, createSignal, For, Show, type JSX } from "solid-js";
 import { appSettings, appInfo } from "../lib/api";
+import { applyTheme, getTheme, type Theme } from "../lib/theme";
+
+const THEMES: { id: Theme; label: string }[] = [
+  { id: "dark", label: "Dunkel" },
+  { id: "light", label: "Hell" },
+  { id: "amoled", label: "AMOLED" },
+];
 
 // Settings: zeigt die effektiven Laufzeit-Einstellungen (VINDEX_* / .env), live aus dem Kern.
 export function Settings(): JSX.Element {
   const [settings] = createResource(appSettings);
   const [info] = createResource(appInfo);
+  const [theme, setTheme] = createSignal<Theme>(getTheme());
+
+  const pickTheme = (t: Theme) => {
+    applyTheme(t);
+    setTheme(t);
+  };
 
   return (
     <div class="wrap">
       <div class="row-h">
         <h2>Einstellungen</h2>
+      </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Erscheinungsbild</h2>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <For each={THEMES}>
+          {(t) => (
+            <button
+              class="chip"
+              classList={{ on: theme() === t.id }}
+              onClick={() => pickTheme(t.id)}
+            >
+              {t.label}
+            </button>
+          )}
+        </For>
       </div>
 
       <Show when={settings()} fallback={<div class="spinner" />}>

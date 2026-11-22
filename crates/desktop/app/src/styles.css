@@ -18,6 +18,30 @@
   --sidebar: 236px;
   --grad: linear-gradient(135deg, var(--v1), var(--v2) 55%, var(--v3));
   --grad-play: linear-gradient(135deg, var(--play2), var(--play));
+  --side-top: #120f22;
+  --side-bottom: #0c0a16;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f2fb;
+  --surface: #ffffff;
+  --surface-2: #efebf8;
+  --line: rgba(24, 16, 48, 0.1);
+  --line-2: rgba(24, 16, 48, 0.17);
+  --text: #1b1535;
+  --muted: #6a6190;
+  --side-top: #ffffff;
+  --side-bottom: #f1edfa;
+  color-scheme: light;
+}
+
+:root[data-theme="amoled"] {
+  --bg: #000000;
+  --surface: #0a0910;
+  --surface-2: #131019;
+  --side-top: #050408;
+  --side-bottom: #000000;
   color-scheme: dark;
 }
 
@@ -54,7 +78,7 @@ a {
 
 /* ---------- Sidebar ---------- */
 .side {
-  background: linear-gradient(180deg, #120f22, #0c0a16);
+  background: linear-gradient(180deg, var(--side-top), var(--side-bottom));
   border-right: 1px solid var(--line);
   padding: 16px 12px;
   display: flex;
