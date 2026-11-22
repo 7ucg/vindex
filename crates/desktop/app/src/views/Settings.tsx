@@ -9,6 +9,8 @@ import {
   type DesktopConfig,
 } from "../lib/api";
 
+import { exportState, importState } from "../lib/backup";
+
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 import {
@@ -74,6 +76,12 @@ export function Settings(): JSX.Element {
   };
   const empty = (v: string) => (v.trim() === "" ? null : v);
 
+  let fileInput: HTMLInputElement | undefined;
+  const onImport = async (e: Event) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (f && (await importState(f))) location.reload();
+  };
+
   const pickTheme = (t: Theme) => {
     applyTheme(t);
     setTheme(t);
@@ -136,6 +144,25 @@ export function Settings(): JSX.Element {
             </button>
           )}
         </For>
+      </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Daten</h2>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <button class="chip" onClick={exportState}>
+          Sichern (Export)
+        </button>
+        <button class="chip" onClick={() => fileInput?.click()}>
+          Wiederherstellen (Import)
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json"
+          style={{ display: "none" }}
+          onChange={(e) => void onImport(e)}
+        />
       </div>
 
       <div class="row-h" style={{ margin: "6px 2px 10px" }}>
