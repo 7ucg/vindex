@@ -6,17 +6,30 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Als Nächstes
 
-- **serienstream.to-Scraper.** Die Seite wurde umgebaut und weicht von aniworld.to ab:
-  Pfade `/serie/<slug>/…` (ohne `stream`), Hoster über `data-provider-name`,
-  `data-play-url` und `data-link-id` statt `li[data-lang-key][data-link-target]`/
-  `/redirect/N`, 301 von `/serie/stream/…` auf `http://…/serie/…`. Dazu häufige
-  Cloudflare-Captchas, die den Fast-Path (Stufe 1) blocken — braucht also auch
-  TLS-Impersonate/Browser (Stufe 2/3). Eigener serienstream-Pfad statt der
-  aniworld-Selektoren nötig. s.to ist tot (Mirror auf serienstream.to bleibt sinnvoll).
-- **Fehlende Hoster-Resolver.** Streamtape, Luluvdo und LoadX haben noch keinen
-  Extraktor. Keine Vorlage zum Abschreiben; die Algorithmen müssen live ermittelt
-  werden. Baumuster: Streamtape wie Doodstream (Token aus HTML + Referer), Luluvdo wie
-  Filemoon (packed JS / Byse-AES-GCM), LoadX wie ein XHR-getSources-Endpunkt.
+- **serienstream.to-Scraper.** Die Seite wurde umgebaut und weicht von aniworld.to ab
+  (live analysiert, Fixture in `dev-fixtures/serienstream-got-s1e1.html`):
+  - Pfad `/serie/<slug>/staffel-X/episode-Y`, 301 von `/serie/stream/…` auf
+    `http://…/serie/…`.
+  - Hoster pro Element über `data-provider-name` (Name), `data-link-id` (Id) und
+    `data-play-url="/r?t=<token>"`; Sprache über `data-language-id` (1=Deutsch,
+    2=Englisch) und `data-language-label`.
+  - `<token>` ist base64-JSON `{iv,value,mac,tag}` = Laravel-`Crypt` (AES-256-CBC+HMAC).
+    Nicht clientseitig entschlüsseln: `GET https://serienstream.to/r?t=<token>` folgt
+    serverseitig zum Hoster-Embed (wie aniworlds `/redirect/N`), den dann der normale
+    Hoster-Resolver übernimmt.
+  - Blocker: häufige Cloudflare-Captchas → braucht zusätzlich TLS-Impersonate/Browser
+    (Stufe 2/3). Der Parser lässt sich aber schon gegen das Fixture bauen und testen.
+  - s.to ist tot (Mirror s.to → serienstream.to bleibt sinnvoll).
+- **Fehlende Hoster-Resolver.** Streamtape, Luluvdo und LoadX haben noch keinen Extraktor.
+  Keine fertige Vorlage; Baumuster (siehe auch die Referenz unter `Source-Third-projects/`):
+  - **Streamtape** wie Doodstream: Embed-HTML holen, `id="robotlink"`/`ideoolink`-innerHTML
+    + nachfolgenden `substring`-Teil zusammensetzen, `https:` davor, `&stream=1` anhängen.
+  - **Luluvdo** wie Filemoon: `/e/<code>` oder `/d/<code>` → packed JS → `unpack_js`
+    (`hoster::common`) → `sources:[{file:"…m3u8"}]`; neuere Varianten über JSON-API (AES-GCM).
+  - **LoadX** wie Vidstream: XHR-`getVideo`/`getSources` mit `X-Requested-With`, Antwort
+    `m3u8`/`securedLink`, ggf. AES-CBC.
+  Exakte Keys/Regexe müssen gegen Live-Embeds bestimmt werden — Embeds mit `dev/capture.sh`
+  sichern, sobald ein Portal diese Hoster anbietet.
 
 ## Netzwerk & Anti-Bot
 
@@ -47,6 +60,21 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
   TS-Remuxer würde ffmpeg ganz ersetzen; dazu AES-128-Entschlüsselung für verschlüsselte
   Playlists (fallen aktuell auf ffmpeg zurück).
 - **Watch** via mpv/IINA inkl. AniSkip, dazu Syncplay und Anime4K.
+
+## Entwicklung, Tests & Methoden
+
+- **Fixture-basierte Scraper-/Resolver-Tests.** Reine Parse-Funktionen gegen gesicherte
+  HTML-Beispiele testen (synthetische, token-freie Fixtures im Repo; echte Live-Seiten
+  nur lokal in `dev-fixtures/`, gitignored). Deckt die Scraper ab, ohne Netz und ohne
+  Portal-Inhalte zu veröffentlichen.
+- **Capture-Methode** (`dev/capture.sh <url> <datei>`): sichert eine Live-Seite über
+  Cloudflare-DoH (1.1.1.1) mit Browser-UA nach `dev-fixtures/`. Grundlage, um neue
+  Hoster-/Portal-Varianten offline zu analysieren.
+- **Integrationstests gegen den Daemon** (axum-`oneshot`): Queue-Limit (429), Gesamt-Cap
+  und Statusübergänge sind noch ungetestet.
+- **Behobene Beobachtungen bewerten:** Suche ist reiner Substring-Abgleich (Punkt zählt);
+  `--quality` deckelt Single-MP4-Hoster nicht nach oben; `naming::clean_title` schreibt
+  klein. Jeweils entscheiden, ob gewünscht.
 
 ## Desktop
 
