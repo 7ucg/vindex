@@ -127,11 +127,13 @@ pub async fn movie(client: &reqwest::Client, url: &str) -> Result<FilmoMovie> {
 }
 
 fn extract_year(html: &str) -> Option<u32> {
-    // Erstes 4-stelliges Jahr im „Release date"-Feld, grob.
-    let re = regex::Regex::new(r"(?is)Release date.*?(\d{4})").unwrap();
+    // Jahr aus dem Release-Feld — Deutsch („Erscheinungsdatum") oder Englisch
+    // („Release date"); grob das erste 4-stellige Jahr danach.
+    let re = regex::Regex::new(r"(?is)(?:Erscheinungsdatum|Release date).*?(\d{4})").unwrap();
     re.captures(html)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<u32>().ok())
+        .filter(|y| (1900..=2100).contains(y))
 }
 
 /// Löst ein `data-p`-Token zur Hoster-Embed-URL auf (CSRF-POST `/n` → Redirect).
@@ -224,4 +226,12 @@ mod tests {
     }
 }
 
-
+#[cfg(test)]
+mod year_de {
+    #[test]
+    fn deutsch_und_grenzen() {
+        assert_eq!(super::extract_year("<p>Erscheinungsdatum: 2012</p>"), Some(2012));
+        assert_eq!(super::extract_year("Release date 2021"), Some(2021));
+        assert_eq!(super::extract_year("kein jahr"), None);
+    }
+}

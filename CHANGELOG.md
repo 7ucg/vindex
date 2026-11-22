@@ -9,6 +9,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- filmo.to funktioniert jetzt end-to-end (live verifiziert, `argo` → spielbare HLS-URL): der
+  `/n`-CSRF-Flow braucht die beim Film-GET gesetzte Laravel-Session — dafür ist ein Cookie-Store
+  aktiviert (reqwest `cookies`-Feature + `cookie_store(true)`, per Domain gescopet). Jahr-Parsing
+  erkennt zusätzlich das deutsche „Erscheinungsdatum".
 - serienstream.to funktioniert jetzt end-to-end (live verifiziert bis zur spielbaren HLS-URL):
   eigener `/serie/<slug>`-Pfad mit href-basiertem Staffel-/Episoden-Listing (`parse_seasons_sto`/
   `parse_episodes_sto`, getrennt vom aniworld-Tabellenpfad), Provider-Parsing über
