@@ -1,18 +1,22 @@
 //! Hoster-Resolver: Embed-/Redirect-URL → direkter Stream.
 //!
 //! Faithfully portiert aus den Referenzen (`downloaders/*.py`,
-//! `extractors/provider/*.py`). Streamtape/Luluvdo/LoadX haben keine Vorlage und
-//! melden daher `NoStream`/Extract-Fehler (siehe `ARCHITECTURE.md` §1).
+//! `extractors/provider/*.py`). Streamtape/Luluvdo/LoadX wurden ohne Vorlage per
+//! eigenem Reverse Engineering ergänzt; LoadX ist gegen Live nicht verifiziert
+//! (siehe `loadx.rs` und `ARCHITECTURE.md` §1).
 
 pub mod common;
 pub mod doodstream;
 pub mod filemoon;
+pub mod loadx;
+pub mod luluvdo;
 pub mod speedfiles;
+pub mod streamtape;
 pub mod vidmoly;
 pub mod vidoza;
 pub mod voe;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::model::Hoster;
 
 /// Ein aufgelöster Stream, bereit für die Download-Engine.
@@ -42,9 +46,8 @@ pub async fn resolve(
         Hoster::Vidmoly => vidmoly::resolve(client, embed_url).await,
         Hoster::Filemoon => filemoon::resolve(client, embed_url).await,
         Hoster::SpeedFiles => speedfiles::resolve(client, embed_url).await,
-        Hoster::Streamtape | Hoster::Luluvdo | Hoster::LoadX => Err(Error::extract(
-            hoster.as_str(),
-            "kein Resolver — Scope-Vorgabe ohne Referenz (eigenes Reverse Engineering nötig)",
-        )),
+        Hoster::Streamtape => streamtape::resolve(client, embed_url).await,
+        Hoster::Luluvdo => luluvdo::resolve(client, embed_url).await,
+        Hoster::LoadX => loadx::resolve(client, embed_url).await,
     }
 }
