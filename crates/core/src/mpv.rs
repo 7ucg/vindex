@@ -295,9 +295,22 @@ pub fn build_mpv_args_with(
     args
 }
 
+/// True, wenn *url* gefahrlos als Player-Argument übergeben werden kann: eine
+/// absolute http(s)-URL, die nicht mit `-` beginnt (sonst könnte sie — mangels
+/// `--`-Trenner beim IINA-Pfad — als Flag gelesen werden, argv-Injection).
+fn url_is_launch_safe(url: &str) -> bool {
+    !url.starts_with('-')
+        && reqwest::Url::parse(url)
+            .map(|u| matches!(u.scheme(), "http" | "https"))
+            .unwrap_or(false)
+}
+
 /// Baut die Argumente für den gewählten Player. Für mpv wie [`build_mpv_args`];
 /// für IINA werden dieselben Optionen als `--mpv-<opt>` an `iina-cli` übergeben und
 /// die URL als letztes Argument angehängt (kein `--`-Trenner, iina-cli kennt ihn nicht).
+///
+/// `Err`, wenn die Stream-URL keine absolute http(s)-URL ist — so kann sie nie als
+/// Flag an den Player durchrutschen.
 pub fn build_player_args(
     player: Player,
     stream_url: &str,
@@ -305,8 +318,13 @@ pub fn build_player_args(
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
     anime4k: Option<&str>,
-) -> Vec<String> {
-    match player {
+) -> Result<Vec<String>> {
+    if !url_is_launch_safe(stream_url) {
+        return Err(Error::Mpv(
+            "Stream-URL ist keine absolute http/https-URL".into(),
+        ));
+    }
+    let args = match player {
         Player::Mpv => build_mpv_args_with(stream_url, referer, title, aniskip, anime4k),
         Player::Iina => {
             let mut args: Vec<String> = mpv_option_tokens(referer, title, aniskip, anime4k)
@@ -316,7 +334,8 @@ pub fn build_player_args(
             args.push(stream_url.to_string());
             args
         }
-    }
+    };
+    Ok(args)
 }
 
 /// Startet mpv mit den gebauten Argumenten und wartet auf das Ende der Wiedergabe.
@@ -542,7 +561,8 @@ mod tests {
             Some("Titel"),
             None,
             None,
-        );
+        )
+        .unwrap();
         // Jede mpv-Option trägt das --mpv-Präfix …
         assert!(args.contains(&"--mpv-no-config".to_string()));
         assert!(args.contains(&"--mpv-ytdl=no".to_string()));
@@ -590,7 +610,8 @@ mod tests {
             None,
             None,
             Some(&value),
-        );
+        )
+        .unwrap();
         assert!(args.iter().any(|a| a == &format!("--glsl-shaders={value}")));
         // IINA bekommt es mit --mpv-Präfix.
         let iina = build_player_args(
@@ -600,17 +621,34 @@ mod tests {
             None,
             None,
             Some(&value),
-        );
+        )
+        .unwrap();
         assert!(iina
             .iter()
             .any(|a| a == &format!("--mpv-glsl-shaders={value}")));
     }
 
     #[test]
+    fn build_player_args_lehnt_flag_artige_url_ab() {
+        // Eine URL, die als Flag gelesen werden könnte (kein --Trenner bei IINA),
+        // oder ein fremdes Schema wird abgewiesen — nichts erreicht den Player.
+        assert!(build_player_args(Player::Iina, "--version", None, None, None, None).is_err());
+        assert!(build_player_args(Player::Mpv, "-foo", None, None, None, None).is_err());
+        assert!(
+            build_player_args(Player::Iina, "file:///etc/passwd", None, None, None, None).is_err()
+        );
+        assert!(
+            build_player_args(Player::Mpv, "https://ok/v.m3u8", None, None, None, None).is_ok()
+        );
+    }
+
+    #[test]
     fn mpv_und_iina_tragen_dieselben_optionen() {
         let url = "https://cdn.example/s.m3u8";
-        let mpv = build_player_args(Player::Mpv, url, Some("https://r"), Some("T"), None, None);
-        let iina = build_player_args(Player::Iina, url, Some("https://r"), Some("T"), None, None);
+        let mpv =
+            build_player_args(Player::Mpv, url, Some("https://r"), Some("T"), None, None).unwrap();
+        let iina =
+            build_player_args(Player::Iina, url, Some("https://r"), Some("T"), None, None).unwrap();
         // Gleiche Zahl Optionen (mpv hat zusätzlich den `--`-Trenner).
         assert_eq!(mpv.len(), iina.len() + 1);
         assert_eq!(mpv.last().unwrap(), url);

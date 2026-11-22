@@ -105,7 +105,8 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
         title.as_deref(),
         aniskip.as_ref(),
         anime4k.as_deref(),
-    );
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     println!("Starte {} ...", player.binary());
     play_with(player, &player_args)
