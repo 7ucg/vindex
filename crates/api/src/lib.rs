@@ -817,11 +817,30 @@ fn delete_key_inner(state: &AppState, name: &str) -> (StatusCode, Json<serde_jso
 /// Bildet einen [`auth::KeyMgmtError`] auf eine HTTP-Antwort ab. Interne Pfade/
 /// Details bleiben draußen; nur eine knappe Meldung geht an den Client.
 fn key_mgmt_error_response(e: auth::KeyMgmtError) -> (StatusCode, Json<serde_json::Value>) {
-    tracing::warn!("Key-Verwaltung fehlgeschlagen: {e}");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": "Key-Store konnte nicht aktualisiert werden" })),
-    )
+    use auth::KeyMgmtError as E;
+    // Client-Fehler mit knapper, ungefährlicher Meldung; interne Fehler (IO/Pfad/
+    // kaputter Store) bleiben bei 500 ohne Details.
+    match e {
+        E::InvalidName => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        ),
+        E::Duplicate => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "ein Key mit diesem Namen existiert bereits" })),
+        ),
+        E::Full => (
+            StatusCode::INSUFFICIENT_STORAGE,
+            Json(json!({ "error": "Key-Store ist voll" })),
+        ),
+        E::NoPath | E::Corrupt | E::Rng | E::Io(_) => {
+            tracing::warn!("Key-Verwaltung fehlgeschlagen: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Key-Store konnte nicht aktualisiert werden" })),
+            )
+        }
+    }
 }
 
 /// Nach außen sichtbares Detail eines Jobs. Für fertige Downloads nur der

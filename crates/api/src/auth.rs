@@ -167,13 +167,16 @@ impl AuthConfig {
         // Ein leerer Key-Satz nach einem Reload (z. B. letzter Key gelöscht) ist ein
         // Konfigurationsfehler, kein offener Modus — offen bleibt nur, was ganz ohne
         // Keys gestartet ist.
-        let runtime_empty =
-            !self.was_open_at_start && self.bootstrap.is_empty() && stored.is_empty();
+        // „Offen" gilt nur, solange noch nie Keys existierten; sobald einmal welche da
+        // waren, verfällt das Flag — das Löschen des letzten Keys sperrt dann.
+        let still_open =
+            self.was_open_at_start && self.bootstrap.is_empty() && self.stored.is_empty();
+        let runtime_empty = !still_open && self.bootstrap.is_empty() && stored.is_empty();
         AuthConfig {
             bootstrap: self.bootstrap.clone(),
             stored: Arc::new(stored),
             locked: load_failed || runtime_empty,
-            was_open_at_start: self.was_open_at_start,
+            was_open_at_start: still_open,
         }
     }
 
@@ -219,11 +222,16 @@ impl AuthConfig {
         if self.bootstrap.is_empty() && self.stored.is_empty() {
             // Kein Key konfiguriert → offen; ein fehlgeschlagener Store-Ladevorgang
             // sperrt dagegen alles (deny-all), statt die API versehentlich zu öffnen.
-            return if self.locked {
-                Decision::Unauthorized
-            } else {
-                Decision::Allow
-            };
+            if self.locked {
+                return Decision::Unauthorized;
+            }
+            // Admin-Routen (Key-Verwaltung) bleiben auch im offenen Modus zu: sonst
+            // könnte unauthentifiziert ein Key angelegt werden. Erst ein echter
+            // Admin-Key (per VINDEX_API_KEYS-Bootstrap) macht die Verwaltung nutzbar.
+            if required == Scope::Admin {
+                return Decision::Unauthorized;
+            }
+            return Decision::Allow;
         }
         let provided = match extract_key(headers) {
             Some(p) => p,
@@ -417,8 +425,28 @@ pub enum KeyMgmtError {
     Corrupt,
     /// Die Zufallsquelle für den neuen Key stand nicht bereit.
     Rng,
+    /// Der Name ist leer, zu lang oder enthält unerlaubte Zeichen.
+    InvalidName,
+    /// Ein Key mit diesem Namen existiert bereits.
+    Duplicate,
+    /// Der Store hat die maximale Zahl an Einträgen erreicht.
+    Full,
     /// Datei-/IO-Fehler beim Lesen oder atomaren Schreiben.
     Io(std::io::Error),
+}
+
+/// Obergrenze gespeicherter Keys und maximale Namenslänge.
+const MAX_STORE_KEYS: usize = 1000;
+const MAX_KEY_NAME_LEN: usize = 64;
+
+/// True, wenn *name* ein gültiger Key-Name ist: nicht leer, höchstens
+/// [`MAX_KEY_NAME_LEN`] Zeichen, nur `[A-Za-z0-9._-]`.
+fn valid_key_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_KEY_NAME_LEN
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 impl std::fmt::Display for KeyMgmtError {
@@ -432,6 +460,12 @@ impl std::fmt::Display for KeyMgmtError {
                 write!(f, "vorhandene Key-Store-Datei ist kein gültiges JSON-Array")
             }
             KeyMgmtError::Rng => write!(f, "Zufallsquelle für den neuen Key nicht verfügbar"),
+            KeyMgmtError::InvalidName => write!(
+                f,
+                "ungültiger Key-Name (nicht leer, max. 64 Zeichen, nur A-Z a-z 0-9 . _ -)"
+            ),
+            KeyMgmtError::Duplicate => write!(f, "ein Key mit diesem Namen existiert bereits"),
+            KeyMgmtError::Full => write!(f, "Key-Store ist voll"),
             KeyMgmtError::Io(e) => write!(f, "Key-Store-IO-Fehler: {e}"),
         }
     }
@@ -556,8 +590,17 @@ fn store_mutation_lock() -> std::sync::MutexGuard<'static, ()> {
 /// `hash+scope+name` an die Store-Datei an (atomar) und gibt den **Klartext
 /// einmalig** zurück. Der Klartext wird nie gespeichert.
 pub fn add_key(name: &str, scope: Scope) -> Result<String, KeyMgmtError> {
+    if !valid_key_name(name) {
+        return Err(KeyMgmtError::InvalidName);
+    }
     let _guard = store_mutation_lock();
     let (path, mut entries) = read_store_file()?;
+    if entries.iter().any(|e| e.name == name) {
+        return Err(KeyMgmtError::Duplicate);
+    }
+    if entries.len() >= MAX_STORE_KEYS {
+        return Err(KeyMgmtError::Full);
+    }
     let (plain, hash) = generate_key().map_err(|_| KeyMgmtError::Rng)?;
     entries.push(KeyEntry {
         hash,
@@ -815,6 +858,30 @@ mod tests {
         // Zwei Aufrufe liefern unterschiedliche Keys.
         let (k2, _) = generate_key().expect("CSPRNG verfügbar");
         assert_ne!(klartext, k2);
+    }
+
+    #[test]
+    fn offener_modus_sperrt_admin_routen() {
+        let auth = AuthConfig::build(&[], Vec::new(), false); // keine Keys → offen
+        assert!(auth.is_open());
+        assert!(matches!(
+            auth.authorize(&HeaderMap::new(), Scope::Read),
+            Decision::Allow
+        ));
+        // Key-Verwaltung (Admin) bleibt auch offen zu — kein unauth. Key-Anlegen.
+        assert!(matches!(
+            auth.authorize(&HeaderMap::new(), Scope::Admin),
+            Decision::Unauthorized
+        ));
+    }
+
+    #[test]
+    fn key_name_validierung() {
+        assert!(valid_key_name("ci-bot_1.key"));
+        assert!(!valid_key_name(""));
+        assert!(!valid_key_name("hat leerzeichen"));
+        assert!(!valid_key_name("slash/raus"));
+        assert!(!valid_key_name(&"x".repeat(65)));
     }
 
     #[test]
