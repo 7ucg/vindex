@@ -4,7 +4,10 @@ use crate::error::Result;
 use crate::model::{Episode, ProviderLinks, BASE_STO};
 
 pub async fn list_seasons(client: &reqwest::Client, slug: &str) -> Result<Vec<u32>> {
-    super::serienstream::list_seasons(client, BASE_STO, slug).await
+    // serienstream.to nutzt `/serie/<slug>` (ohne `/stream/`) mit href-basierter Liste.
+    let url = format!("{BASE_STO}/serie/{slug}");
+    let body = super::fetch_text(client, &url).await?;
+    Ok(super::serienstream::parse_seasons_sto(&body, slug))
 }
 
 pub async fn list_episodes(
@@ -12,7 +15,11 @@ pub async fn list_episodes(
     slug: &str,
     season: u32,
 ) -> Result<Vec<Episode>> {
-    super::serienstream::list_episodes(client, BASE_STO, slug, season).await
+    let url = format!("{BASE_STO}/serie/{slug}/staffel-{season}");
+    let body = super::fetch_text(client, &url).await?;
+    Ok(super::serienstream::parse_episodes_sto(
+        &body, BASE_STO, slug, season,
+    ))
 }
 
 pub async fn provider_links(client: &reqwest::Client, episode_url: &str) -> Result<ProviderLinks> {

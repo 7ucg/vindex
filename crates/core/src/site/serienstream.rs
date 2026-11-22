@@ -10,6 +10,7 @@
 //! Fixture verifiziert. s.to ist stillgelegt (→ serienstream.to). Portiert aus
 //! `pages/aniworld_to.py` und `models/aniworld_to/*`.
 
+use regex::Regex;
 use scraper::{Html, Selector};
 
 use crate::error::{Error, Result};
@@ -134,6 +135,52 @@ fn parse_episodes(body: &str, base: &str, season: u32) -> Vec<Episode> {
         });
     }
     out
+}
+
+// ─────────────── serienstream.to-spezifisches Listing (href-basiert) ───────────────
+//
+// serienstream.to nutzt `/serie/<slug>/staffel-N/episode-M` als schlichte `<a href>`
+// (kein `hosterSiteDirectNav`/`tbody#seasonN` wie aniworld). Staffel-/Episodenliste
+// werden daher direkt aus den Hrefs gezogen. Gegen die echte Seite verifiziert.
+
+/// Staffelnummern aus einer serienstream.to-Seite (`/serie/<slug>/staffel-N`).
+/// `staffel-0` = Filme. Sortiert, dedupliziert. Rein/testbar.
+pub(crate) fn parse_seasons_sto(html: &str, slug: &str) -> Vec<u32> {
+    let re = Regex::new(&format!(r"/serie/{}/staffel-(\d+)", regex::escape(slug))).unwrap();
+    let mut set = std::collections::BTreeSet::new();
+    for c in re.captures_iter(html) {
+        if let Ok(n) = c[1].parse::<u32>() {
+            set.insert(n);
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Episoden einer serienstream.to-Staffel (`/serie/<slug>/staffel-N/episode-M`).
+/// Sortiert nach Episodennummer, dedupliziert. Rein/testbar.
+pub(crate) fn parse_episodes_sto(html: &str, base: &str, slug: &str, season: u32) -> Vec<Episode> {
+    let re = Regex::new(&format!(
+        r"/serie/{}/staffel-{}/episode-(\d+)",
+        regex::escape(slug),
+        season
+    ))
+    .unwrap();
+    let mut nums = std::collections::BTreeSet::new();
+    for c in re.captures_iter(html) {
+        if let Ok(n) = c[1].parse::<u32>() {
+            nums.insert(n);
+        }
+    }
+    nums.into_iter()
+        .enumerate()
+        .map(|(i, n)| Episode {
+            url: format!("{base}/serie/{slug}/staffel-{season}/episode-{n}"),
+            title: String::new(),
+            season,
+            index_in_season: (i + 1) as u32,
+            explicit_number: Some(n),
+        })
+        .collect()
 }
 
 /// Reine HTML→Hoster-Links-Logik von [`provider_links`].
@@ -448,6 +495,48 @@ mod tests {
         assert!(parse_episodes(episoden_html(), BASE_T, 7).is_empty());
     }
 
+    // Synthetisches serienstream.to-Listing (href-basiert), echte Struktur.
+    const STO_LISTING: &str = r#"
+    <div class="hosterSiteDirectNav">
+      <a href="/serie/black-clover/staffel-0">Filme</a>
+      <a href="/serie/black-clover/staffel-1">1</a>
+      <a href="/serie/black-clover/staffel-2">2</a>
+      <a href="/serie/black-clover/staffel-3">3</a>
+    </div>
+    <table>
+      <a href="/serie/black-clover/staffel-2/episode-1">E1</a>
+      <a href="/serie/black-clover/staffel-2/episode-2">E2</a>
+      <a href="/serie/black-clover/staffel-2/episode-10">E10</a>
+      <a href="/serie/black-clover/staffel-1/episode-5">S1E5</a>
+    </table>"#;
+
+    #[test]
+    fn sto_staffeln_aus_hrefs() {
+        // Filme→0, Staffeln numerisch, sortiert/dedupliziert.
+        assert_eq!(
+            parse_seasons_sto(STO_LISTING, "black-clover"),
+            vec![0, 1, 2, 3]
+        );
+        // Fremder Slug → nichts.
+        assert!(parse_seasons_sto(STO_LISTING, "naruto").is_empty());
+    }
+
+    #[test]
+    fn sto_episoden_aus_hrefs() {
+        let eps = parse_episodes_sto(STO_LISTING, "https://serienstream.to", "black-clover", 2);
+        // Nur Staffel 2, nach Episodennummer sortiert (1,2,10).
+        assert_eq!(eps.len(), 3);
+        assert_eq!(eps[0].explicit_number, Some(1));
+        assert_eq!(eps[1].explicit_number, Some(2));
+        assert_eq!(eps[2].explicit_number, Some(10));
+        assert_eq!(eps[2].index_in_season, 3);
+        assert_eq!(
+            eps[0].url,
+            "https://serienstream.to/serie/black-clover/staffel-2/episode-1"
+        );
+        assert_eq!(eps[0].season, 2);
+    }
+
     #[test]
     fn episoden_filme_tab_ist_staffel_null() {
         // Der Filme-Tab trägt keine [Episode N]-Marker; Titel bleiben wie sie sind,
@@ -521,7 +610,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod sto_live {
     use crate::model::{Hoster, Language};
@@ -532,7 +620,11 @@ mod sto_live {
         let url = "https://serienstream.to/serie/black-clover/staffel-2/episode-8";
         match super::provider_links(&client, "https://serienstream.to", url).await {
             Ok(links) => {
-                for lang in [Language::GermanDub, Language::EnglishDub, Language::GermanSub] {
+                for lang in [
+                    Language::GermanDub,
+                    Language::EnglishDub,
+                    Language::GermanSub,
+                ] {
                     if let Some(m) = links.hosters_for(lang) {
                         println!("{:?}: {:?}", lang, m.keys().collect::<Vec<_>>());
                     }
@@ -541,7 +633,11 @@ mod sto_live {
                 if let Some(embed) = links.link(Language::GermanDub, Hoster::Voe) {
                     println!("EMBED: {embed}");
                     match crate::hoster::resolve(&client, Hoster::Voe, embed).await {
-                        Ok(r) => println!("VOE OK: is_hls={} {}", r.is_hls, &r.url[..r.url.len().min(90)]),
+                        Ok(r) => println!(
+                            "VOE OK: is_hls={} {}",
+                            r.is_hls,
+                            &r.url[..r.url.len().min(90)]
+                        ),
                         Err(e) => println!("VOE FEHLER: {e}"),
                     }
                 }
@@ -550,4 +646,3 @@ mod sto_live {
         }
     }
 }
-
