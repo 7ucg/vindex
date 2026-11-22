@@ -19,8 +19,8 @@
 //! Ohne jede konfigurierte Quelle ist die API offen — dann lässt [`crate::serve`]
 //! aber nur einen localhost-Bind zu.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, Method, StatusCode};
@@ -33,14 +33,14 @@ use sha2::{Digest, Sha256};
 
 /// Zugriffs-Scope eines Keys. Geordnet: Read < Write < Admin. Ein Key mit
 /// höherem Scope deckt die niedrigeren ab.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     /// Lesende Endpunkte (GET).
     Read,
     /// Schreibende Endpunkte (z. B. `POST /api/download`).
     Write,
-    /// Volle Rechte; für spätere Verwaltungsrouten reserviert.
+    /// Volle Rechte; deckt alles ab und steuert die `/api/keys`-Verwaltung.
     Admin,
 }
 
@@ -57,6 +57,16 @@ impl Scope {
     /// True, wenn dieser Scope den geforderten abdeckt (Admin ⊇ Write ⊇ Read).
     fn covers(self, needed: Scope) -> bool {
         self.rank() >= needed.rank()
+    }
+
+    /// Scope als Kleinbuchstaben-String (`read` | `write` | `admin`) — für die
+    /// JSON-Antworten der Key-Verwaltung und den Store (nie der Hash).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Read => "read",
+            Scope::Write => "write",
+            Scope::Admin => "admin",
+        }
     }
 }
 
@@ -91,20 +101,31 @@ enum Decision {
     Forbidden,
 }
 
-/// Konfigurierte API-Keys. Geklont pro Request (nur ein `Arc`-Bump).
+/// Konfigurierte API-Keys. Geklont pro Request (nur zwei `Arc`-Bumps).
+///
+/// Zwei Quellen werden getrennt gehalten, damit ein Hot-Reload nur den
+/// datei-basierten Teil (`stored`) ersetzt und die Env-Bootstrap-Keys
+/// (`bootstrap`) unverändert bestehen bleiben — die stehen nie in der Datei.
 #[derive(Clone)]
 pub struct AuthConfig {
-    entries: Arc<Vec<KeyEntry>>,
+    /// Env-Bootstrap-Keys (`VINDEX_API_KEYS`), stets [`Scope::Admin`]. Nicht in
+    /// der Store-Datei, daher über `/api/keys` weder listbar noch löschbar.
+    bootstrap: Arc<Vec<KeyEntry>>,
+    /// Aus der Store-Datei geladene Einträge. Wird beim Hot-Reload ersetzt.
+    stored: Arc<Vec<KeyEntry>>,
     /// Konnte ein explizit gesetzter/vorhandener Store nicht geladen werden, ist
     /// die Auth gesperrt (deny-all) statt offen — kein Fail-open bei Konfig-Fehler.
     locked: bool,
+    /// Startete der Daemon ganz ohne Keys (offener Modus)? Nur dann bleibt die API
+    /// offen. Werden zur Laufzeit alle Keys gelöscht, wird gesperrt, nicht geöffnet.
+    was_open_at_start: bool,
 }
 
 impl AuthConfig {
     /// Baut die Konfiguration aus Bootstrap-Env-Keys und bereits geparsten
     /// Store-Einträgen. Env-Keys bekommen [`Scope::Admin`].
     fn build(env_keys: &[String], stored: Vec<KeyEntry>, locked: bool) -> Self {
-        let mut entries: Vec<KeyEntry> = env_keys
+        let bootstrap: Vec<KeyEntry> = env_keys
             .iter()
             .filter(|k| !k.is_empty())
             .map(|k| KeyEntry {
@@ -113,10 +134,12 @@ impl AuthConfig {
                 name: "env-bootstrap".to_string(),
             })
             .collect();
-        entries.extend(stored);
+        let was_open_at_start = !locked && bootstrap.is_empty() && stored.is_empty();
         AuthConfig {
-            entries: Arc::new(entries),
+            bootstrap: Arc::new(bootstrap),
+            stored: Arc::new(stored),
             locked,
+            was_open_at_start,
         }
     }
 
@@ -133,6 +156,34 @@ impl AuthConfig {
             );
         }
         AuthConfig::build(&s.api_keys, stored, load_failed)
+    }
+
+    /// Lädt den persistenten Store erneut aus der Datei und gibt eine neue
+    /// Konfiguration mit frischem `stored`-Teil zurück. Die Env-Bootstrap-Keys
+    /// bleiben unverändert. So wirken über `/api/keys` angelegte/gelöschte Keys
+    /// sofort, ohne den Daemon neu zu starten.
+    pub fn reloaded(&self) -> AuthConfig {
+        let (stored, load_failed) = load_store();
+        // Ein leerer Key-Satz nach einem Reload (z. B. letzter Key gelöscht) ist ein
+        // Konfigurationsfehler, kein offener Modus — offen bleibt nur, was ganz ohne
+        // Keys gestartet ist.
+        let runtime_empty =
+            !self.was_open_at_start && self.bootstrap.is_empty() && stored.is_empty();
+        AuthConfig {
+            bootstrap: self.bootstrap.clone(),
+            stored: Arc::new(stored),
+            locked: load_failed || runtime_empty,
+            was_open_at_start: self.was_open_at_start,
+        }
+    }
+
+    /// Listet die Einträge des persistenten Stores als `(name, scope)` — ohne
+    /// Hash und ohne Klartext, und ohne die nicht verwaltbaren Env-Bootstrap-Keys.
+    pub fn stored_keys(&self) -> Vec<(String, Scope)> {
+        self.stored
+            .iter()
+            .map(|e| (e.name.clone(), e.scope))
+            .collect()
     }
 
     /// Test-Konstruktor mit festen Klartext-Keys (Admin-Scope, wie Bootstrap).
@@ -159,13 +210,13 @@ impl AuthConfig {
     /// True, wenn kein Key konfiguriert ist UND der Store nicht fehlerhaft war
     /// (dann ist die API offen). Bei Lade-Fehler ist sie gesperrt, nicht offen.
     pub fn is_open(&self) -> bool {
-        self.entries.is_empty() && !self.locked
+        self.bootstrap.is_empty() && self.stored.is_empty() && !self.locked
     }
 
     /// Prüft die Request-Header gegen die hinterlegten Keys und den geforderten
     /// Scope.
     fn authorize(&self, headers: &HeaderMap, required: Scope) -> Decision {
-        if self.entries.is_empty() {
+        if self.bootstrap.is_empty() && self.stored.is_empty() {
             // Kein Key konfiguriert → offen; ein fehlgeschlagener Store-Ladevorgang
             // sperrt dagegen alles (deny-all), statt die API versehentlich zu öffnen.
             return if self.locked {
@@ -179,10 +230,10 @@ impl AuthConfig {
             None => return Decision::Unauthorized,
         };
         let hash = sha256_hex(&provided);
-        // Alle Einträge durchgehen (kein früher Abbruch) und den höchsten
-        // passenden Scope sammeln. ct_eq vergleicht die Hex-Hashes längengebunden.
+        // Alle Einträge (Bootstrap + Store) durchgehen (kein früher Abbruch) und den
+        // höchsten passenden Scope sammeln. ct_eq vergleicht die Hex-Hashes längengebunden.
         let mut best: Option<Scope> = None;
-        for e in self.entries.iter() {
+        for e in self.bootstrap.iter().chain(self.stored.iter()) {
             if ct_eq(&e.hash, &hash) {
                 best = Some(match best {
                     Some(s) if s.rank() >= e.scope.rank() => s,
@@ -198,11 +249,13 @@ impl AuthConfig {
     }
 }
 
-/// Mindest-Scope für eine Route/Methode. GET-Endpunkte brauchen [`Scope::Read`],
-/// `POST /api/download` braucht [`Scope::Write`]. (Admin ist für spätere
-/// Verwaltungsrouten reserviert.)
+/// Mindest-Scope für eine Route/Methode. Die Key-Verwaltung unter `/api/keys`
+/// verlangt [`Scope::Admin`], `POST /api/download` [`Scope::Write`], alle übrigen
+/// (GET-)Endpunkte [`Scope::Read`].
 fn required_scope(method: &Method, path: &str) -> Scope {
-    if method == Method::POST && path == "/api/download" {
+    if path == "/api/keys" || path.starts_with("/api/keys/") {
+        Scope::Admin
+    } else if method == Method::POST && path == "/api/download" {
         Scope::Write
     } else {
         Scope::Read
@@ -354,12 +407,198 @@ pub fn generate_key() -> Result<(String, String), getrandom::Error> {
     Ok((plain, hash))
 }
 
+/// Fehler der Store-Verwaltung (Anlegen/Löschen von Keys über `/api/keys`).
+#[derive(Debug)]
+pub enum KeyMgmtError {
+    /// Kein Store-Pfad bestimmbar (weder `VINDEX_API_KEYS_FILE` noch `HOME`).
+    NoPath,
+    /// Die vorhandene Store-Datei ist kein gültiges JSON-Array — nicht
+    /// überschreiben, sondern melden (sonst gingen fremde Einträge verloren).
+    Corrupt,
+    /// Die Zufallsquelle für den neuen Key stand nicht bereit.
+    Rng,
+    /// Datei-/IO-Fehler beim Lesen oder atomaren Schreiben.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for KeyMgmtError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyMgmtError::NoPath => write!(
+                f,
+                "kein Key-Store-Pfad gesetzt (VINDEX_API_KEYS_FILE oder HOME nötig)"
+            ),
+            KeyMgmtError::Corrupt => {
+                write!(f, "vorhandene Key-Store-Datei ist kein gültiges JSON-Array")
+            }
+            KeyMgmtError::Rng => write!(f, "Zufallsquelle für den neuen Key nicht verfügbar"),
+            KeyMgmtError::Io(e) => write!(f, "Key-Store-IO-Fehler: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for KeyMgmtError {}
+
+/// Hex-Kodierung eines Byte-Puffers (lowercase).
+fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    out
+}
+
+/// Liest die aktuellen Einträge aus der Store-Datei (nur die Datei, nicht die
+/// Env-Bootstrap-Keys). Eine fehlende Datei ergibt eine leere Liste; eine
+/// vorhandene, aber kaputte Datei einen [`KeyMgmtError::Corrupt`] (damit sie
+/// beim Anhängen nicht versehentlich überschrieben wird).
+fn read_store_file() -> Result<(PathBuf, Vec<KeyEntry>), KeyMgmtError> {
+    let (path, _) = store_path().ok_or(KeyMgmtError::NoPath)?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let entries = parse_store(&text).map_err(|_| KeyMgmtError::Corrupt)?;
+            Ok((path, entries))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((path, Vec::new())),
+        Err(e) => Err(KeyMgmtError::Io(e)),
+    }
+}
+
+/// Serialisiert die Store-Einträge als JSON-Array `[{hash,scope,name}]`.
+fn serialize_entries(entries: &[KeyEntry]) -> String {
+    let arr: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "hash": e.hash,
+                "scope": e.scope.as_str(),
+                "name": e.name,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::Value::Array(arr))
+        .unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Schreibt die Store-Datei atomar und privat: Verzeichnis auf `0700`, die Daten
+/// in eine frisch & exklusiv angelegte Temp-Datei (`create_new`/O_EXCL folgt
+/// keinem Symlink) mit unvorhersagbarem Namen und Rechten `0600`, dann umbenennen.
+fn write_store_atomic(path: &Path, entries: &[KeyEntry]) -> Result<(), KeyMgmtError> {
+    use std::io::Write;
+
+    let data = serialize_entries(entries);
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    if let Some(d) = dir {
+        std::fs::create_dir_all(d).map_err(KeyMgmtError::Io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    for _ in 0..8u32 {
+        // Unvorhersagbarer Temp-Name aus CSPRNG-Zufall.
+        let mut rnd = [0u8; 16];
+        getrandom::getrandom(&mut rnd).map_err(|_| KeyMgmtError::Rng)?;
+        let name = format!(".api_keys.{}.tmp", to_hex(&rnd));
+        let tmp = match dir {
+            Some(d) => d.join(&name),
+            None => PathBuf::from(&name),
+        };
+
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = match opts.open(&tmp) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(KeyMgmtError::Io(e)),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
+        if let Err(e) = f.write_all(data.as_bytes()).and_then(|_| f.sync_all()) {
+            drop(f);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(KeyMgmtError::Io(e));
+        }
+        drop(f);
+        return match std::fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(KeyMgmtError::Io(e))
+            }
+        };
+    }
+    Err(KeyMgmtError::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "Temp-Datei für Key-Store konnte nicht angelegt werden",
+    )))
+}
+
+/// Serialisiert alle Store-Mutationen (read-modify-write), damit zwei parallele
+/// `/api/keys`-Requests sich nicht gegenseitig überschreiben (lost update).
+fn store_mutation_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Legt einen neuen Key an: erzeugt den Klartext per CSPRNG, hängt nur
+/// `hash+scope+name` an die Store-Datei an (atomar) und gibt den **Klartext
+/// einmalig** zurück. Der Klartext wird nie gespeichert.
+pub fn add_key(name: &str, scope: Scope) -> Result<String, KeyMgmtError> {
+    let _guard = store_mutation_lock();
+    let (path, mut entries) = read_store_file()?;
+    let (plain, hash) = generate_key().map_err(|_| KeyMgmtError::Rng)?;
+    entries.push(KeyEntry {
+        hash,
+        scope,
+        name: name.to_string(),
+    });
+    write_store_atomic(&path, &entries)?;
+    Ok(plain)
+}
+
+/// Entfernt alle Store-Einträge mit dem Namen *name* und schreibt die Datei
+/// atomar neu. Gibt die Zahl der entfernten Einträge zurück (0 = kein Treffer;
+/// Env-Bootstrap-Keys stehen nicht in der Datei und sind so nie betroffen).
+pub fn remove_keys(name: &str) -> Result<usize, KeyMgmtError> {
+    let _guard = store_mutation_lock();
+    let (path, mut entries) = read_store_file()?;
+    let before = entries.len();
+    entries.retain(|e| e.name != name);
+    let removed = before - entries.len();
+    if removed > 0 {
+        write_store_atomic(&path, &entries)?;
+    }
+    Ok(removed)
+}
+
 /// Middleware für `/api/*`: lässt den Request nur mit gültigem Key und
 /// ausreichendem Scope durch. Fehlender/ungültiger Key → `401`, zu niedriger
 /// Scope → `403`.
-pub async fn require_api_key(State(auth): State<AuthConfig>, req: Request, next: Next) -> Response {
+pub async fn require_api_key(
+    State(auth): State<Arc<RwLock<AuthConfig>>>,
+    req: Request,
+    next: Next,
+) -> Response {
     let required = required_scope(req.method(), req.uri().path());
-    match auth.authorize(req.headers(), required) {
+    // Nur kurz lesend sperren und sofort wieder freigeben; ein vergifteter Lock
+    // (Panik in einem anderen Halter) ist beim reinen Lesen unkritisch.
+    let decision = {
+        let cfg = auth.read().unwrap_or_else(|e| e.into_inner());
+        cfg.authorize(req.headers(), required)
+    };
+    match decision {
         Decision::Allow => next.run(req).await,
         Decision::Unauthorized => (
             StatusCode::UNAUTHORIZED,
@@ -583,5 +822,50 @@ mod tests {
         assert!(ct_eq("same", "same"));
         assert!(!ct_eq("short", "longer"));
         assert!(!ct_eq("aaaa", "aaab"));
+    }
+
+    #[test]
+    fn serialisierte_einträge_sind_wieder_parsebar() {
+        // Store-Roundtrip: schreiben → parsen ergibt dieselben Felder.
+        let entries = vec![
+            KeyEntry {
+                hash: "aabb".to_string(),
+                scope: Scope::Read,
+                name: "leser".to_string(),
+            },
+            KeyEntry {
+                hash: "ccdd".to_string(),
+                scope: Scope::Admin,
+                name: "chef".to_string(),
+            },
+        ];
+        let json = serialize_entries(&entries);
+        let wieder = parse_store(&json).expect("gültiges Array");
+        assert_eq!(wieder.len(), 2);
+        assert_eq!(wieder[0].hash, "aabb");
+        assert_eq!(wieder[0].scope, Scope::Read);
+        assert_eq!(wieder[0].name, "leser");
+        assert_eq!(wieder[1].scope, Scope::Admin);
+        assert_eq!(wieder[1].name, "chef");
+    }
+
+    #[test]
+    fn scope_as_str_passt_zum_serde_namen() {
+        assert_eq!(Scope::Read.as_str(), "read");
+        assert_eq!(Scope::Write.as_str(), "write");
+        assert_eq!(Scope::Admin.as_str(), "admin");
+    }
+
+    #[test]
+    fn required_scope_für_keys_ist_admin() {
+        assert_eq!(required_scope(&Method::GET, "/api/keys"), Scope::Admin);
+        assert_eq!(required_scope(&Method::POST, "/api/keys"), Scope::Admin);
+        assert_eq!(
+            required_scope(&Method::DELETE, "/api/keys/ci"),
+            Scope::Admin
+        );
+        // Andere Routen bleiben unverändert.
+        assert_eq!(required_scope(&Method::GET, "/api/queue"), Scope::Read);
+        assert_eq!(required_scope(&Method::POST, "/api/download"), Scope::Write);
     }
 }

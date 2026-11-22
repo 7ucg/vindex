@@ -9,6 +9,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- API: admin-geschützte Key-Verwaltung unter `/api/keys`. `POST` legt einen Key an (gibt den
+  Klartext einmalig zurück, speichert nur den sha256-Hash), `GET` listet `{name,scope}` (nie
+  Hashes/Klartext), `DELETE /api/keys/{name}` widerruft. Änderungen wirken sofort (In-Memory-
+  Store wird neu geladen), die Store-Datei wird atomar mit 0600 geschrieben. Wird zur Laufzeit
+  der letzte Key gelöscht, sperrt die API (deny-all) statt zu öffnen.
 - CLI: Watch-Modus — `vindex watch <episode-url>` löst den Stream über dieselbe
   Sprach-/Hoster-Fallback-Kette wie `download` auf (neue `core::download::resolve_playable`,
   ohne Mux) und spielt ihn direkt in mpv ab, statt ihn herunterzuladen. Der Referer wird als

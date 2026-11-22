@@ -14,10 +14,10 @@ pub use auth::generate_key;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -221,7 +221,9 @@ pub struct AppState {
     client: reqwest::Client,
     jobs: Arc<Mutex<Vec<Job>>>,
     next_id: Arc<AtomicU64>,
-    auth: auth::AuthConfig,
+    /// Hot-reloadbar: die `/api/keys`-Routen tauschen den Stand nach jedem
+    /// Anlegen/Löschen aus, die Auth-Middleware liest stets den aktuellen.
+    auth: Arc<RwLock<auth::AuthConfig>>,
     rate: Arc<RateLimiter>,
 }
 
@@ -232,9 +234,31 @@ impl AppState {
             client: core::http::browser_client().expect("http client"),
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
-            auth: auth::AuthConfig::from_settings(&settings),
+            auth: Arc::new(RwLock::new(auth::AuthConfig::from_settings(&settings))),
             rate: Arc::new(RateLimiter::new(rate_limit_from_env(), RATE_LIMIT_WINDOW)),
         }
+    }
+
+    /// True, wenn keine Keys konfiguriert sind (offene API). Liest den aktuellen
+    /// Auth-Stand unter dem Lesesperre-Guard.
+    fn auth_is_open(&self) -> bool {
+        self.auth
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_open()
+    }
+
+    /// Lädt den Key-Store aus der Datei neu und ersetzt den In-Memory-Stand.
+    /// Wird nach jedem erfolgreichen Anlegen/Löschen über `/api/keys` aufgerufen,
+    /// damit die Änderung sofort wirkt.
+    fn reload_auth(&self) {
+        let fresh = self
+            .auth
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .reloaded();
+        let mut guard = self.auth.write().unwrap_or_else(|e| e.into_inner());
+        *guard = fresh;
     }
 }
 
@@ -251,6 +275,13 @@ fn router_with(state: AppState) -> Router {
         .route("/api/providers", get(providers))
         .route("/api/download", post(download))
         .route("/api/queue", get(queue))
+        // Admin-geschützte Key-Verwaltung (Scope wird in der Auth-Middleware auf
+        // Admin gesetzt). Löschen per Pfad (`/api/keys/{name}`) oder Query (`?name=`).
+        .route(
+            "/api/keys",
+            get(list_keys).post(create_key).delete(delete_key_query),
+        )
+        .route("/api/keys/{name}", axum::routing::delete(delete_key_path))
         // Innen: API-Key-Prüfung. Außen: Rate-Limit (greift vor der Auth, damit
         // auch unauthentifizierte Fluten gedrosselt werden). `/health` bleibt
         // von beidem ausgenommen.
@@ -319,7 +350,7 @@ async fn openapi_json() -> impl IntoResponse {
 /// öffentlicher Bind ohne Auth bricht mit Fehler ab.
 pub async fn serve(addr: &str) -> anyhow::Result<()> {
     let state = AppState::new();
-    let open = state.auth.is_open();
+    let open = state.auth_is_open();
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
@@ -623,6 +654,176 @@ async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "items": items }))
 }
 
+// ---------------------------------------------------------------------------
+// Key-Verwaltung (/api/keys) — Admin-Scope, wirkt auf den persistenten Store.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, ToSchema)]
+struct CreateKeyReq {
+    /// Name/Label des neuen Keys (zur Wiedererkennung im Store).
+    #[schema(example = "ci-runner")]
+    name: String,
+    /// Scope des Keys: `read`, `write` oder `admin`.
+    scope: auth::Scope,
+}
+
+/// Legt einen neuen API-Key an. Der Klartext wird **einmalig** zurückgegeben und
+/// nie gespeichert; im Store landet nur der sha256-Hash. Erfordert Admin-Scope.
+#[utoipa::path(
+    post,
+    path = "/api/keys",
+    tag = "keys",
+    request_body = CreateKeyReq,
+    responses(
+        (status = 201, description = "Key angelegt; Klartext einmalig im Body", body = CreateKeyResponse),
+        (status = 400, description = "Leerer/ungültiger Name oder Scope", body = ErrorResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 403, description = "API-Key ohne Admin-Scope", body = ErrorResponse),
+        (status = 500, description = "Store konnte nicht geschrieben werden", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
+async fn create_key(
+    State(state): State<AppState>,
+    Json(req): Json<CreateKeyReq>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Name darf nicht leer sein" })),
+        );
+    }
+    match auth::add_key(name, req.scope) {
+        Ok(plain) => {
+            // In-Memory-Store neu laden, damit der frische Key sofort gilt.
+            state.reload_auth();
+            (
+                StatusCode::CREATED,
+                Json(json!({ "key": plain, "name": name, "scope": req.scope.as_str() })),
+            )
+        }
+        Err(e) => key_mgmt_error_response(e),
+    }
+}
+
+/// Listet die Keys des persistenten Stores als `[{ name, scope }]` — niemals
+/// Hashes oder Klartext. Erfordert Admin-Scope.
+#[utoipa::path(
+    get,
+    path = "/api/keys",
+    tag = "keys",
+    responses(
+        (status = 200, description = "Liste der Store-Keys (ohne Hash/Klartext)", body = [KeyInfo]),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 403, description = "API-Key ohne Admin-Scope", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
+async fn list_keys(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let keys = state
+        .auth
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .stored_keys();
+    let items: Vec<_> = keys
+        .into_iter()
+        .map(|(name, scope)| json!({ "name": name, "scope": scope.as_str() }))
+        .collect();
+    Json(serde_json::Value::Array(items))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct DeleteKeyParams {
+    /// Name des zu löschenden Keys (Alternative zum Pfad `/api/keys/{name}`).
+    name: String,
+}
+
+/// Löscht Keys per Query (`DELETE /api/keys?name=...`). Erfordert Admin-Scope.
+#[utoipa::path(
+    delete,
+    path = "/api/keys",
+    tag = "keys",
+    params(DeleteKeyParams),
+    responses(
+        (status = 200, description = "Key(s) entfernt", body = DeleteKeyResponse),
+        (status = 400, description = "Fehlender Name", body = ErrorResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 403, description = "API-Key ohne Admin-Scope", body = ErrorResponse),
+        (status = 404, description = "Kein Store-Key mit diesem Namen", body = ErrorResponse),
+        (status = 500, description = "Store konnte nicht geschrieben werden", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
+async fn delete_key_query(
+    State(state): State<AppState>,
+    Query(p): Query<DeleteKeyParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    delete_key_inner(&state, &p.name)
+}
+
+/// Löscht Keys per Pfad (`DELETE /api/keys/{name}`). Erfordert Admin-Scope.
+#[utoipa::path(
+    delete,
+    path = "/api/keys/{name}",
+    tag = "keys",
+    params(("name" = String, Path, description = "Name des zu löschenden Keys")),
+    responses(
+        (status = 200, description = "Key(s) entfernt", body = DeleteKeyResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 403, description = "API-Key ohne Admin-Scope", body = ErrorResponse),
+        (status = 404, description = "Kein Store-Key mit diesem Namen", body = ErrorResponse),
+        (status = 500, description = "Store konnte nicht geschrieben werden", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
+async fn delete_key_path(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    delete_key_inner(&state, &name)
+}
+
+/// Gemeinsame Löschlogik für Pfad- und Query-Variante.
+fn delete_key_inner(state: &AppState, name: &str) -> (StatusCode, Json<serde_json::Value>) {
+    let name = name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Name darf nicht leer sein" })),
+        );
+    }
+    match auth::remove_keys(name) {
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "kein Key mit diesem Namen im Store \
+                          (Env-Bootstrap-Keys sind nicht löschbar)"
+            })),
+        ),
+        Ok(removed) => {
+            // In-Memory-Store neu laden, damit der gelöschte Key sofort ungültig ist.
+            state.reload_auth();
+            (
+                StatusCode::OK,
+                Json(json!({ "removed": removed, "name": name })),
+            )
+        }
+        Err(e) => key_mgmt_error_response(e),
+    }
+}
+
+/// Bildet einen [`auth::KeyMgmtError`] auf eine HTTP-Antwort ab. Interne Pfade/
+/// Details bleiben draußen; nur eine knappe Meldung geht an den Client.
+fn key_mgmt_error_response(e: auth::KeyMgmtError) -> (StatusCode, Json<serde_json::Value>) {
+    tracing::warn!("Key-Verwaltung fehlgeschlagen: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "Key-Store konnte nicht aktualisiert werden" })),
+    )
+}
+
 /// Nach außen sichtbares Detail eines Jobs. Für fertige Downloads nur der
 /// Dateiname statt des vollen lokalen Pfads; fehlgeschlagene Jobs geben eine
 /// knappe Meldung ohne internen Fehlertext/Pfad zurück.
@@ -738,6 +939,38 @@ struct QueueResponse {
     items: Vec<QueueItem>,
 }
 
+/// Antwort von `POST /api/keys` (201): der Klartext wird **einmalig** geliefert.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct CreateKeyResponse {
+    /// Klartext-Key — nur hier, nie gespeichert.
+    key: String,
+    /// Name/Label des Keys.
+    name: String,
+    /// Scope: `read`, `write` oder `admin`.
+    scope: String,
+}
+
+/// Ein Listeneintrag von `GET /api/keys` (ohne Hash/Klartext).
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct KeyInfo {
+    /// Name/Label des Keys.
+    name: String,
+    /// Scope: `read`, `write` oder `admin`.
+    scope: String,
+}
+
+/// Antwort beim Löschen (`DELETE /api/keys`).
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct DeleteKeyResponse {
+    /// Zahl der entfernten Einträge.
+    removed: usize,
+    /// Betroffener Name.
+    name: String,
+}
+
 /// Ergänzt das API-Key-Sicherheitsschema (`X-API-Key`-Header) in der Spez.
 struct SecurityAddon;
 
@@ -760,7 +993,18 @@ impl Modify for SecurityAddon {
         description = "Suche, Provider-Metadaten und Download-Queue von vindex.",
         license(name = "MIT")
     ),
-    paths(health, openapi_json, search, providers, download, queue),
+    paths(
+        health,
+        openapi_json,
+        search,
+        providers,
+        download,
+        queue,
+        create_key,
+        list_keys,
+        delete_key_query,
+        delete_key_path
+    ),
     components(schemas(
         DownloadReq,
         DownloadAccepted,
@@ -769,11 +1013,16 @@ impl Modify for SecurityAddon {
         ProvidersResponse,
         QueueResponse,
         QueueItem,
+        CreateKeyReq,
+        CreateKeyResponse,
+        KeyInfo,
+        DeleteKeyResponse,
         ErrorResponse
     )),
     modifiers(&SecurityAddon),
     tags(
         (name = "vindex", description = "Geschützte /api/*-Routen (API-Key nötig, sofern konfiguriert)."),
+        (name = "keys", description = "Admin-geschützte Key-Verwaltung (/api/keys)."),
         (name = "meta", description = "Offene Routen ohne API-Key.")
     )
 )]
@@ -796,7 +1045,7 @@ mod tests {
             client: reqwest::Client::new(),
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
-            auth: auth::AuthConfig::with_keys(keys),
+            auth: Arc::new(RwLock::new(auth::AuthConfig::with_keys(keys))),
             rate: Arc::new(RateLimiter::new(max, RATE_LIMIT_WINDOW)),
         }
     }
@@ -807,7 +1056,7 @@ mod tests {
             client: reqwest::Client::new(),
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
-            auth: auth::AuthConfig::with_scoped(keys),
+            auth: Arc::new(RwLock::new(auth::AuthConfig::with_scoped(keys))),
             rate: Arc::new(RateLimiter::new(DEFAULT_RATE_LIMIT, RATE_LIMIT_WINDOW)),
         }
     }
@@ -1181,5 +1430,124 @@ mod tests {
         );
         assert_eq!(capture_num("https://x/staffel-a", "/staffel-"), None);
         assert_eq!(capture_num("https://x/", "/staffel-"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Key-Verwaltung (/api/keys)
+    // -----------------------------------------------------------------------
+
+    fn delete_req(uri: &str, key: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().method("DELETE").uri(uri);
+        if let Some(k) = key {
+            b = b.header("x-api-key", k);
+        }
+        b.body(Body::empty()).expect("Request baubar")
+    }
+
+    fn post_keys(body: &str, key: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/keys")
+            .header("content-type", "application/json")
+            .header("x-api-key", key)
+            .body(Body::from(body.to_string()))
+            .expect("Request baubar")
+    }
+
+    #[tokio::test]
+    async fn keys_ohne_key_ist_401() {
+        let (status, _) = send(
+            router_with(state(&["admintoken"])),
+            get_req("/api/keys", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn keys_mit_nicht_admin_key_ist_403() {
+        // Ein Write-Key (kein Admin) darf auf keiner /api/keys-Route etwas tun → 403.
+        let app = router_with(state_scoped(&[("schreiber", auth::Scope::Write)]));
+
+        let (status, _) = send(app.clone(), get_req("/api/keys", Some("schreiber"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET");
+
+        let (status, _) = send(
+            app.clone(),
+            post_keys(r#"{"name":"x","scope":"read"}"#, "schreiber"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "POST");
+
+        let (status, _) = send(app, delete_req("/api/keys/x", Some("schreiber"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "DELETE");
+    }
+
+    #[tokio::test]
+    async fn keys_admin_crud_flow_wirkt_sofort() {
+        // Eigenes Temp-Verzeichnis als Store (kein echtes Home anfassen). Der
+        // Admin-Key kommt als Env-Bootstrap, damit er einen Store-Reload übersteht.
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "vindex-keymgmt-test-{}-{}",
+            std::process::id(),
+            AtomicU64::new(0).fetch_add(1, Ordering::Relaxed)
+        ));
+        let store = dir.join("api_keys.json");
+        std::env::set_var("VINDEX_API_KEYS_FILE", &store);
+
+        let app = router_with(state(&["admintoken"]));
+
+        // POST legt an → 201 mit Klartext im Body, ohne Hash.
+        let (status, body) = send(
+            app.clone(),
+            post_keys(r#"{"name":"ci-runner","scope":"write"}"#, "admintoken"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let created: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        let plain = created["key"].as_str().expect("Klartext-Key im Body");
+        assert_eq!(plain.len(), 64, "Klartext ist 32-Byte-Hex");
+        assert_eq!(created["name"], "ci-runner");
+        assert_eq!(created["scope"], "write");
+
+        // GET listet den Namen, aber niemals Hash oder Klartext.
+        let (status, body) = send(app.clone(), get_req("/api/keys", Some("admintoken"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("ci-runner"), "Name fehlt: {body}");
+        assert!(!body.contains("hash"), "Hash-Feld geleakt: {body}");
+        assert!(!body.contains(plain), "Klartext geleakt: {body}");
+
+        // Der frisch angelegte Key wirkt sofort (Hot-Reload): GET /api/queue klappt.
+        let (status, _) = send(app.clone(), get_req("/api/queue", Some(plain))).await;
+        assert_eq!(status, StatusCode::OK, "neuer Key sofort gültig");
+
+        // DELETE entfernt den Eintrag.
+        let (status, _) = send(
+            app.clone(),
+            delete_req("/api/keys/ci-runner", Some("admintoken")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Danach ist er aus der Liste verschwunden …
+        let (status, body) = send(app.clone(), get_req("/api/keys", Some("admintoken"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains("ci-runner"), "noch gelistet: {body}");
+
+        // … und sofort ungültig (Hot-Reload wirkt auch beim Löschen) → 401.
+        let (status, _) = send(app.clone(), get_req("/api/queue", Some(plain))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "gelöschter Key abgewiesen"
+        );
+
+        // Erneutes Löschen ohne Treffer → 404.
+        let (status, _) = send(app, delete_req("/api/keys/ci-runner", Some("admintoken"))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        std::env::remove_var("VINDEX_API_KEYS_FILE");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

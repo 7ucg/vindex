@@ -31,9 +31,9 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## API
 
-- **Weitere Flächen.** Library, Auto-Sync. (OpenAPI unter `/openapi.json`, das
-  Request-Rate-Limit und der persistente Key-Store mit Scopes sind erledigt; offen bleibt
-  ein Login-/Key-Verwaltungs-Endpunkt statt nur Datei + `generate_key`-Helfer.)
+- **Weitere Flächen.** Library, Auto-Sync. (OpenAPI unter `/openapi.json`, das Request-
+  Rate-Limit, der persistente Key-Store mit Scopes und die admin-Key-Verwaltung unter
+  `/api/keys` sind erledigt.)
 - **Produktions-Rate-Limit.** Das eingebaute Limit ist Best-Effort im Prozessspeicher; für
   öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
   Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
