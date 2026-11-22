@@ -40,8 +40,13 @@ struct ServeArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    reset_sigpipe();
     let cli = Cli::parse();
+    // SIGPIPE nur für die ausgebenden Befehle zurücksetzen. Der Daemon (`serve`)
+    // soll SIGPIPE weiter ignorieren, damit ein kaputter Client-Socket ihn nicht
+    // beendet.
+    if !matches!(cli.command, Command::Serve(_)) {
+        reset_sigpipe();
+    }
     match cli.command {
         Command::Census(args) => census::run(args).await,
         Command::Search(args) => download::run_search(args).await,
