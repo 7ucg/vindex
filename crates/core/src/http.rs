@@ -30,32 +30,34 @@ pub fn next_user_agent() -> &'static str {
 
 static PROXY_CURSOR: AtomicUsize = AtomicUsize::new(0);
 
-/// True, wenn *entry* eine brauchbare Proxy-URL ist: bekanntes Schema und der Host
-/// (falls IP-Literal) nicht aus einem gesperrten Bereich.
+/// True, wenn *entry* eine brauchbare Proxy-URL ist. Die Prüfung nutzt denselben
+/// Parser wie der Consumer (`reqwest::Proxy::all`), damit Validator und Verbraucher
+/// nicht auseinanderlaufen; zusätzlich werden gesperrte IP-Literale abgewiesen.
 fn proxy_entry_ok(entry: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(entry) else {
-        return false;
-    };
-    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
-        return false;
-    }
-    !host_is_forbidden_ip_literal(entry)
+    reqwest::Proxy::all(entry).is_ok() && !host_is_forbidden_ip_literal(entry)
 }
 
-/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge (falsches
-/// Schema oder gesperrtes IP-Literal) werden verworfen; leer/ungesetzt → kein Proxy.
+/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge werden
+/// verworfen; leer/ungesetzt → kein Proxy. Werden Einträge verworfen, wird das
+/// geloggt — so sieht der Operator, dass Traffic ggf. ungeproxt läuft.
 fn proxy_pool() -> &'static [String] {
     static POOL: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
-        std::env::var("VINDEX_PROXY")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty() && proxy_entry_ok(s))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let raw = std::env::var("VINDEX_PROXY").unwrap_or_default();
+        let total = raw.split(',').filter(|s| !s.trim().is_empty()).count();
+        let pool: Vec<String> = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && proxy_entry_ok(s))
+            .collect();
+        if pool.len() < total {
+            tracing::warn!(
+                "VINDEX_PROXY: {} von {} Einträgen verworfen (ungültig/gesperrt)",
+                total - pool.len(),
+                total
+            );
+        }
+        pool
     })
 }
 
@@ -502,9 +504,9 @@ mod tests {
     fn proxy_entry_validierung() {
         assert!(proxy_entry_ok("http://proxy.example:8080"));
         assert!(proxy_entry_ok("socks5://1.1.1.1:1080"));
-        assert!(!proxy_entry_ok("ftp://proxy:21")); // falsches Schema
         assert!(!proxy_entry_ok("http://127.0.0.1:8080")); // gesperrtes IP-Literal
-        assert!(!proxy_entry_ok("kein url"));
+        assert!(!proxy_entry_ok("http://169.254.169.254:3128")); // Metadata-IP
+        assert!(!proxy_entry_ok("kein url")); // nicht parsebar
     }
 
     #[test]
