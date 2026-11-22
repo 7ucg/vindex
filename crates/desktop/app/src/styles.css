@@ -462,6 +462,31 @@ a {
     transform: rotate(360deg);
   }
 }
+.field {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.field label {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cfg-input {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.cfg-input:focus {
+  border-color: var(--v2);
+}
+
 .kv {
   display: grid;
   grid-template-columns: 180px 1fr;

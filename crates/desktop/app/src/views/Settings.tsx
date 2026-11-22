@@ -1,5 +1,16 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
-import { appSettings, appInfo, autostartEnabled, setAutostart } from "../lib/api";
+import {
+  appSettings,
+  appInfo,
+  autostartEnabled,
+  setAutostart,
+  getConfig,
+  setConfig,
+  type DesktopConfig,
+} from "../lib/api";
+
+const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
+const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 import {
   applyTheme,
   getTheme,
@@ -46,6 +57,22 @@ export function Settings(): JSX.Element {
       .then(() => setAutostartSig(next))
       .catch(() => {});
   };
+
+  const [cfg, setCfg] = createSignal<DesktopConfig>({
+    download_path: null,
+    language: null,
+    max_quality: null,
+    min_quality: null,
+  });
+  getConfig()
+    .then(setCfg)
+    .catch(() => {});
+  const update = (patch: Partial<DesktopConfig>) => {
+    const next = { ...cfg(), ...patch };
+    setCfg(next);
+    void setConfig(next).catch(() => {});
+  };
+  const empty = (v: string) => (v.trim() === "" ? null : v);
 
   const pickTheme = (t: Theme) => {
     applyTheme(t);
@@ -120,6 +147,54 @@ export function Settings(): JSX.Element {
         </button>
       </div>
 
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Downloads</h2>
+      </div>
+      <div class="panel" style={{ padding: "16px", "margin-bottom": "18px" }}>
+        <div class="field">
+          <label>Ordner</label>
+          <input
+            class="cfg-input"
+            placeholder="Standard (~/Downloads)"
+            value={cfg().download_path ?? ""}
+            onChange={(e) => update({ download_path: empty(e.currentTarget.value) })}
+          />
+        </div>
+        <div class="field">
+          <label>Sprache</label>
+          <select
+            class="cfg-input"
+            value={cfg().language ?? ""}
+            onChange={(e) => update({ language: empty(e.currentTarget.value) })}
+          >
+            <option value="">Standard</option>
+            <For each={LANGUAGES}>{(l) => <option value={l}>{l}</option>}</For>
+          </select>
+        </div>
+        <div class="field">
+          <label>Max. Qualität</label>
+          <select
+            class="cfg-input"
+            value={cfg().max_quality ?? ""}
+            onChange={(e) => update({ max_quality: empty(e.currentTarget.value) })}
+          >
+            <option value="">Standard</option>
+            <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
+          </select>
+        </div>
+        <div class="field">
+          <label>Min. Qualität</label>
+          <select
+            class="cfg-input"
+            value={cfg().min_quality ?? ""}
+            onChange={(e) => update({ min_quality: empty(e.currentTarget.value) })}
+          >
+            <option value="">Standard</option>
+            <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
+          </select>
+        </div>
+      </div>
+
       <Show when={settings()} fallback={<div class="spinner" />}>
         {(s) => (
           <div class="panel">
@@ -146,9 +221,9 @@ export function Settings(): JSX.Element {
       </Show>
 
       <p class="note">
-        Nur-Lese-Ansicht. Bearbeitbare Einstellungen, Themes, Netzwerk/Proxy und Shortcuts
-        folgen. Werte stammen aus den <code>VINDEX_*</code>-Variablen und{" "}
-        <code>.env</code>.
+        Die Werte oben (Ordner, Sprache, Qualität) überschreiben die Defaults und werden
+        gespeichert. Hoster-Reihenfolge und die weiteren Werte stammen aus den{" "}
+        <code>VINDEX_*</code>-Variablen und <code>.env</code>.
       </p>
 
       <Show when={settings.error}>

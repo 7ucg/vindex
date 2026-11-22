@@ -91,6 +91,21 @@ export function appSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("app_settings");
 }
 
+export interface DesktopConfig {
+  download_path: string | null;
+  language: string | null;
+  max_quality: string | null;
+  min_quality: string | null;
+}
+
+export function getConfig(): Promise<DesktopConfig> {
+  return invoke<DesktopConfig>("get_config");
+}
+
+export function setConfig(cfg: DesktopConfig): Promise<void> {
+  return invoke("set_config", { cfg });
+}
+
 export function autostartEnabled(): Promise<boolean> {
   return invoke<boolean>("autostart_enabled");
 }

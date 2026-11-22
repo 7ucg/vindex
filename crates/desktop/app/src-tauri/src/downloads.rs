@@ -93,6 +93,7 @@ pub fn start(
     file_name: String,
     title: String,
     settings: core::config::Settings,
+    overrides: DownloadOverrides,
 ) -> u64 {
     let id = downloads.next.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = CancellationToken::new();
@@ -117,13 +118,8 @@ pub fn start(
     );
     emit(&app, &view);
 
-    // Desktop lädt bewusst nativ + ffmpeg-frei: echte Segment-Fortschritte und
-    // der native TS→MKV-Remux (kein ffmpeg nötig; andere Codecs → roher .ts).
-    let overrides = DownloadOverrides {
-        native_hls: Some(true),
-        no_ffmpeg: Some(true),
-        ..DownloadOverrides::default()
-    };
+    // Overrides vom Aufrufer (Desktop-Config: Sprache/Qualität/Ordner); nativ +
+    // ffmpeg-frei setzt der Aufrufer ohnehin (echte Fortschritte, kein ffmpeg).
     let prefs = prefs_from_settings(&settings, file_name, &overrides);
 
     let sem = downloads.sem.clone();
@@ -216,13 +212,19 @@ fn emit(app: &AppHandle, v: &JobView) {
     let _ = app.emit("download:update", v);
 }
 
-/// System-Benachrichtigung bei fertigem Download.
+/// System-Benachrichtigung bei fertigem Download. Der Titel stammt letztlich aus
+/// gescraptem Inhalt → Steuerzeichen raus, auf 120 Zeichen kürzen.
 fn notify_done(app: &AppHandle, title: &str) {
     use tauri_plugin_notification::NotificationExt;
+    let safe: String = title
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect();
     let _ = app
         .notification()
         .builder()
         .title("Download fertig")
-        .body(title)
+        .body(&safe)
         .show();
 }

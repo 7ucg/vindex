@@ -4,21 +4,63 @@
 //! mappt auf die Facade bzw. `vindex_core` und reicht serialisierbare DTOs ans
 //! Frontend. **Keine** eigene Netz-/Scraping-/Download-Logik hier — die lebt im Kern.
 
+mod config;
 mod downloads;
 mod stream_proxy;
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{Manager, State};
 use vindex_desktop::{core, Backend};
 
-/// Gehaltener Zustand: die Facade (HTTP-Client), der lokale Referer-Proxy und
-/// der Download-Manager.
+/// Gehaltener Zustand: die Facade (HTTP-Client), der lokale Referer-Proxy, der
+/// Download-Manager und die bearbeitbaren Desktop-Einstellungen.
 struct AppState {
     backend: Backend,
     proxy: Arc<stream_proxy::Proxy>,
     downloads: Arc<downloads::Downloads>,
+    config: Mutex<config::DesktopConfig>,
+}
+
+impl AppState {
+    /// Effektiver Download-Ordner: Desktop-Config-Override, sonst Kern-Default.
+    fn download_dir(&self) -> PathBuf {
+        let cfg = self.config.lock().unwrap();
+        match cfg.download_path.as_deref().filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => self.backend.settings().download_path,
+        }
+    }
+
+    /// Download-Overrides aus der Config (Sprache/Qualität/Ordner) + nativ/ffmpeg-frei.
+    fn overrides(&self) -> vindex_desktop::DownloadOverrides {
+        use std::str::FromStr;
+        let cfg = self.config.lock().unwrap();
+        vindex_desktop::DownloadOverrides {
+            language: cfg
+                .language
+                .as_deref()
+                .and_then(|l| core::model::Language::from_str(l).ok()),
+            max_quality: cfg
+                .max_quality
+                .as_deref()
+                .and_then(|q| core::model::Quality::from_str(q).ok()),
+            min_quality: cfg
+                .min_quality
+                .as_deref()
+                .and_then(|q| core::model::Quality::from_str(q).ok()),
+            out_dir: cfg
+                .download_path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
+            native_hls: Some(true),
+            no_ffmpeg: Some(true),
+            hosters: None,
+        }
+    }
 }
 
 /// Ein Suchtreffer fürs Frontend (serialisierbare Spiegelung von `SearchHit`).
@@ -150,13 +192,9 @@ async fn episodes(
 
 #[tauri::command]
 async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<PlaybackDto, String> {
-    // Sprache/Hoster/Qualität wie beim Downloader (aus den Settings).
+    // Sprache/Qualität wie beim Downloader (Settings + Desktop-Config-Overrides).
     let s = state.backend.settings();
-    let prefs = vindex_desktop::prefs_from_settings(
-        &s,
-        "stream",
-        &vindex_desktop::DownloadOverrides::default(),
-    );
+    let prefs = vindex_desktop::prefs_from_settings(&s, "stream", &state.overrides());
 
     let resolved = state
         .backend
@@ -252,6 +290,7 @@ fn start_download(
     state: State<'_, AppState>,
 ) -> u64 {
     let settings = state.backend.settings();
+    let overrides = state.overrides();
     downloads::start(
         state.downloads.clone(),
         app,
@@ -259,6 +298,7 @@ fn start_download(
         file_name,
         title,
         settings,
+        overrides,
     )
 }
 
@@ -272,6 +312,7 @@ fn cancel_download(id: u64, state: State<'_, AppState>) {
 fn retry_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) -> Option<u64> {
     let (url, file_name, title) = state.downloads.params(id)?;
     let settings = state.backend.settings();
+    let overrides = state.overrides();
     Some(downloads::start(
         state.downloads.clone(),
         app,
@@ -279,6 +320,7 @@ fn retry_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) ->
         file_name,
         title,
         settings,
+        overrides,
     ))
 }
 
@@ -327,7 +369,7 @@ fn safe_media_path(
 
 #[tauri::command]
 fn library(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
-    let dir = state.backend.settings().download_path;
+    let dir = state.download_dir();
     let Ok(canon_dir) = std::fs::canonicalize(&dir) else {
         return Vec::new();
     };
@@ -351,7 +393,7 @@ fn library(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<LibraryEntr
 /// Löscht eine Mediendatei aus der Bibliothek — gleiche Validierung wie `library`.
 #[tauri::command]
 fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    let dir = state.backend.settings().download_path;
+    let dir = state.download_dir();
     let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     let canon = safe_media_path(&dir, &canon_dir, &name)
         .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())?;
@@ -361,7 +403,7 @@ fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), S
 /// Validiert `name` wie `library`/`delete` und gibt den kanonisierten Pfad zurück
 /// — gemeinsame Basis für Öffnen und „im Ordner zeigen" (kein Frontend-Opener-Grant).
 fn library_path(name: &str, state: &AppState) -> Result<std::path::PathBuf, String> {
-    let dir = state.backend.settings().download_path;
+    let dir = state.download_dir();
     let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     safe_media_path(&dir, &canon_dir, name)
         .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())
@@ -432,11 +474,25 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
+/// Bearbeitbare Desktop-Einstellungen lesen.
+#[tauri::command]
+fn get_config(state: State<'_, AppState>) -> config::DesktopConfig {
+    state.config.lock().unwrap().clone()
+}
+
+/// Bearbeitbare Desktop-Einstellungen speichern (persistent) und übernehmen.
+#[tauri::command]
+fn set_config(cfg: config::DesktopConfig, state: State<'_, AppState>) -> Result<(), String> {
+    config::save(&cfg)?;
+    *state.config.lock().unwrap() = cfg;
+    Ok(())
+}
+
 #[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
-        download_path: s.download_path.display().to_string(),
+        download_path: state.download_dir().display().to_string(),
         language: format!("{:?}", s.language),
         max_quality: format!("{:?}", s.max_quality),
         min_quality: format!("{:?}", s.min_quality),
@@ -525,6 +581,7 @@ pub fn run() {
                 backend,
                 proxy,
                 downloads,
+                config: Mutex::new(config::load()),
             });
             Ok(())
         })
@@ -550,6 +607,8 @@ pub fn run() {
             reveal_library_item,
             autostart_enabled,
             set_autostart,
+            get_config,
+            set_config,
             app_settings
         ])
         .run(tauri::generate_context!())
