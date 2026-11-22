@@ -22,8 +22,12 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
+
+// DNS fest über 1.1.1.1 (nie System-DNS) — Barons „1.1.1.1 überall"-Regel.
+const dns1111 = new Resolver();
+dns1111.setServers(["1.1.1.1", "[2606:4700:4700::1111]"]);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -104,8 +108,12 @@ async function hostAllowed(host) {
   }
   if (isIP(bare)) return !isPrivateIp(bare);
   try {
-    const addrs = await lookup(bare, { all: true });
-    return addrs.length > 0 && addrs.every((r) => !isPrivateIp(r.address));
+    const [a4, a6] = await Promise.all([
+      dns1111.resolve4(bare).catch(() => []),
+      dns1111.resolve6(bare).catch(() => []),
+    ]);
+    const addrs = [...a4, ...a6];
+    return addrs.length > 0 && addrs.every((ip) => !isPrivateIp(ip));
   } catch {
     return false;
   }

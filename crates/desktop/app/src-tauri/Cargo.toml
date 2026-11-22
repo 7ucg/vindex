@@ -35,6 +35,8 @@ reqwest = { version = "0.13", features = ["stream"] }
 futures-util = "0.3"
 base64 = "0.22"
 getrandom = "0.2"
+# DNS über 1.1.1.1 (nie System-DNS) — wie der Kern.
+hickory-resolver = "0.24"
 # Die headless-testbare Facade — der ganze Scraper/Download-Kern lebt dort.
 vindex-desktop = { path = "../../" }
 

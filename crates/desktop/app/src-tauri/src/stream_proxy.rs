@@ -259,16 +259,33 @@ fn ensure_public(url: &reqwest::Url) -> Result<(), (StatusCode, &'static str)> {
     Ok(())
 }
 
-/// DNS-Resolver, der private/lokale IPs schon beim Auflösen entfernt. Bleibt
-/// nichts übrig, schlägt die Auflösung fehl — die Verbindung kommt nie zustande.
+/// Fester Upstream-DNS über Cloudflare 1.1.1.1 (nie System-DNS) — umgeht
+/// DNS-Sperren und folgt Barons „1.1.1.1 überall"-Regel.
+fn resolver_1111() -> &'static hickory_resolver::TokioAsyncResolver {
+    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+    use std::sync::OnceLock;
+    static R: OnceLock<hickory_resolver::TokioAsyncResolver> = OnceLock::new();
+    R.get_or_init(|| {
+        hickory_resolver::TokioAsyncResolver::tokio(
+            ResolverConfig::cloudflare(),
+            ResolverOpts::default(),
+        )
+    })
+}
+
+/// DNS-Resolver über 1.1.1.1, der private/lokale IPs schon beim Auflösen entfernt.
+/// Bleibt nichts übrig, schlägt die Auflösung fehl — die Verbindung kommt nie zustande.
 struct GuardResolver;
 
 impl Resolve for GuardResolver {
     fn resolve(&self, name: Name) -> Resolving {
         Box::pin(async move {
-            let host = name.as_str().to_owned();
-            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
-            let allowed: Vec<SocketAddr> = resolved.filter(|a| !is_private_ip(a.ip())).collect();
+            let lookup = resolver_1111().lookup_ip(name.as_str()).await?;
+            let allowed: Vec<SocketAddr> = lookup
+                .iter()
+                .filter(|ip| !is_private_ip(*ip))
+                .map(|ip| SocketAddr::new(ip, 0))
+                .collect();
             if allowed.is_empty() {
                 let e: Box<dyn std::error::Error + Send + Sync> =
                     "kein erlaubtes Ziel (privat/lokal blockiert)".into();
