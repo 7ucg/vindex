@@ -28,6 +28,54 @@ pub fn next_user_agent() -> &'static str {
     USER_AGENTS[i % USER_AGENTS.len()]
 }
 
+static PROXY_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Leer/ungesetzt → kein Proxy.
+fn proxy_pool() -> &'static [String] {
+    static POOL: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        std::env::var("VINDEX_PROXY")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Round-Robin-Auswahl aus einem Pool (rein, testbar).
+fn rotate(cursor: usize, pool: &[String]) -> Option<&str> {
+    if pool.is_empty() {
+        None
+    } else {
+        Some(pool[cursor % pool.len()].as_str())
+    }
+}
+
+/// Nächster Proxy aus dem Pool (round-robin). `None`, wenn keiner konfiguriert ist.
+fn next_proxy() -> Option<String> {
+    let i = PROXY_CURSOR.fetch_add(1, Ordering::Relaxed);
+    rotate(i, proxy_pool()).map(str::to_string)
+}
+
+/// Hängt den nächsten Proxy an den reqwest-Builder. Schlägt ein konfigurierter
+/// Proxy beim Bauen fehl, wird ein Fehler zurückgegeben (fail-closed: lieber kein
+/// Request als ungewollt ungeproxter Traffic). Kein Proxy → unverändert.
+///
+/// SSRF-Hinweis: Über einen Proxy löst der PROXY den Zielhost auf — der eigene
+/// DNS-Filter (1.1.1.1 + [`is_forbidden_ip`]) greift für den finalen Connect dann
+/// nicht mehr. Ein Proxy ist eine bewusste, vertrauenswürdige Operator-Konfiguration;
+/// die Host-Allowlist (`site::validate_source_url`) am Eingang bleibt wirksam.
+fn apply_proxy(builder: reqwest::ClientBuilder) -> reqwest::Result<reqwest::ClientBuilder> {
+    match next_proxy() {
+        Some(p) => Ok(builder.proxy(reqwest::Proxy::all(&p)?)),
+        None => Ok(builder),
+    }
+}
+
 /// Marker, die auf eine Cloudflare-/Captcha-Interstitial-Seite hindeuten
 /// (aus `browser_fetch.py` / `models/common/http.py`).
 pub const CHALLENGE_MARKERS: &[&str] = &[
@@ -57,25 +105,25 @@ pub fn looks_like_challenge(html: &str, status: u16) -> bool {
 
 /// Baut den Standard-HTTP-Client (gzip, 20 s Timeout, fester Default-UA).
 pub fn client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
+    let b = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .gzip(true)
         .timeout(Duration::from_secs(20))
         .redirect(safe_redirect_policy())
-        .dns_resolver(std::sync::Arc::new(GuardedResolver))
-        .build()
+        .dns_resolver(std::sync::Arc::new(GuardedResolver));
+    apply_proxy(b)?.build()
 }
 
 /// Baut einen Client mit rotierendem (browser-ähnlichem) User-Agent — für die
 /// Hoster-/Episodenseiten, die auf plausible Clients achten.
 pub fn browser_client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
+    let b = reqwest::Client::builder()
         .user_agent(next_user_agent())
         .gzip(true)
         .timeout(Duration::from_secs(30))
         .redirect(safe_redirect_policy())
-        .dns_resolver(std::sync::Arc::new(GuardedResolver))
-        .build()
+        .dns_resolver(std::sync::Arc::new(GuardedResolver));
+    apply_proxy(b)?.build()
 }
 
 /// Fester Upstream-DNS. Cloudflare 1.1.1.1 umgeht DNS-Sperren des System-Resolvers,
@@ -380,13 +428,17 @@ fn impersonate_client() -> Result<wreq::Client, wreq::Error> {
     if let Some(c) = CLIENT.get() {
         return Ok(c.clone());
     }
-    let client = wreq::Client::builder()
+    let mut builder = wreq::Client::builder()
         .emulation(wreq_util::Emulation::Chrome149)
         .gzip(true)
         .timeout(Duration::from_secs(30))
         .redirect(wreq_safe_redirect())
-        .dns_resolver(std::sync::Arc::new(WreqGuardedResolver))
-        .build()?;
+        .dns_resolver(std::sync::Arc::new(WreqGuardedResolver));
+    // Proxy auch auf dem Impersonate-Pfad (fail-closed: Build-Fehler statt ungeproxt).
+    if let Some(p) = next_proxy() {
+        builder = builder.proxy(wreq::Proxy::all(&p)?);
+    }
+    let client = builder.build()?;
     // Bei Race den zuerst gesetzten Client verwenden (wreq::Client ist Arc-intern,
     // Clone ist billig).
     let _ = CLIENT.set(client.clone());
@@ -432,6 +484,17 @@ pub async fn get_text_impersonate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_rotation_round_robin() {
+        let pool = vec!["http://a:1".to_string(), "http://b:2".to_string()];
+        assert_eq!(rotate(0, &pool), Some("http://a:1"));
+        assert_eq!(rotate(1, &pool), Some("http://b:2"));
+        assert_eq!(rotate(2, &pool), Some("http://a:1")); // Umlauf
+        assert_eq!(rotate(0, &[]), None); // leerer Pool
+        let single = vec!["http://x:9".to_string()];
+        assert_eq!(rotate(7, &single), Some("http://x:9"));
+    }
 
     #[test]
     fn transient_status_classification() {

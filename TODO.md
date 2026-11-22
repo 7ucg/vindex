@@ -22,7 +22,6 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 - **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht
   reicht (echter Browser, z. B. chromiumoxide/headless).
-- **Proxy-Rotation** für geratelimitete CDNs.
 
 ## Hoster-Pflege
 

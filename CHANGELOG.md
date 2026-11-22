@@ -9,6 +9,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Proxy-Rotation: `VINDEX_PROXY` (komma-getrennt) verteilt die Anfragen round-robin über
+  einen Proxy-Pool (reqwest- und Impersonate-Client). Fail-closed — ein kaputter Proxy
+  bricht den Client-Bau ab, statt ungeproxt weiterzulaufen. Hinweis: über einen Proxy
+  greift der eigene DNS-/IP-Filter nicht mehr (der Proxy löst auf); das ist eine bewusste
+  Operator-Entscheidung, die Host-Allowlist am Eingang bleibt.
 - CLI: „keep watching" — nach jedem Download wird pro Serie die zuletzt geladene Folge
   gemerkt (`VINDEX_WATCH_STATE`-JSON), und `vindex download --continue <serien-url>` lädt
   die nächste Folge (oder Staffel 1 / Episode 1, wenn nichts gemerkt).
