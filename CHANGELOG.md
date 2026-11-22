@@ -7,11 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- CLI: Batch-Download über `vindex download --batch <datei>` — eine URL pro Zeile,
+  Leerzeilen und mit `#` beginnende Kommentare werden übersprungen. Die URLs werden
+  nacheinander mit demselben Sprach-/Hoster-/Qualitäts-Setup geladen (Delay dazwischen),
+  ein Fehler bricht den Batch nicht ab; am Ende folgt eine Zusammenfassung mit den
+  fehlgeschlagenen URLs.
+
 ### Geplant
 
 - TLS-Impersonate (`wreq`) und Headless-Browser-Fallback für Cloudflare-gated Seiten.
 - Filemoon Byse-API (AES-256-GCM); Resolver für Streamtape, Luluvdo, LoadX.
-- Batch-Download über Episodendatei, „keep watching", Proxy-Rotation.
+- „keep watching", Proxy-Rotation.
 - Watch via mpv/IINA, Syncplay, Anime4K.
 - Nativer HLS-Downloader (ohne ffmpeg).
 - API: Library, Auto-Sync, OpenAPI, persistenter Key-Store mit Scopes.

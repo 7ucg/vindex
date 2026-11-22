@@ -43,7 +43,12 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 #[derive(Parser, Debug)]
 pub struct DownloadArgs {
     /// Episoden- oder Film-URL (aniworld.to / s.to / filmo.to).
-    pub url: String,
+    /// Entfällt, wenn `--batch` genutzt wird.
+    pub url: Option<String>,
+    /// Textdatei mit einer URL pro Zeile; lädt alle Episoden nacheinander.
+    /// Leere Zeilen und mit `#` beginnende Zeilen werden übersprungen.
+    #[arg(long, value_name = "DATEI")]
+    pub batch: Option<PathBuf>,
     /// Sprache (German Dub | English Sub | German Sub | English Dub).
     #[arg(long)]
     pub language: Option<String>,
@@ -58,10 +63,34 @@ pub struct DownloadArgs {
     pub output_dir: Option<PathBuf>,
 }
 
-pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
-    let settings = Settings::load();
-    let client = http::browser_client()?;
+/// Aus Optionen und Einstellungen aufgelöste Download-Vorgaben. Der Dateiname
+/// hängt an der jeweiligen URL und wird erst pro Download ergänzt.
+struct ResolvedPrefs {
+    language: Language,
+    hosters: Vec<Hoster>,
+    max_quality: Quality,
+    min_quality: Quality,
+    out_dir: PathBuf,
+    native_hls: bool,
+}
 
+impl ResolvedPrefs {
+    /// Baut die vollständigen `DownloadPrefs` für eine konkrete URL.
+    fn for_url(&self, url: &str) -> DownloadPrefs {
+        DownloadPrefs {
+            languages: vec![self.language],
+            hosters: self.hosters.clone(),
+            max_quality: self.max_quality,
+            min_quality: self.min_quality,
+            out_dir: self.out_dir.clone(),
+            file_name: file_name_from_url(url),
+            native_hls: self.native_hls,
+        }
+    }
+}
+
+/// Löst Sprache/Hoster/Qualität/Ziel einmalig aus Optionen und Einstellungen auf.
+fn resolve_prefs(args: &DownloadArgs, settings: &Settings) -> anyhow::Result<ResolvedPrefs> {
     let language = match &args.language {
         Some(l) => Language::from_str(l).map_err(|e| anyhow::anyhow!(e))?,
         None => settings.language,
@@ -79,22 +108,55 @@ pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
         Some(q) => Quality::from_str(q).map_err(|e| anyhow::anyhow!(e))?,
         None => settings.max_quality,
     };
-    let out_dir = args.output_dir.unwrap_or(settings.download_path.clone());
-    let file_name = file_name_from_url(&args.url);
-
-    let prefs = DownloadPrefs {
-        languages: vec![language],
+    let out_dir = args
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| settings.download_path.clone());
+    Ok(ResolvedPrefs {
+        language,
         hosters,
         max_quality,
         min_quality: settings.min_quality,
         out_dir,
-        file_name: file_name.clone(),
         native_hls: settings.native_hls,
-    };
+    })
+}
 
+pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
+    let settings = Settings::load();
+    let client = http::browser_client()?;
+    let resolved = resolve_prefs(&args, &settings)?;
+
+    match (&args.url, &args.batch) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("Bitte entweder eine URL ODER --batch angeben, nicht beides.")
+        }
+        (None, None) => {
+            anyhow::bail!("Keine URL angegeben. Bitte eine URL oder --batch <datei> nutzen.")
+        }
+        (Some(url), None) => {
+            let path = download_one(&client, &resolved, url).await?;
+            println!("Fertig: {}", path.display());
+            Ok(())
+        }
+        (None, Some(file)) => {
+            run_batch(&client, &resolved, file, settings.download_delay_secs).await
+        }
+    }
+}
+
+/// Lädt eine einzelne URL und meldet den Fortschritt. Fehler werden als
+/// `anyhow`-Fehler zurückgegeben (kein Panic).
+async fn download_one(
+    client: &reqwest::Client,
+    resolved: &ResolvedPrefs,
+    url: &str,
+) -> anyhow::Result<PathBuf> {
+    let prefs = resolved.for_url(url);
     println!(
-        "Lade „{file_name}\" ({}, Hoster-Reihenfolge: {}) ...",
-        language.as_str(),
+        "Lade „{}\" ({}, Hoster-Reihenfolge: {}) ...",
+        prefs.file_name,
+        resolved.language.as_str(),
         prefs
             .hosters
             .iter()
@@ -102,14 +164,69 @@ pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    download_url(client, url, &prefs, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Download fehlgeschlagen: {e}"))
+}
 
-    match download_url(&client, &args.url, &prefs, None).await {
-        Ok(path) => {
-            println!("Fertig: {}", path.display());
-            Ok(())
-        }
-        Err(e) => Err(anyhow::anyhow!("Download fehlgeschlagen: {e}")),
+/// Lädt alle URLs aus einer Episodendatei nacheinander. Ein Fehler bei einer
+/// Episode bricht den Batch nicht ab; am Ende folgt eine Zusammenfassung.
+async fn run_batch(
+    client: &reqwest::Client,
+    resolved: &ResolvedPrefs,
+    file: &std::path::Path,
+    delay_secs: u64,
+) -> anyhow::Result<()> {
+    let contents = std::fs::read_to_string(file)
+        .map_err(|e| anyhow::anyhow!("Batch-Datei {} nicht lesbar: {e}", file.display()))?;
+    let urls = parse_batch_list(&contents);
+    if urls.is_empty() {
+        anyhow::bail!(
+            "Batch-Datei {} enthält keine URLs (nur Leerzeilen/Kommentare?).",
+            file.display()
+        );
     }
+
+    let total = urls.len();
+    let mut failures: Vec<String> = Vec::new();
+    for (i, url) in urls.iter().enumerate() {
+        println!("[{}/{}] {url}", i + 1, total);
+        match download_one(client, resolved, url).await {
+            Ok(path) => println!("Fertig: {}", path.display()),
+            Err(e) => {
+                eprintln!("Fehlgeschlagen: {url} — {e}");
+                failures.push(url.clone());
+            }
+        }
+        // Konfiguriertes Delay zwischen den Downloads einhalten (nicht nach dem letzten).
+        if i + 1 < total && delay_secs > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+    }
+
+    let ok = total - failures.len();
+    println!(
+        "\nZusammenfassung: {ok} erfolgreich, {} fehlgeschlagen.",
+        failures.len()
+    );
+    if !failures.is_empty() {
+        println!("Fehlgeschlagene URLs:");
+        for url in &failures {
+            println!("  {url}");
+        }
+    }
+    Ok(())
+}
+
+/// Liest eine Episodenliste: eine URL pro Zeile. Leerzeilen und mit `#`
+/// beginnende Kommentarzeilen werden übersprungen, Whitespace wird getrimmt.
+pub fn parse_batch_list(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.to_string())
+        .collect()
 }
 
 /// Leitet einen Dateinamen aus einer URL ab:
@@ -238,5 +355,67 @@ mod tests {
             capture_num("https://x/staffel-99999999999", "/staffel-"),
             None
         );
+    }
+
+    #[test]
+    fn batch_liste_einfache_urls() {
+        let input = "https://a.to/e1\nhttps://a.to/e2\n";
+        assert_eq!(
+            parse_batch_list(input),
+            vec!["https://a.to/e1", "https://a.to/e2"]
+        );
+    }
+
+    #[test]
+    fn batch_liste_ueberspringt_leerzeilen() {
+        let input = "https://a.to/e1\n\n\nhttps://a.to/e2\n";
+        assert_eq!(
+            parse_batch_list(input),
+            vec!["https://a.to/e1", "https://a.to/e2"]
+        );
+    }
+
+    #[test]
+    fn batch_liste_ueberspringt_kommentare() {
+        let input = "# Kommentar\nhttps://a.to/e1\n# noch einer\nhttps://a.to/e2\n";
+        assert_eq!(
+            parse_batch_list(input),
+            vec!["https://a.to/e1", "https://a.to/e2"]
+        );
+    }
+
+    #[test]
+    fn batch_liste_trimmt_whitespace() {
+        let input = "   https://a.to/e1   \n\t https://a.to/e2\t\n";
+        assert_eq!(
+            parse_batch_list(input),
+            vec!["https://a.to/e1", "https://a.to/e2"]
+        );
+    }
+
+    #[test]
+    fn batch_liste_gemischt() {
+        let input = "\
+# Staffel 1
+https://a.to/s1e1
+
+   https://a.to/s1e2
+#   https://a.to/ausgeblendet
+\thttps://a.to/s1e3
+";
+        assert_eq!(
+            parse_batch_list(input),
+            vec![
+                "https://a.to/s1e1",
+                "https://a.to/s1e2",
+                "https://a.to/s1e3",
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_liste_leer_ergibt_leere_liste() {
+        assert!(parse_batch_list("").is_empty());
+        assert!(parse_batch_list("\n\n# nur Kommentar\n   \n").is_empty());
     }
 }

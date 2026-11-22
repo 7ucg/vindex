@@ -23,7 +23,8 @@ enum Command {
     Census(census::CensusArgs),
     /// Sucht Titel im aniworld.to-Katalog (Teilstring, case-insensitiv).
     Search(download::SearchArgs),
-    /// Lädt eine Episode oder einen Film herunter (Sprache/Hoster/Qualität mit Fallback).
+    /// Lädt eine Episode/einen Film oder per `--batch <datei>` eine ganze Episodenliste
+    /// (Sprache/Hoster/Qualität mit Fallback).
     Download(download::DownloadArgs),
     /// Interaktives Menü: suchen → Staffel/Episode/Sprache wählen → laden.
     Menu,

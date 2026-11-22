@@ -52,6 +52,9 @@ vindex download "https://aniworld.to/anime/stream/<slug>/staffel-1/episode-1" \
   --language "German Dub" --provider VOE --quality 1080p
 vindex download "https://filmo.to/movies/<slug>"
 
+# Mehrere Episoden aus einer Datei (eine URL pro Zeile, # = Kommentar)
+vindex download --batch episoden.txt --language "German Dub" --quality 1080p
+
 # Interaktives Menü
 vindex menu
 
