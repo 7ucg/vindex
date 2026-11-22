@@ -104,15 +104,21 @@ impl Backend {
 
     /// Hoster-Links einer Episode (für die Download-Auswahl im Frontend).
     pub async fn providers(&self, episode_url: &str) -> Result<ProviderLinks> {
+        // SSRF-Schutz: nur die unterstützten Portale als Quell-URL zulassen.
+        site::validate_source_url(episode_url).map_err(core::error::Error::Parse)?;
         let base = site::base_for_url(episode_url);
         site::serienstream::provider_links(&self.client, base, episode_url).await
     }
 
     /// Lädt die effektiven Laufzeit-Einstellungen (`VINDEX_*`-ENV + `.env`).
     /// Darüber sind Download-Pfad, Sprache sowie effektive Hoster/Qualität
-    /// (`Settings::effective_hosters`) fürs Frontend zugänglich.
+    /// (`Settings::effective_hosters`) fürs Frontend zugänglich. Die Daemon-
+    /// API-Keys werden entfernt — ein Frontend braucht sie nicht und soll sie
+    /// nicht zu sehen bekommen.
     pub fn settings(&self) -> Settings {
-        Settings::load()
+        let mut s = Settings::load();
+        s.api_keys.clear();
+        s
     }
 
     /// Löst einen Hoster + Embed-URL zur direkten Stream-URL auf

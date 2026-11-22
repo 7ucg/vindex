@@ -16,7 +16,7 @@ pub mod vidmoly;
 pub mod vidoza;
 pub mod voe;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::Hoster;
 
 /// Ein aufgelöster Stream, bereit für die Download-Engine.
@@ -39,7 +39,22 @@ pub async fn resolve(
     hoster: Hoster,
     embed_url: &str,
 ) -> Result<Resolved> {
-    match hoster {
+    // SSRF-Schutz auch für direkt übergebene Embed-URLs (z. B. über die
+    // Desktop-Facade): nur http/https, kein IP-Literal aus einem gesperrten
+    // Bereich. Interne Ziele über Hostnamen fängt zusätzlich der DNS-Filter ab.
+    if !(embed_url.starts_with("http://") || embed_url.starts_with("https://")) {
+        return Err(Error::extract(
+            hoster.as_str(),
+            "Embed-URL muss http/https sein",
+        ));
+    }
+    if crate::http::host_is_forbidden_ip_literal(embed_url) {
+        return Err(Error::extract(
+            hoster.as_str(),
+            "Embed-URL zeigt auf eine gesperrte Adresse",
+        ));
+    }
+    let resolved = match hoster {
         Hoster::Voe => voe::resolve(client, embed_url).await,
         Hoster::Vidoza => vidoza::resolve(client, embed_url).await,
         Hoster::Doodstream => doodstream::resolve(client, embed_url).await,
@@ -49,5 +64,21 @@ pub async fn resolve(
         Hoster::Streamtape => streamtape::resolve(client, embed_url).await,
         Hoster::Luluvdo => luluvdo::resolve(client, embed_url).await,
         Hoster::LoadX => loadx::resolve(client, embed_url).await,
+    }?;
+
+    // Die aufgelöste Stream-URL stammt aus gescraptem Hoster-HTML — ebenfalls gegen
+    // Nicht-http/https und gesperrte IP-Literale prüfen, bevor sie weitergegeben wird.
+    if !(resolved.url.starts_with("http://") || resolved.url.starts_with("https://")) {
+        return Err(Error::extract(
+            hoster.as_str(),
+            "aufgelöste Stream-URL muss http/https sein",
+        ));
     }
+    if crate::http::host_is_forbidden_ip_literal(&resolved.url) {
+        return Err(Error::extract(
+            hoster.as_str(),
+            "aufgelöste Stream-URL zeigt auf eine gesperrte Adresse",
+        ));
+    }
+    Ok(resolved)
 }

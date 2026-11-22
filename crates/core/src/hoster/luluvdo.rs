@@ -55,7 +55,12 @@ pub fn extract_url_from_html(html: &str) -> Option<String> {
     .unwrap();
     if let Some(m) = packed_re.captures(html) {
         let packed = &m["p"];
-        let radix: u32 = m["a"].parse().unwrap_or(10);
+        // Radix auf das Alphabet (2..=62) begrenzen; alles andere ist ungültig.
+        let radix: u32 = m["a"]
+            .parse::<u32>()
+            .ok()
+            .filter(|r| (2..=62).contains(r))
+            .unwrap_or(36);
         let keywords: Vec<&str> = m["k"].split('|').collect();
         let unpacked = unpack_js(packed, radix, &keywords);
         if let Some(url) = extract_url_from_text(&unpacked) {

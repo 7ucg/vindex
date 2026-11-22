@@ -58,6 +58,25 @@ pub struct RateLimiter {
     hits: StdMutex<HashMap<IpAddr, VecDeque<Instant>>>,
 }
 
+/// Obergrenze getrackter Schlüssel, damit die Map nicht unbegrenzt wächst.
+const MAX_TRACKED_KEYS: usize = 100_000;
+
+/// Normalisiert den Rate-Limit-Schlüssel: IPv4 unverändert, IPv6 auf das /64-Präfix
+/// (die unteren 64 Bit genullt), damit ein einzelner /64-Block nicht durch
+/// Adressrotation am Limit vorbeikommt.
+fn normalize_rate_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut seg = v6.segments();
+            for s in seg.iter_mut().skip(4) {
+                *s = 0;
+            }
+            IpAddr::V6(std::net::Ipv6Addr::from(seg))
+        }
+    }
+}
+
 impl RateLimiter {
     /// Baut ein Limit mit *max* Requests je *window* und IP.
     pub(crate) fn new(max: u32, window: Duration) -> Self {
@@ -73,8 +92,17 @@ impl RateLimiter {
     /// nächsten freien Slot (mindestens 1).
     fn check(&self, ip: IpAddr) -> Result<(), u64> {
         let now = Instant::now();
+        let key = normalize_rate_key(ip);
         let mut map = self.hits.lock().expect("Rate-Limit-Mutex nicht vergiftet");
-        let dq = map.entry(ip).or_default();
+        // Speicher begrenzen: vor dem Anlegen eines neuen Buckets veraltete
+        // Einträge (deren jüngster Treffer außerhalb des Fensters liegt) wegfegen.
+        if !map.contains_key(&key) && map.len() >= MAX_TRACKED_KEYS {
+            map.retain(|_, dq| {
+                dq.back()
+                    .is_some_and(|&t| now.duration_since(t) < self.window)
+            });
+        }
+        let dq = map.entry(key).or_default();
         // Zeitstempel außerhalb des Fensters verwerfen.
         while let Some(&front) = dq.front() {
             if now.duration_since(front) >= self.window {

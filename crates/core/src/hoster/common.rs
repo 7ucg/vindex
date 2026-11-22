@@ -83,7 +83,10 @@ fn decode_base_n(token: &str, radix: u32) -> Option<i64> {
         if digit >= radix {
             return None;
         }
-        result = result * radix as i64 + digit as i64;
+        // Checked, damit ein überlanger/manipulierter Token keinen Overflow-Panic auslöst.
+        result = result
+            .checked_mul(radix as i64)?
+            .checked_add(digit as i64)?;
     }
     Some(result)
 }

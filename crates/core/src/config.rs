@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::model::{default_fallback_order, Hoster, Language, Quality};
 
 /// Laufzeit-Einstellungen.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Settings {
     pub download_path: PathBuf,
     pub language: Language,
@@ -30,6 +30,31 @@ pub struct Settings {
     /// API-Keys für den Daemon (`VINDEX_API_KEYS`, komma-getrennt). Leer = keine
     /// Auth; der Daemon startet dann nur auf localhost.
     pub api_keys: Vec<String>,
+}
+
+impl std::fmt::Debug for Settings {
+    /// Redigiert `api_keys`, damit die Keys nicht in Logs/Debug-Ausgaben landen.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("download_path", &self.download_path)
+            .field("language", &self.language)
+            .field("provider", &self.provider)
+            .field("fallback_order", &self.fallback_order)
+            .field("max_quality", &self.max_quality)
+            .field("min_quality", &self.min_quality)
+            .field("simultaneous_downloads", &self.simultaneous_downloads)
+            .field("download_delay_secs", &self.download_delay_secs)
+            .field("retries", &self.retries)
+            .field("aniskip", &self.aniskip)
+            .field("keep_watching", &self.keep_watching)
+            .field("naming_template", &self.naming_template)
+            .field("native_hls", &self.native_hls)
+            .field(
+                "api_keys",
+                &format_args!("[{} redigiert]", self.api_keys.len()),
+            )
+            .finish()
+    }
 }
 
 impl Default for Settings {
