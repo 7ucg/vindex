@@ -11,8 +11,10 @@
 //! der Bind ist localhost-only, jede Anfrage braucht das (CSPRNG-)Token, und der
 //! `Host`-Header muss auf localhost zeigen.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use axum::{
     body::Body,
@@ -60,10 +62,13 @@ impl Proxy {
 /// Fail-closed: ohne CSPRNG-Token startet der Proxy nicht.
 pub async fn start() -> std::io::Result<Arc<Proxy>> {
     let token = random_token()?;
-    // Redirects werden bewusst manuell verfolgt (Re-Validierung pro Hop).
+    // Redirects werden bewusst manuell verfolgt (Re-Validierung pro Hop). Der
+    // Guard-Resolver verwirft private/lokale IPs schon beim Auflösen — so nutzen
+    // Prüfung und Verbindung dieselbe Auflösung (kein DNS-Rebinding-Fenster).
     let client = reqwest::Client::builder()
         .user_agent(DESKTOP_UA)
         .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(GuardResolver))
         .build()
         .map_err(std::io::Error::other)?;
 
@@ -131,7 +136,7 @@ async fn fetch_validated(
 ) -> Result<(reqwest::Url, reqwest::Response), (StatusCode, &'static str)> {
     let mut current = start_url;
     for _ in 0..=MAX_REDIRECTS {
-        ensure_public(&current).await?;
+        ensure_public(&current)?;
 
         let mut req = client.get(current.clone());
         if let Some(r) = referer {
@@ -205,9 +210,9 @@ async fn deliver(
     }
 }
 
-/// Prüft Schema, Hostname-Allowlist und — über DNS-Auflösung — alle Ziel-IPs.
-/// Blockt private/lokale Ziele, IPv4-mapped-v6, CGNAT, Benchmarking u. a.
-async fn ensure_public(url: &reqwest::Url) -> Result<(), (StatusCode, &'static str)> {
+/// Prüft Schema, Hostname-Allowlist und IP-Literale. Für Hostnamen setzt der
+/// Guard-Resolver des Clients die IP-Prüfung beim Verbinden durch (TOCTOU-frei).
+fn ensure_public(url: &reqwest::Url) -> Result<(), (StatusCode, &'static str)> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err((StatusCode::BAD_REQUEST, "scheme"));
     }
@@ -215,30 +220,35 @@ async fn ensure_public(url: &reqwest::Url) -> Result<(), (StatusCode, &'static s
     if is_blocked_hostname(host) {
         return Err((StatusCode::FORBIDDEN, "blocked host"));
     }
-    // IP-Literal direkt prüfen, sonst alle aufgelösten IPs.
+    // IP-Literale ruft der Resolver nicht auf — hier direkt abweisen.
     let bare = host.trim_matches(|c| c == '[' || c == ']');
     if let Ok(ip) = bare.parse::<IpAddr>() {
-        return if is_private_ip(ip) {
-            Err((StatusCode::FORBIDDEN, "private ip"))
-        } else {
-            Ok(())
-        };
-    }
-    let port = url.port_or_known_default().unwrap_or(443);
-    let mut any = false;
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "dns"))?;
-    for a in addrs {
-        any = true;
-        if is_private_ip(a.ip()) {
+        if is_private_ip(ip) {
             return Err((StatusCode::FORBIDDEN, "private ip"));
         }
     }
-    if !any {
-        return Err((StatusCode::BAD_GATEWAY, "dns leer"));
-    }
     Ok(())
+}
+
+/// DNS-Resolver, der private/lokale IPs schon beim Auflösen entfernt. Bleibt
+/// nichts übrig, schlägt die Auflösung fehl — die Verbindung kommt nie zustande.
+struct GuardResolver;
+
+impl Resolve for GuardResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let allowed: Vec<SocketAddr> = resolved.filter(|a| !is_private_ip(a.ip())).collect();
+            if allowed.is_empty() {
+                let e: Box<dyn std::error::Error + Send + Sync> =
+                    "kein erlaubtes Ziel (privat/lokal blockiert)".into();
+                return Err(e);
+            }
+            let out: Addrs = Box::new(allowed.into_iter());
+            Ok(out)
+        })
+    }
 }
 
 fn is_blocked_hostname(host: &str) -> bool {
@@ -274,6 +284,9 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || v6.is_multicast()
                 || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
                 || (seg[0] & 0xffc0) == 0xfe80 // link local fe80::/10
+                || seg[0] == 0x2002 // 6to4 2002::/16
+                || (seg[0] == 0x2001 && seg[1] == 0x0000) // Teredo 2001::/32
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b) // NAT64 64:ff9b::/96
         }
     }
 }
