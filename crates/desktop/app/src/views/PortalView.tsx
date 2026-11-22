@@ -1,10 +1,17 @@
 import { createResource, createSignal, createMemo, For, Show, type JSX } from "solid-js";
-import { catalog, type SearchHit } from "../lib/api";
+import { catalog, seasons, episodes, startDownload, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
 
 type Sort = "az" | "za";
+
+function sanitize(s: string): string {
+  return s.replace(/[\\/:*?"<>|]/g, "").trim();
+}
+function pad(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
 
 const LABEL: Record<Portal, string> = {
   aniworld: "aniworld.to",
@@ -19,6 +26,55 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [items] = createResource(() => props.portal, catalog);
   const [sort, setSort] = createSignal<Sort>("az");
   const [filter, setFilter] = createSignal("");
+  // Mehrfachauswahl → Massen-Download (url → title).
+  const [selectMode, setSelectMode] = createSignal(false);
+  const [picked, setPicked] = createSignal<Map<string, string>>(new Map());
+  const [bulkBusy, setBulkBusy] = createSignal(false);
+
+  const isMovie = () => props.portal === "filmo";
+
+  const onCard = (h: SearchHit) => {
+    if (!selectMode()) {
+      openTitle(h.title, h.url);
+      return;
+    }
+    setPicked((m) => {
+      const n = new Map(m);
+      if (n.has(h.url)) n.delete(h.url);
+      else n.set(h.url, h.title);
+      return n;
+    });
+  };
+
+  const enqueueSeries = async (url: string, title: string) => {
+    const secs = await seasons(url).catch(() => [] as number[]);
+    for (const s of secs) {
+      const eps = await episodes(url, s).catch(() => []);
+      for (const e of eps) {
+        const base = `${sanitize(title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
+        await startDownload(e.url, base, `${title} — S${e.season}E${e.index_in_season}`).catch(
+          () => {},
+        );
+      }
+    }
+  };
+
+  const bulkLoad = async () => {
+    setBulkBusy(true);
+    try {
+      for (const [url, title] of picked()) {
+        if (isMovie()) {
+          await startDownload(url, sanitize(title), title).catch(() => {});
+        } else {
+          await enqueueSeries(url, title);
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+      setSelectMode(false);
+      setPicked(new Map());
+    }
+  };
 
   // Sicherer Zugriff: eine Resource im Fehlerzustand WIRFT beim Lesen von items().
   // ready() liefert die Liste, ohne zu werfen — sonst bräche die Fehleranzeige.
@@ -51,7 +107,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           <button class="chip" classList={{ on: sort() === "za" }} onClick={() => setSort("za")}>
             Z–A
           </button>
-          <div class="search" style={{ "margin-left": "auto", "min-width": "220px" }}>
+          <div class="search" style={{ "margin-left": "auto", "min-width": "200px" }}>
             <IconSearch />
             <input
               placeholder="Im Katalog filtern …"
@@ -59,6 +115,21 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               onInput={(e) => setFilter(e.currentTarget.value)}
             />
           </div>
+          <button
+            class="chip"
+            classList={{ on: selectMode() }}
+            onClick={() => {
+              setSelectMode(!selectMode());
+              setPicked(new Map());
+            }}
+          >
+            {selectMode() ? "Fertig" : "Auswählen"}
+          </button>
+          <Show when={selectMode() && picked().size > 0}>
+            <button class="chip" disabled={bulkBusy()} onClick={() => void bulkLoad()}>
+              {bulkBusy() ? "reiht ein …" : `${picked().size} laden`}
+            </button>
+          </Show>
         </div>
       </Show>
 
@@ -81,9 +152,17 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
         <div class="grid">
           <For each={visible().slice(0, RENDER_CAP)}>
             {(h) => (
-              <div class="card" title={h.url} onClick={() => openTitle(h.title, h.url)}>
+              <div
+                class="card"
+                classList={{ picked: picked().has(h.url) }}
+                title={h.url}
+                onClick={() => onCard(h)}
+              >
                 <div class="poster">
                   <Cover url={h.url} title={h.title} />
+                  <Show when={selectMode()}>
+                    <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
+                  </Show>
                   <div class="play-ov">
                     <button class="play-btn">
                       <IconPlay />

@@ -401,6 +401,27 @@ a {
   background: color-mix(in srgb, var(--play) 85%, #000);
   color: #04121a;
 }
+.card.picked .poster {
+  outline: 3px solid var(--v2);
+  outline-offset: 2px;
+}
+.poster .pick-mark {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  background: rgba(8, 6, 16, 0.7);
+  border: 2px solid var(--v2);
+  color: #fff;
+}
+.card.picked .pick-mark {
+  background: var(--grad);
+}
 .card .t {
   margin: 9px 2px 2px;
   font-weight: 600;
