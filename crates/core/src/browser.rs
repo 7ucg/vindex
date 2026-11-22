@@ -49,12 +49,29 @@ const MAX_STDERR_BYTES: u64 = 64 * 1024;
 const FETCH_TIMEOUT_SECS: &str = "45";
 /// Harte Obergrenze für die Lebensdauer eines einzelnen Proxy-Tunnels.
 const TUNNEL_TIMEOUT: Duration = Duration::from_secs(90);
+/// Gesamt-Deckel für den obscura-Aufruf (> obscuras eigenem Timeout, mit Reserve).
+const OVERALL_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// Erzeugt ein zufälliges Proxy-Auth-Token (32 Hex-Zeichen) über den CSPRNG.
-fn random_token() -> String {
+/// Fail-closed: schlägt der RNG fehl, kommt ein Fehler (kein vorhersagbares Token).
+fn random_token() -> Result<String> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).ok();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::getrandom(&mut bytes)
+        .map_err(|_| Error::extract("obscura", "CSPRNG nicht verfügbar"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Konstantzeit-Vergleich zweier Strings (für den Proxy-Auth-Abgleich).
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// True, wenn *url* eine absolute http(s)-URL ist.
@@ -83,18 +100,21 @@ pub async fn fetch_html(url: &str) -> Result<String> {
         ));
     }
 
-    // Lokalen 1.1.1.1-CONNECT-Proxy starten; lebt nur für diesen Aufruf und verlangt
-    // ein zufälliges Token pro Aufruf, damit kein anderer lokaler Prozess ihn mitnutzt.
-    let token = random_token();
+    // Zufälliges Token pro Aufruf (fail-closed), damit kein anderer lokaler Prozess
+    // den Proxy mitnutzt. Erst danach den Listener binden.
+    let token = random_token()?;
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(Error::Io)?;
     let addr = listener.local_addr().map_err(Error::Io)?;
     let expected = format!("Basic {}", STANDARD.encode(format!("vindex:{token}")));
     let proxy = tokio::spawn(proxy_loop(listener, expected));
 
-    let proxy_arg = format!("http://vindex:{token}@{addr}");
+    // Proxy (inkl. Token) NICHT über argv — das `cmdline` ist oft world-readable —,
+    // sondern über die Child-Env (`environ` ist nur für den Besitzer lesbar). obscura
+    // honoriert `HTTPS_PROXY`/`HTTP_PROXY`.
+    let proxy_url = format!("http://vindex:{token}@{addr}");
     let spawned = Command::new(bin)
-        .arg("--proxy")
-        .arg(&proxy_arg)
+        .env("HTTPS_PROXY", &proxy_url)
+        .env("HTTP_PROXY", &proxy_url)
         .arg("fetch")
         .arg(url)
         .arg("--dump")
@@ -113,8 +133,8 @@ pub async fn fetch_html(url: &str) -> Result<String> {
     result
 }
 
-/// Startet obscura, liest stdout inkrementell bis zur Obergrenze (bei Überschreiten
-/// wird das Kind getötet) und wertet den Exit-Status aus.
+/// Startet obscura, leert stderr nebenläufig (gegen Pipe-Deadlock), liest stdout
+/// gedeckelt und erzwingt einen Gesamt-Timeout (tötet das Kind bei Ablauf/Überlauf).
 async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<String> {
     let mut child = spawned.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => {
@@ -124,30 +144,54 @@ async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<
     })?;
 
     let mut stdout = child.stdout.take().expect("stdout piped");
-    let stderr = child.stderr.take().expect("stderr piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
 
-    // stdout gedeckelt lesen; bei Überschreiten das Kind töten.
-    let mut html = Vec::new();
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        let n = stdout.read(&mut chunk).await.map_err(Error::Io)?;
-        if n == 0 {
-            break;
+    // stderr nebenläufig leeren, sonst kann obscura beim Vollschreiben der stderr-Pipe
+    // blockieren, während wir auf stdout warten (Deadlock).
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = (&mut stderr)
+            .take(MAX_STDERR_BYTES)
+            .read_to_end(&mut buf)
+            .await;
+        buf
+    });
+
+    // stdout lesen + auf Exit warten, alles unter einem Gesamt-Timeout.
+    let read = async {
+        let mut html = Vec::new();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            let n = stdout.read(&mut chunk).await.map_err(Error::Io)?;
+            if n == 0 {
+                break;
+            }
+            if html.len() + n > MAX_HTML_BYTES {
+                return Err(Error::extract(
+                    "obscura",
+                    "Antwort überschreitet Größenlimit",
+                ));
+            }
+            html.extend_from_slice(&chunk[..n]);
         }
-        if html.len() + n > MAX_HTML_BYTES {
+        let status = child.wait().await.map_err(Error::Io)?;
+        Ok::<(Vec<u8>, std::process::ExitStatus), Error>((html, status))
+    };
+
+    let (html, status) = match tokio::time::timeout(OVERALL_TIMEOUT, read).await {
+        Err(_) => {
             let _ = child.start_kill();
-            return Err(Error::extract(
-                "obscura",
-                "Antwort überschreitet Größenlimit",
-            ));
+            return Err(Error::extract("obscura", "Zeitüberschreitung"));
         }
-        html.extend_from_slice(&chunk[..n]);
-    }
+        Ok(Err(e)) => {
+            let _ = child.start_kill();
+            return Err(e);
+        }
+        Ok(Ok(v)) => v,
+    };
 
-    let status = child.wait().await.map_err(Error::Io)?;
     if !status.success() {
-        let mut err = Vec::new();
-        let _ = stderr.take(MAX_STDERR_BYTES).read_to_end(&mut err).await;
+        let err = stderr_task.await.unwrap_or_default();
         return Err(Error::extract(
             "obscura",
             format!(
@@ -159,15 +203,20 @@ async fn run_obscura(spawned: std::io::Result<tokio::process::Child>) -> Result<
     Ok(String::from_utf8_lossy(&html).into_owned())
 }
 
-/// Nimmt Verbindungen des CONNECT-Proxys an, bis die Task abgebrochen wird. Jeder
+/// Nimmt Verbindungen des CONNECT-Proxys an, bis die Task abgebrochen wird. Die
+/// Tunnel laufen in einem [`tokio::task::JoinSet`]: wird diese Task abgebrochen (nach
+/// dem obscura-Aufruf), bricht das Fallenlassen des Sets alle offenen Tunnel ab. Jeder
 /// Tunnel muss sich mit *expected* (`Proxy-Authorization`) ausweisen und hat einen
 /// harten Lebenszeit-Deckel.
 async fn proxy_loop(listener: TcpListener, expected: String) {
+    let mut tunnels = tokio::task::JoinSet::new();
     while let Ok((sock, _)) = listener.accept().await {
         let exp = expected.clone();
-        tokio::spawn(async move {
+        tunnels.spawn(async move {
             let _ = tokio::time::timeout(TUNNEL_TIMEOUT, handle_connect(sock, &exp)).await;
         });
+        // Fertige Tunnel abräumen, damit das Set nicht unbegrenzt wächst.
+        while tunnels.try_join_next().is_some() {}
     }
 }
 
@@ -233,7 +282,9 @@ async fn handle_connect(mut client: TcpStream, expected_auth: &str) {
 fn proxy_auth_ok(head: &str, expected: &str) -> bool {
     head.lines()
         .filter_map(|l| l.split_once(':'))
-        .any(|(k, v)| k.trim().eq_ignore_ascii_case("proxy-authorization") && v.trim() == expected)
+        .any(|(k, v)| {
+            k.trim().eq_ignore_ascii_case("proxy-authorization") && ct_eq(v.trim(), expected)
+        })
 }
 
 /// Parst die `CONNECT host:port HTTP/1.1`-Startzeile zu `(host, port)`.
@@ -300,11 +351,18 @@ mod tests {
 
     #[test]
     fn token_ist_zufaellig_und_hex() {
-        let a = random_token();
-        let b = random_token();
+        let a = random_token().unwrap();
+        let b = random_token().unwrap();
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ct_eq_vergleich() {
+        assert!(ct_eq("gleich", "gleich"));
+        assert!(!ct_eq("kurz", "länger"));
+        assert!(!ct_eq("aaaa", "aaab"));
     }
 
     #[test]
