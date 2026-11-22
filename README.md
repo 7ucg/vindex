@@ -12,10 +12,10 @@ HTTP-API/Daemon und Desktop-Backend.
 
 ## Funktionen
 
-- Portale: aniworld.to (Serien, Staffeln, Episoden samt `Filme`-Tab) funktioniert
-  vollständig. serienstream.to wurde umgebaut (anderer Seitenaufbau, Cloudflare-Captchas)
-  und wird vom aktuellen Scraper nicht bedient; s.to ist stillgelegt. filmo.to (Filme)
-  ist angelegt, aber nicht gegen die Live-Seite verifiziert.
+- Portale: aniworld.to (Serien, Staffeln, Episoden samt `Filme`-Tab) und serienstream.to
+  (Serien unter `/serie/<slug>`) funktionieren — jeweils live end-to-end bis zur spielbaren
+  Stream-URL verifiziert. s.to ist stillgelegt. filmo.to (Filme) ist angelegt, aber nicht
+  gegen die Live-Seite verifiziert.
 - Katalogsuche, Parsing von Slug, Staffel und Episode, Hoster-Auflösung über
   Redirects.
 - Stream-Extraktion je Hoster: VOE, Vidmoly, Vidoza, Doodstream, SpeedFiles,

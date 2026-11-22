@@ -9,6 +9,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- serienstream.to funktioniert jetzt end-to-end (live verifiziert bis zur spielbaren HLS-URL):
+  eigener `/serie/<slug>`-Pfad mit href-basiertem Staffel-/Episoden-Listing (`parse_seasons_sto`/
+  `parse_episodes_sto`, getrennt vom aniworld-Tabellenpfad), Provider-Parsing über
+  `data-provider-name`/`data-play-url="/r?t=<token>"`/`data-language-id` (inkl. Ger-Sub), und der
+  `/r?t=`-Redirect (HTTP-302) wird automatisch zum Hoster gefolgt. Der VOE-Extraktor folgt
+  zusätzlich dem voe.sx-JS-Stub zur rotierenden CDN-Domain (SSRF-geprüft, Origin-Referer).
 - Anti-Bot Stufe 3: Headless-Browser-Fallback über **obscura** (`core::browser`). Kommt eine
   Portalseite weder über reqwest (Stufe 1) noch über wreq-Impersonate (Stufe 2) durch, rendert
   obscura sie (JS-Ausführung, löst Cloudflare-JS-Interstitials). obscura nutzt System-DNS und hat

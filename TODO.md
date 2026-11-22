@@ -9,14 +9,13 @@ Diese Teile sind implementiert und (gegen Fixtures/netzfrei) getestet, aber NICH
 die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und ggf. mit
 `VINDEX_IMPERSONATE=1`:
 
-- **serienstream.to-Parser.** Live gegen die echte Seite abgeglichen (black-clover s2e8, über
-  Stufe 2/3 durch Cloudflare): Markup ist `data-provider-name`/`data-play-url="/r?t=<token>"`/
-  `data-language-id` (1=Deutsch, 2=Englisch, 3=Ger-Sub — Sprach-Mapping gefixt), und der
-  `/r?t=`-Redirect führt real zum Hoster (via obscura getestet → VOE-Embed). **Offen:** die URL-
-  Struktur ist `/serie/<slug>/staffel-N/episode-M` (nicht `/anime/stream/` wie der geteilte
-  aniworld-Code), die Staffel-/Episodenliste sind schlichte `<a href>` (kein `hosterSiteDirectNav`/
-  `tbody#seasonN`) und der `/r?t=`→Embed-Schritt braucht obscura/JS — das muss serienstream-
-  spezifisch verdrahtet werden (eigener URL-/Parse-Pfad getrennt von aniworld).
+- **serienstream.to** erledigt **und live end-to-end verifiziert** (black-clover s2e8 →
+  spielbare HLS-URL). Die Episodenseite kommt mit Browser-UA + DNS 1.1.1.1 durch (passives
+  DDoS-Guard, keine Challenge; Stufe 2/3 als Fallback vorhanden). Provider-Parser liest
+  `data-provider-name`/`data-play-url="/r?t=<token>"`/`data-language-id` (1=Deutsch, 2=Englisch,
+  3=Ger-Sub). `/r?t=` liefert ein glattes HTTP-302 zum Hoster (reqwest folgt automatisch). Staffel-/
+  Episodenliste href-basiert (`/serie/<slug>/staffel-N/episode-M`, eigener sto-Pfad getrennt von
+  aniworld). VOE-Extraktor folgt zusätzlich dem voe.sx-JS-Stub zur rotierenden CDN-Domain.
 - **Resolver Streamtape / Luluvdo / LoadX.** Live-Befund: aniworld und serienstream bieten diese
   Hoster **nicht mehr an** (nur VOE/Doodstream/Filemoon/Vidmoly/SpeedFiles), also gibt es keine
   echten Embeds zum Nachziehen. Die Extraktoren bleiben synthetisch; eine Live-Verifikation ist
