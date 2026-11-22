@@ -186,6 +186,40 @@ impl Backend {
         core::hoster::resolve(&self.client, hoster, embed_url).await
     }
 
+    /// Löst eine Episoden-URL zum ersten spielbaren Stream auf — dieselbe
+    /// Sprache×Hoster-Auswahl wie der Downloader, nur ohne Download. Für
+    /// aniworld/serienstream (Serien). Ergebnis geht durch den Referer-Proxy
+    /// des Frontends an den Player.
+    pub async fn resolve_playback(
+        &self,
+        url: &str,
+        languages: &[Language],
+        hosters: &[Hoster],
+    ) -> Result<Resolved> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if site::is_filmo(url) {
+            return Err(core::error::Error::Parse(
+                "Direktes Abspielen für filmo folgt (eigener CSRF-/Redirect-Pfad)".into(),
+            ));
+        }
+        let base = site::base_for_url(url);
+        let links = site::serienstream::provider_links(&self.client, base, url).await?;
+        for &lang in languages {
+            let Some(hmap) = links.hosters_for(lang) else {
+                continue;
+            };
+            for &hoster in hosters {
+                let Some(embed) = hmap.get(&hoster) else {
+                    continue;
+                };
+                if let Ok(r) = core::hoster::resolve(&self.client, hoster, embed).await {
+                    return Ok(r);
+                }
+            }
+        }
+        Err(core::error::Error::NoStream)
+    }
+
     /// Lädt eine Episode/einen Film anhand fertiger [`DownloadPrefs`] herunter
     /// (Durchreichung auf `core::download::download_url`). Abbruch optional über
     /// einen [`CancellationToken`].

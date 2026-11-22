@@ -4,13 +4,18 @@
 //! mappt auf die Facade bzw. `vindex_core` und reicht serialisierbare DTOs ans
 //! Frontend. **Keine** eigene Netz-/Scraping-/Download-Logik hier — die lebt im Kern.
 
+mod stream_proxy;
+
+use std::sync::Arc;
+
 use serde::Serialize;
 use tauri::{Manager, State};
 use vindex_desktop::{core, Backend};
 
-/// Gehaltener Zustand: die Facade (ein HTTP-Client) für die Lebensdauer der App.
+/// Gehaltener Zustand: die Facade (HTTP-Client) + der lokale Referer-Proxy.
 struct AppState {
     backend: Backend,
+    proxy: Arc<stream_proxy::Proxy>,
 }
 
 /// Ein Suchtreffer fürs Frontend (serialisierbare Spiegelung von `SearchHit`).
@@ -39,6 +44,13 @@ struct EpisodeDto {
     title: String,
     season: u32,
     index_in_season: u32,
+}
+
+/// Ein abspielbereiter Stream: die proxied URL fürs `<video>`/hls.js + HLS-Flag.
+#[derive(Serialize)]
+struct PlaybackDto {
+    url: String,
+    is_hls: bool,
 }
 
 /// App-Metadaten fürs „Über"-Panel und den Health-Check beim Start.
@@ -116,6 +128,28 @@ async fn episodes(
 }
 
 #[tauri::command]
+async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<PlaybackDto, String> {
+    // Sprache/Hoster-Reihenfolge wie beim Downloader (aus den Settings).
+    let s = state.backend.settings();
+    let languages = vec![s.language];
+    let hosters = s.effective_hosters();
+
+    let resolved = state
+        .backend
+        .resolve_playback(&url, &languages, &hosters)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let proxied = state
+        .proxy
+        .stream_url(&resolved.url, resolved.referer.as_deref());
+    Ok(PlaybackDto {
+        url: proxied,
+        is_hls: resolved.is_hls,
+    })
+}
+
+#[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
@@ -144,7 +178,12 @@ pub fn run() {
             let backend = Backend::new().map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("Backend-Init fehlgeschlagen: {e}"))
             })?;
-            app.manage(AppState { backend });
+            let proxy = tauri::async_runtime::block_on(stream_proxy::start()).map_err(|e| {
+                Box::<dyn std::error::Error>::from(format!(
+                    "Stream-Proxy-Start fehlgeschlagen: {e}"
+                ))
+            })?;
+            app.manage(AppState { backend, proxy });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -153,6 +192,7 @@ pub fn run() {
             catalog,
             seasons,
             episodes,
+            resolve_playback,
             app_settings
         ])
         .run(tauri::generate_context!())

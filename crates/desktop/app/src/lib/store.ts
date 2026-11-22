@@ -26,8 +26,23 @@ export const PORTALS: { id: Portal; label: string; accent: string }[] = [
   { id: "filmo", label: "filmo.to", accent: "var(--play)" },
 ];
 
+/** Ein laufender Player-Stream (proxied URL + HLS-Flag + Anzeigetitel). */
+export interface Playback {
+  title: string;
+  url: string;
+  isHls: boolean;
+}
+
 const [view, setView] = createSignal<View>("home");
 const [selected, setSelected] = createSignal<Selected | null>(null);
+const [playback, setPlayback] = createSignal<Playback | null>(null);
+
+export function openPlayer(p: Playback): void {
+  setPlayback(p);
+}
+export function closePlayer(): void {
+  setPlayback(null);
+}
 
 /** Öffnet die Detailansicht für einen Titel und merkt sich, woher man kam. */
 export function openTitle(title: string, url: string): void {
@@ -35,4 +50,4 @@ export function openTitle(title: string, url: string): void {
   setView("detail");
 }
 
-export { view, setView, selected, setSelected };
+export { view, setView, selected, setSelected, playback };

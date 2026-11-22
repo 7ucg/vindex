@@ -24,5 +24,7 @@ export default defineConfig({
     target: ["es2022", "chrome105", "safari15"],
     minify: "esbuild",
     sourcemap: false,
+    // hls.js wird bewusst als eigener, erst beim Player geladener Chunk gebündelt.
+    chunkSizeWarningLimit: 700,
   },
 });

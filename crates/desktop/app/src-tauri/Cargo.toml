@@ -25,6 +25,13 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+# Lokaler Stream-Proxy: injiziert den Referer, den <video>/hls.js nicht setzen kann,
+# und schreibt HLS-Playlists auf proxied Segment-URLs um.
+axum = "0.8"
+reqwest = { version = "0.13", features = ["stream"] }
+futures-util = "0.3"
+base64 = "0.22"
+getrandom = "0.2"
 # Die headless-testbare Facade — der ganze Scraper/Download-Kern lebt dort.
 vindex-desktop = { path = "../../" }
 

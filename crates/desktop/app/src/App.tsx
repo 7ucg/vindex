@@ -3,9 +3,11 @@ import { Sidebar } from "./views/Sidebar";
 import { Home } from "./views/Home";
 import { Settings } from "./views/Settings";
 import { Placeholder } from "./views/Placeholder";
+import { Show } from "solid-js";
 import { PortalView } from "./views/PortalView";
 import { Detail } from "./views/Detail";
-import { view } from "./lib/store";
+import { Player } from "./views/Player";
+import { view, playback } from "./lib/store";
 
 export default function App(): JSX.Element {
   return (
@@ -47,6 +49,10 @@ export default function App(): JSX.Element {
           </Match>
         </Switch>
       </main>
+
+      <Show when={playback()} keyed>
+        {(p) => <Player playback={p} />}
+      </Show>
     </div>
   );
 }

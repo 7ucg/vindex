@@ -42,6 +42,15 @@ export interface Episode {
   index_in_season: number;
 }
 
+export interface PlaybackSource {
+  url: string;
+  is_hls: boolean;
+}
+
+export function resolvePlayback(url: string): Promise<PlaybackSource> {
+  return invoke<PlaybackSource>("resolve_playback", { url });
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

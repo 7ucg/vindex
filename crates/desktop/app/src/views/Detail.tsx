@@ -6,8 +6,8 @@ import {
   Show,
   type JSX,
 } from "solid-js";
-import { seasons, episodes } from "../lib/api";
-import { selected, setView } from "../lib/store";
+import { seasons, episodes, resolvePlayback, type Episode } from "../lib/api";
+import { selected, setView, openPlayer } from "../lib/store";
 
 function seasonLabel(n: number): string {
   return n === 0 ? "Filme" : `Staffel ${n}`;
@@ -35,6 +35,26 @@ export function Detail(): JSX.Element {
     () => (active() === null ? null : { url: sel.url, season: active()! }),
     (arg) => episodes(arg.url, arg.season),
   );
+
+  const [busy, setBusy] = createSignal<string | null>(null);
+  const [playErr, setPlayErr] = createSignal<string | null>(null);
+
+  const watch = async (e: Episode) => {
+    setBusy(e.url);
+    setPlayErr(null);
+    try {
+      const src = await resolvePlayback(e.url);
+      openPlayer({
+        title: `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`,
+        url: src.url,
+        isHls: src.is_hls,
+      });
+    } catch (err) {
+      setPlayErr(String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <div class="wrap">
@@ -102,7 +122,14 @@ export function Detail(): JSX.Element {
                   <div class="sub">{seasonLabel(e.season)}</div>
                 </div>
                 <div class="act">
-                  <button class="chip">Ansehen</button>
+                  <button
+                    class="chip"
+                    classList={{ on: busy() === e.url }}
+                    disabled={busy() === e.url}
+                    onClick={() => watch(e)}
+                  >
+                    {busy() === e.url ? "löst auf …" : "Ansehen"}
+                  </button>
                   <button class="chip">Laden</button>
                 </div>
               </div>
@@ -115,9 +142,15 @@ export function Detail(): JSX.Element {
         <div class="empty">Keine Episoden in {seasonLabel(active() ?? 0)}.</div>
       </Show>
 
+      <Show when={playErr()}>
+        <div class="panel" style={{ padding: "12px 16px", color: "var(--err)", "margin-top": "12px" }}>
+          Konnte keinen Stream finden: {playErr()}
+        </div>
+      </Show>
+
       <p class="note">
-        „Ansehen" (Direkt-Stream über Referer-Proxy) und „Laden" (Download-Auswahl) werden als
-        nächstes verdrahtet.
+        „Ansehen" spielt den Stream direkt im Fenster (über den Referer-Proxy). „Laden"
+        (Download-Auswahl) wird als nächstes verdrahtet.
       </p>
     </div>
   );
