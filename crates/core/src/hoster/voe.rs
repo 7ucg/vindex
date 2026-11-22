@@ -164,4 +164,42 @@ mod tests {
             Some("https://h/a.m3u8")
         );
     }
+
+    #[test]
+    fn voe_extract_aus_string_block() {
+        // JSON-Block als einzelner String (nicht als Array).
+        let json = r#"{"source":"https://cdn.x/single.m3u8"}"#;
+        let encoded = encode_voe(json);
+        let html = format!(r#"<script type="application/json">"{encoded}"</script>"#);
+        assert_eq!(
+            extract_source_from_html(&html).as_deref(),
+            Some("https://cdn.x/single.m3u8")
+        );
+    }
+
+    #[test]
+    fn voe_extract_aus_a168c_variable() {
+        let json = r#"{"source":"https://cdn.x/a168c.m3u8"}"#;
+        let encoded = encode_voe(json);
+        let html = format!("<script>var a168c='{encoded}';</script>");
+        assert_eq!(
+            extract_source_from_html(&html).as_deref(),
+            Some("https://cdn.x/a168c.m3u8")
+        );
+    }
+
+    #[test]
+    fn voe_bare_m3u8_letzter_ausweg() {
+        // Kein JSON-Block, kein hls-Key: die nackte .m3u8-URL greift als Fallback.
+        let html = r#"<video><source src="https://cdn.x/bare.m3u8?token=9"></video>"#;
+        assert_eq!(
+            extract_source_from_html(html).as_deref(),
+            Some("https://cdn.x/bare.m3u8?token=9")
+        );
+    }
+
+    #[test]
+    fn voe_ohne_treffer_ist_none() {
+        assert_eq!(extract_source_from_html("<html>nichts</html>"), None);
+    }
 }

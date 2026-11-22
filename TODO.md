@@ -62,11 +62,10 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 ## Tests & Produkt-Entscheidungen
 
 - **Mehr Scraper-Fixtures.** Episoden-Parser (`parse_episodes`, inkl. Filme-Tab/Staffel 0),
-  Staffel-Navigation (`parse_season_nav`, aus `list_seasons` als reine Funktion ausgelagert)
-  und beide Hoster-Markups sind gegen synthetische Fixtures getestet. Offen: einzelne Hoster-
-  Extraktoren (z. B. VOE/SpeedFiles-Deobfuskation) noch breiter gegen Fixtures absichern.
-  (Queue-Cap: Admission-Logik ist als reine Funktion `try_admit_job` ausgelagert und mit
-  Unit-Tests für den `429`-Fall abgedeckt.)
+  Staffel-Navigation (`parse_season_nav`), beide Hoster-Markups sowie die VOE- und SpeedFiles-
+  Deobfuskation (Roundtrip, alle Fallback-Zweige, Fehlerpfade) sind gegen synthetische Fixtures
+  getestet. Offen: Vidoza/Doodstream/Vidmoly-Extraktoren noch breiter absichern. (Queue-Cap:
+  `try_admit_job` als reine Funktion mit `429`-Unit-Tests abgedeckt.)
 - **Offene Entscheidungen** (Default: so lassen): Suche ist reiner Substring (Punkt zählt);
   `--quality` deckelt Single-MP4-Hoster nicht nach oben; `naming::clean_title` schreibt klein.
 

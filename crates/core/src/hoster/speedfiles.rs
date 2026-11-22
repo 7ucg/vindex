@@ -117,4 +117,22 @@ mod tests {
         let html = format!(r#"<script>var _0x5opu234 = "{content}";</script>"#);
         assert_eq!(extract_url_from_html(&html).as_deref(), Some(url));
     }
+
+    #[test]
+    fn speedfiles_ohne_block_ist_none() {
+        assert_eq!(extract_url_from_html("<html>kein block</html>"), None);
+    }
+
+    #[test]
+    fn speedfiles_kaputter_block_ist_none_statt_panic() {
+        // Block vorhanden, Inhalt aber kein gültiger kodierter String: die Kette
+        // scheitert sauber (Err → None), ohne zu paniken.
+        let html = r#"<script>var _0x5opu234 = "nicht-base64-!!!";</script>"#;
+        assert_eq!(extract_url_from_html(html), None);
+    }
+
+    #[test]
+    fn speedfiles_decode_muell_ist_err() {
+        assert!(decode("@@nicht base64@@").is_err());
+    }
 }
