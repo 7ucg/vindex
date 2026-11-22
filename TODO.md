@@ -6,6 +6,13 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Als Nächstes
 
+- **serienstream.to-Scraper.** Die Seite wurde umgebaut und weicht von aniworld.to ab:
+  Pfade `/serie/<slug>/…` (ohne `stream`), Hoster über `data-provider-name`,
+  `data-play-url` und `data-link-id` statt `li[data-lang-key][data-link-target]`/
+  `/redirect/N`, 301 von `/serie/stream/…` auf `http://…/serie/…`. Dazu häufige
+  Cloudflare-Captchas, die den Fast-Path (Stufe 1) blocken — braucht also auch
+  TLS-Impersonate/Browser (Stufe 2/3). Eigener serienstream-Pfad statt der
+  aniworld-Selektoren nötig. s.to ist tot (Mirror auf serienstream.to bleibt sinnvoll).
 - **Fehlende Hoster-Resolver.** Streamtape, Luluvdo und LoadX haben noch keinen
   Extraktor. Keine Vorlage zum Abschreiben; die Algorithmen müssen live ermittelt
   werden. Baumuster: Streamtape wie Doodstream (Token aus HTML + Referer), Luluvdo wie

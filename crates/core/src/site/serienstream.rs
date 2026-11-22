@@ -1,8 +1,12 @@
-//! Generischer Scraper für die SerienStream-Software (aniworld.to **und** serienstream.to).
+//! Scraper für die SerienStream-Software.
 //!
-//! Beide Portale laufen auf derselben Engine; die Selektoren sind identisch, nur
-//! die Basis-URL unterscheidet sich. Portiert aus `pages/aniworld_to.py` und
-//! `models/aniworld_to/*`.
+//! Die Selektoren hier (`/anime/stream/<slug>/…`, `li[data-lang-key][data-link-target]`,
+//! `/redirect/N`) treffen aktuell **aniworld.to**. serienstream.to wurde inzwischen
+//! umgebaut: `/serie/<slug>/…`-Pfade, Hoster über `data-provider-name`/`data-play-url`/
+//! `data-link-id` statt `data-lang-key`, dazu häufige Cloudflare-Captchas — dieser
+//! Scraper liefert dort keine Hoster-Links. s.to ist stillgelegt (→ serienstream.to).
+//! Ein eigener serienstream.to-Pfad steht aus (siehe TODO.md). Portiert aus
+//! `pages/aniworld_to.py` und `models/aniworld_to/*`.
 
 use scraper::{Html, Selector};
 
