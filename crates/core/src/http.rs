@@ -661,3 +661,4 @@ mod tests {
         assert_eq!(next_user_agent(), first);
     }
 }
+

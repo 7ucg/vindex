@@ -9,14 +9,21 @@ Diese Teile sind implementiert und (gegen Fixtures/netzfrei) getestet, aber NICH
 die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und ggf. mit
 `VINDEX_IMPERSONATE=1`:
 
-- **serienstream.to-Parser.** Das neue Markup (`data-provider-name`/`data-play-url`
-  `/r?t=<token>`) wird geparst. Offen: ob der Abruf durch Cloudflare kommt und der
-  `/r?t=`-Redirect real zum Hoster führt.
-- **Resolver Streamtape / Luluvdo / LoadX.** Nach dokumentiertem Baumuster gebaut, nur
-  synthetisch getestet. Exakte Keys/Regexe gegen echte Embeds nachziehen (Embeds mit
-  `dev/capture.sh` sichern, sobald ein Portal sie anbietet). LoadX ist am unsichersten.
-- **TLS-Impersonate (Stufe 2).** `VINDEX_IMPERSONATE=1` gegen die echten CF-Seiten testen;
-  prüfen, ob der Chrome149-Fingerprint durchkommt.
+- **serienstream.to-Parser.** Live gegen die echte Seite abgeglichen (black-clover s2e8, über
+  Stufe 2/3 durch Cloudflare): Markup ist `data-provider-name`/`data-play-url="/r?t=<token>"`/
+  `data-language-id` (1=Deutsch, 2=Englisch, 3=Ger-Sub — Sprach-Mapping gefixt), und der
+  `/r?t=`-Redirect führt real zum Hoster (via obscura getestet → VOE-Embed). **Offen:** die URL-
+  Struktur ist `/serie/<slug>/staffel-N/episode-M` (nicht `/anime/stream/` wie der geteilte
+  aniworld-Code), die Staffel-/Episodenliste sind schlichte `<a href>` (kein `hosterSiteDirectNav`/
+  `tbody#seasonN`) und der `/r?t=`→Embed-Schritt braucht obscura/JS — das muss serienstream-
+  spezifisch verdrahtet werden (eigener URL-/Parse-Pfad getrennt von aniworld).
+- **Resolver Streamtape / Luluvdo / LoadX.** Live-Befund: aniworld und serienstream bieten diese
+  Hoster **nicht mehr an** (nur VOE/Doodstream/Filemoon/Vidmoly/SpeedFiles), also gibt es keine
+  echten Embeds zum Nachziehen. Die Extraktoren bleiben synthetisch; eine Live-Verifikation ist
+  erst möglich, wenn ein Zielportal diese Hoster wieder listet.
+- **TLS-Impersonate (Stufe 2)** live verifiziert: der wreq-Chrome-Fingerprint (über 1.1.1.1)
+  holt serienstream.to **durch Cloudflare** (424 KB echte Seite, keine Challenge). Stufe 2 reicht
+  für das CF dieser Seite; Stufe 3 (obscura) bleibt für härtere JS-Interstitials.
 
 ## Netzwerk & Anti-Bot
 
