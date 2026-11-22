@@ -96,9 +96,8 @@ export function Library(): JSX.Element {
       </Show>
 
       <p class="note">
-        „Abspielen" öffnet die Datei im System-Player (spielt MKV/TS zuverlässig). In-Window-
-        Wiedergabe lokaler Dateien folgt mit dem libmpv-Pfad. Löschen entfernt die Datei vom
-        Datenträger.
+        „Abspielen" nutzt mpv (spielt MKV/TS zuverlässig); ohne mpv den System-Player. Eingebettete
+        In-Window-Wiedergabe folgt mit dem libmpv-Pfad. Löschen entfernt die Datei vom Datenträger.
       </p>
     </div>
   );

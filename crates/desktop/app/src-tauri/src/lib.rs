@@ -352,15 +352,25 @@ fn library_path(name: &str, state: &AppState) -> Result<std::path::PathBuf, Stri
         .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())
 }
 
-/// Öffnet eine Bibliotheksdatei im System-Player (vom Backend, nach Validierung).
+/// Spielt eine Bibliotheksdatei ab (nach Validierung). Bevorzugt mpv — spielt
+/// MKV/TS zuverlässig und ist der weit bessere Player als der System-Default;
+/// ist mpv nicht da, Fallback auf den System-Opener.
 #[tauri::command]
 fn open_library_item(
     app: tauri::AppHandle,
     name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let canon = library_path(&name, &state)?;
+    // mpv loslösen (eigenes Fenster, blockiert die App nicht).
+    let mpv = std::process::Command::new("mpv")
+        .arg("--force-window=yes")
+        .arg(&canon)
+        .spawn();
+    if mpv.is_ok() {
+        return Ok(());
+    }
+    use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_path(canon.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|e| e.to_string())
