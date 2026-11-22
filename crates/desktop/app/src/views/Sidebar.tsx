@@ -7,8 +7,9 @@ import {
   IconTv,
   IconFilm,
   IconSettings,
+  IconSearch,
 } from "../lib/icons";
-import { view, setView, type View } from "../lib/store";
+import { view, setView, setPaletteOpen, type View } from "../lib/store";
 
 type Item = { id: View; label: string; icon: () => JSX.Element; accent?: string };
 
@@ -46,6 +47,14 @@ export function Sidebar(): JSX.Element {
         <Logo class="logo" />
         <span class="word">vindex</span>
       </div>
+
+      <button class="nav" onClick={() => setPaletteOpen(true)}>
+        <IconSearch />
+        Suchen
+        <span class="kbd" style={{ "margin-left": "auto" }}>
+          Ctrl K
+        </span>
+      </button>
 
       <For each={primary}>{(it) => <NavButton item={it} />}</For>
 

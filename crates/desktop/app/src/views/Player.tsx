@@ -67,6 +67,14 @@ export function Player(props: { playback: Playback }): JSX.Element {
     setRate(nr);
     if (video) video.playbackRate = nr;
   };
+  // Scrollen über dem Bild = Lautstärke (an natives <video> gebunden).
+  const onWheel = (e: WheelEvent) => {
+    if (!video) return;
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.05 : -0.05;
+    video.volume = Math.min(1, Math.max(0, video.volume + step));
+    if (video.muted && step > 0) video.muted = false;
+  };
   const frameStep = (dir: number) => {
     if (!video) return;
     video.pause();
@@ -205,10 +213,10 @@ export function Player(props: { playback: Playback }): JSX.Element {
         v.paused ? void v.play() : v.pause();
         break;
       case "ArrowLeft":
-        v.currentTime -= 5;
+        v.currentTime -= e.shiftKey ? 30 : 5;
         break;
       case "ArrowRight":
-        v.currentTime += 5;
+        v.currentTime += e.shiftKey ? 30 : 5;
         break;
       case "j":
         v.currentTime -= 10;
@@ -492,7 +500,14 @@ export function Player(props: { playback: Playback }): JSX.Element {
         <div class="player-err">{err()}</div>
       </Show>
 
-      <video ref={video} class="player-video" controls autoplay playsinline />
+      <video
+        ref={video}
+        class="player-video"
+        controls
+        autoplay
+        playsinline
+        onWheel={onWheel}
+      />
 
       <Show when={skipTarget()}>
         {(t) => (
@@ -503,8 +518,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
       </Show>
 
       <div class="player-hint">
-        Space Play · ←/→ 5s · J/L 10s · ↑/↓ Lautstärke · M stumm · F Vollbild · P PiP · S skip ·
-        N nächste · [ ] Tempo · , . Frame · A A-B-Loop · 0–9 springen · Esc schließen
+        Space Play · ←/→ 5s · ⇧←/→ 30s · J/L 10s · ↑/↓ oder Scroll Lautstärke · M stumm · F
+        Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · 0–9 springen ·
+        Esc schließen
       </div>
     </div>
   );

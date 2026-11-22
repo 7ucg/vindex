@@ -8,6 +8,7 @@ import { Detail } from "./views/Detail";
 import { Downloads } from "./views/Downloads";
 import { Library } from "./views/Library";
 import { Player } from "./views/Player";
+import { CommandPalette } from "./views/CommandPalette";
 import { view, playback } from "./lib/store";
 
 export default function App(): JSX.Element {
@@ -46,6 +47,8 @@ export default function App(): JSX.Element {
       <Show when={playback()} keyed>
         {(p) => <Player playback={p} />}
       </Show>
+
+      <CommandPalette />
     </div>
   );
 }
