@@ -35,6 +35,21 @@ export function catalog(portal: string): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("catalog", { portal });
 }
 
+export interface Episode {
+  url: string;
+  title: string;
+  season: number;
+  index_in_season: number;
+}
+
+export function seasons(url: string): Promise<number[]> {
+  return invoke<number[]>("seasons", { url });
+}
+
+export function episodes(url: string, season: number): Promise<Episode[]> {
+  return invoke<Episode[]>("episodes", { url, season });
+}
+
 export function appSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("app_settings");
 }

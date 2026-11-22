@@ -381,6 +381,45 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- List rows (episodes, downloads) ---------- */
+.dl {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.dl:last-child {
+  border-bottom: 0;
+}
+.dl .thumb {
+  width: 44px;
+  height: 60px;
+  border-radius: 8px;
+  flex: none;
+  font-size: 12px;
+}
+.dl .info {
+  flex: 1;
+  min-width: 0;
+}
+.dl .info .n {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl .info .sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+.dl .act {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+
 .note {
   color: var(--muted);
   font-size: 12px;

@@ -1,7 +1,7 @@
 import { createResource, createSignal, createMemo, For, Show, type JSX } from "solid-js";
 import { catalog, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
-import type { Portal } from "../lib/store";
+import { openTitle, type Portal } from "../lib/store";
 
 type Sort = "az" | "za";
 
@@ -88,7 +88,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
         <div class="grid">
           <For each={visible().slice(0, RENDER_CAP)}>
             {(h) => (
-              <div class="card" title={h.url}>
+              <div class="card" title={h.url} onClick={() => openTitle(h.title, h.url)}>
                 <div class="poster">
                   <div class="ph" style={{ background: placeholder(h.title) }} />
                   <div class="play-ov">

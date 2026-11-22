@@ -32,6 +32,15 @@ struct SettingsDto {
     no_ffmpeg: bool,
 }
 
+/// Eine Episode fürs Frontend (serialisierbare Spiegelung von `core::model::Episode`).
+#[derive(Serialize)]
+struct EpisodeDto {
+    url: String,
+    title: String,
+    season: u32,
+    index_in_season: u32,
+}
+
 /// App-Metadaten fürs „Über"-Panel und den Health-Check beim Start.
 #[derive(Serialize)]
 struct AppInfo {
@@ -80,6 +89,33 @@ async fn catalog(portal: String, state: State<'_, AppState>) -> Result<Vec<Searc
 }
 
 #[tauri::command]
+async fn seasons(url: String, state: State<'_, AppState>) -> Result<Vec<u32>, String> {
+    state.backend.seasons(&url).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn episodes(
+    url: String,
+    season: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<EpisodeDto>, String> {
+    let eps = state
+        .backend
+        .episodes(&url, season)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(eps
+        .into_iter()
+        .map(|e| EpisodeDto {
+            url: e.url,
+            title: e.title,
+            season: e.season,
+            index_in_season: e.index_in_season,
+        })
+        .collect())
+}
+
+#[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
@@ -115,6 +151,8 @@ pub fn run() {
             app_info,
             search,
             catalog,
+            seasons,
+            episodes,
             app_settings
         ])
         .run(tauri::generate_context!())

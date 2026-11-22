@@ -132,6 +132,35 @@ impl Backend {
         }
     }
 
+    /// Staffeln eines Serien-/Anime-Titels (0 = Filme-Tab). aniworld und
+    /// serienstream nutzen dieselbe Staffel-Navigation; filmo hat keine Staffeln.
+    pub async fn seasons(&self, url: &str) -> Result<Vec<u32>> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if site::is_filmo(url) {
+            return Err(core::error::Error::Parse(
+                "filmo ist ein Film, keine Serie mit Staffeln".into(),
+            ));
+        }
+        let base = site::base_for_url(url);
+        let slug = site::slug_from_url(url)
+            .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
+        site::serienstream::list_seasons(&self.client, base, &slug).await
+    }
+
+    /// Episoden einer Staffel (lazy pro Staffel geladen).
+    pub async fn episodes(&self, url: &str, season: u32) -> Result<Vec<core::model::Episode>> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if site::is_filmo(url) {
+            return Err(core::error::Error::Parse(
+                "filmo ist ein Film, keine Serie mit Episoden".into(),
+            ));
+        }
+        let base = site::base_for_url(url);
+        let slug = site::slug_from_url(url)
+            .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
+        site::serienstream::list_episodes(&self.client, base, &slug, season).await
+    }
+
     /// Hoster-Links einer Episode (für die Download-Auswahl im Frontend).
     pub async fn providers(&self, episode_url: &str) -> Result<ProviderLinks> {
         // SSRF-Schutz: nur die unterstützten Portale als Quell-URL zulassen.

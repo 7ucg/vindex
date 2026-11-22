@@ -4,6 +4,7 @@ import { Home } from "./views/Home";
 import { Settings } from "./views/Settings";
 import { Placeholder } from "./views/Placeholder";
 import { PortalView } from "./views/PortalView";
+import { Detail } from "./views/Detail";
 import { view } from "./lib/store";
 
 export default function App(): JSX.Element {
@@ -40,6 +41,9 @@ export default function App(): JSX.Element {
           </Match>
           <Match when={view() === "filmo"}>
             <PortalView portal="filmo" />
+          </Match>
+          <Match when={view() === "detail"}>
+            <Detail />
           </Match>
         </Switch>
       </main>

@@ -1,6 +1,7 @@
 import { createSignal, For, Show, type JSX } from "solid-js";
 import { search, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
+import { openTitle } from "../lib/store";
 
 // Home: eine funktionierende Katalog-Suche über den echten Kern.
 // „Weiterschauen"/Empfehlungen folgen, sobald der Watch-State im Frontend hängt.
@@ -75,7 +76,7 @@ export function Home(): JSX.Element {
         <div class="grid">
           <For each={hits()}>
             {(h) => (
-              <div class="card" title={h.url}>
+              <div class="card" title={h.url} onClick={() => openTitle(h.title, h.url)}>
                 <div class="poster">
                   <div class="ph" />
                   <div class="play-ov">
