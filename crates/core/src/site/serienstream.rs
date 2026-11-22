@@ -520,3 +520,34 @@ mod tests {
         .is_empty());
     }
 }
+
+
+#[cfg(test)]
+mod sto_live {
+    use crate::model::{Hoster, Language};
+    #[tokio::test]
+    #[ignore = "Netz"]
+    async fn sto_providers_live() {
+        let client = crate::http::browser_client().unwrap();
+        let url = "https://serienstream.to/serie/black-clover/staffel-2/episode-8";
+        match super::provider_links(&client, "https://serienstream.to", url).await {
+            Ok(links) => {
+                for lang in [Language::GermanDub, Language::EnglishDub, Language::GermanSub] {
+                    if let Some(m) = links.hosters_for(lang) {
+                        println!("{:?}: {:?}", lang, m.keys().collect::<Vec<_>>());
+                    }
+                }
+                // ersten VOE/German-Embed holen und auflösen
+                if let Some(embed) = links.link(Language::GermanDub, Hoster::Voe) {
+                    println!("EMBED: {embed}");
+                    match crate::hoster::resolve(&client, Hoster::Voe, embed).await {
+                        Ok(r) => println!("VOE OK: is_hls={} {}", r.is_hls, &r.url[..r.url.len().min(90)]),
+                        Err(e) => println!("VOE FEHLER: {e}"),
+                    }
+                }
+            }
+            Err(e) => println!("PROVIDER FEHLER: {e}"),
+        }
+    }
+}
+

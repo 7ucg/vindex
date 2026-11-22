@@ -94,6 +94,17 @@ pub fn extract_source_from_html(html: &str) -> Option<String> {
 }
 
 /// Löst eine VOE-Embed-URL zu einem direkten Stream auf.
+/// Liest das Ziel eines VOE-„Redirecting…"-Stubs aus (`window.location.href =
+/// 'https://<rotierende-domain>/e/<code>'`). Nur http(s)-Ziele. Die Seite ist
+/// untrusted — der Aufrufer prüft zusätzlich IP-Literal/SSRF.
+fn redirect_target(html: &str) -> Option<String> {
+    let re = Regex::new(
+        r#"(?:window\.)?location(?:\.href)?\s*=\s*['"](https?://[^'"]+/e/[A-Za-z0-9]+[^'"]*)['"]"#,
+    )
+    .unwrap();
+    re.captures(html).map(|c| c[1].to_string())
+}
+
 pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolved> {
     let resp = crate::http::get_retry(client, embed_url, None).await?;
     let status = resp.status().as_u16();
@@ -101,8 +112,31 @@ pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolv
     if crate::http::looks_like_challenge(&text, status) {
         return Err(Error::Challenge(embed_url.to_string()));
     }
-    let src = extract_source_from_html(&text)
-        .ok_or_else(|| Error::extract("VOE", "keine Stream-URL in der Seite"))?;
+
+    let src = match extract_source_from_html(&text) {
+        Some(s) => s,
+        None => {
+            // voe.sx liefert oft nur einen JS-Stub, der per `window.location` auf eine
+            // rotierende CDN-Domain (`…/e/<code>`) weiterleitet. Diesen einen Schritt
+            // folgen und dort erneut extrahieren.
+            let target = redirect_target(&text)
+                .ok_or_else(|| Error::extract("VOE", "keine Stream-URL in der Seite"))?;
+            if !(target.starts_with("http://") || target.starts_with("https://"))
+                || crate::http::host_is_forbidden_ip_literal(&target)
+            {
+                return Err(Error::extract("VOE", "unerlaubtes Redirect-Ziel"));
+            }
+            let resp2 = crate::http::get_retry(client, &target, Some(embed_url)).await?;
+            let status2 = resp2.status().as_u16();
+            let text2 = resp2.text().await?;
+            if crate::http::looks_like_challenge(&text2, status2) {
+                return Err(Error::Challenge(target));
+            }
+            extract_source_from_html(&text2)
+                .ok_or_else(|| Error::extract("VOE", "keine Stream-URL (nach Redirect)"))?
+        }
+    };
+
     Ok(Resolved {
         is_hls: src.contains(".m3u8"),
         url: src,
@@ -201,5 +235,24 @@ mod tests {
     #[test]
     fn voe_ohne_treffer_ist_none() {
         assert_eq!(extract_source_from_html("<html>nichts</html>"), None);
+    }
+
+    #[test]
+    fn voe_redirect_stub_ziel() {
+        // Echte voe.sx-Stub-Form: window.location.href = 'https://rotierend/e/<code>'
+        let stub = r#"<script>window.location.href = 'https://caseyseemavoid.com/e/1oag8nd8qcmp';</script>"#;
+        assert_eq!(
+            redirect_target(stub).as_deref(),
+            Some("https://caseyseemavoid.com/e/1oag8nd8qcmp")
+        );
+        // auch location.href = '...'
+        assert_eq!(
+            redirect_target(r#"location.href="https://x.com/e/abc123";"#).as_deref(),
+            Some("https://x.com/e/abc123")
+        );
+        // kein Stub → None
+        assert_eq!(redirect_target("<html>nichts</html>"), None);
+        // nicht-http Ziel wird nicht gematcht
+        assert_eq!(redirect_target("window.location.href='/e/abc'"), None);
     }
 }
