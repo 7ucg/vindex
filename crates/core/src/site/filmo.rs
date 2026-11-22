@@ -230,10 +230,11 @@ mod tests {
 mod year_de {
     #[test]
     fn deutsch_und_grenzen() {
-        assert_eq!(super::extract_year("<p>Erscheinungsdatum: 2012</p>"), Some(2012));
+        assert_eq!(
+            super::extract_year("<p>Erscheinungsdatum: 2012</p>"),
+            Some(2012)
+        );
         assert_eq!(super::extract_year("Release date 2021"), Some(2021));
         assert_eq!(super::extract_year("kein jahr"), None);
     }
 }
-
-
