@@ -201,11 +201,18 @@ pub async fn resolve_playable(
 ) -> Result<Resolved> {
     let corrected = site::autocorrect::autocorrect(url).map(|c| c.url);
     let url = corrected.as_deref().unwrap_or(url);
-    if site::is_filmo(url) {
-        resolve_movie_playable(client, url, prefs).await
+    let resolved = if site::is_filmo(url) {
+        resolve_movie_playable(client, url, prefs).await?
     } else {
-        resolve_episode_playable(client, url, prefs).await
+        resolve_episode_playable(client, url, prefs).await?
+    };
+    // Defense-in-Depth: die Stream-URL geht an einen externen Player (mpv). Nur
+    // http/https zulassen (hoster::resolve prüft das bereits, hier noch einmal explizit),
+    // damit kein file:/pipe:/anderes Schema den Player erreicht.
+    if !is_http_url(&resolved.url) {
+        return Err(Error::extract("watch", "Stream-URL ist nicht http/https"));
     }
+    Ok(resolved)
 }
 
 /// Watch-Variante von [`download_episode`]: nur Auflösung, kein Mux.
