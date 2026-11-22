@@ -65,10 +65,13 @@ export function Detail(): JSX.Element {
     setPlayErr(null);
     try {
       const src = await resolvePlayback(e.url);
+      const list = eps() ?? [];
+      const idx = list.findIndex((x) => x.url === e.url);
       openPlayer({
         title: `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`,
         url: src.url,
         isHls: src.is_hls,
+        queue: { showTitle: sel.title, episodes: list, index: idx },
       });
     } catch (err) {
       setPlayErr(String(err));

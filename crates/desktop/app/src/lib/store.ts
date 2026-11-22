@@ -1,5 +1,6 @@
 // Globaler UI-Zustand (bewusst minimal): aktive Ansicht, aktives Portal, gewählter Titel.
 import { createSignal } from "solid-js";
+import type { Episode } from "./api";
 
 export type View =
   | "home"
@@ -26,11 +27,19 @@ export const PORTALS: { id: Portal; label: string; accent: string }[] = [
   { id: "filmo", label: "filmo.to", accent: "var(--play)" },
 ];
 
-/** Ein laufender Player-Stream (proxied URL + HLS-Flag + Anzeigetitel). */
+/** Folgen-Kontext fürs automatische Weiterspielen. */
+export interface PlayQueue {
+  showTitle: string;
+  episodes: Episode[];
+  index: number;
+}
+
+/** Ein laufender Player-Stream (proxied URL + HLS-Flag + Anzeigetitel + Queue). */
 export interface Playback {
   title: string;
   url: string;
   isHls: boolean;
+  queue?: PlayQueue;
 }
 
 const [view, setView] = createSignal<View>("home");
