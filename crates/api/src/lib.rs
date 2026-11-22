@@ -1,6 +1,6 @@
 //! HTTP-API / Daemon für vindex (axum).
 //!
-//! Funktionsfähige Teilmenge der Referenz-API (`docs/http-api.md`): Suche,
+//! Funktionsfähige Teilmenge der Referenz-API (siehe README): Suche,
 //! Provider-Metadaten, Download-Queue. Die `/api/*`-Routen liegen hinter einer
 //! API-Key-Prüfung (siehe [`auth`]). SSO, Library, Auto-Sync, OpenAPI
 //! (`utoipa`) und ein `tower_governor`-Rate-Limit folgen gemäß
@@ -140,7 +140,7 @@ struct SearchParams {
 async fn search(
     State(state): State<AppState>,
     Query(p): Query<SearchParams>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     let needle = p.keyword.to_lowercase();
     match core::site::aniworld::fetch_catalog(&state.client).await {
         Ok(entries) => {
@@ -155,9 +155,16 @@ async fn search(
                     })
                 })
                 .collect();
-            Json(json!({ "results": results }))
+            (StatusCode::OK, Json(json!({ "results": results })))
         }
-        Err(e) => Json(json!({ "error": e.to_string() })),
+        Err(e) => {
+            // Rohen Upstream-Fehler nicht an den Client geben; nur serverseitig loggen.
+            tracing::warn!("Katalog-Abruf fehlgeschlagen: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "Katalog konnte nicht abgerufen werden" })),
+            )
+        }
     }
 }
 

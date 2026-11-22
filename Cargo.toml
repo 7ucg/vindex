@@ -7,6 +7,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Baron"]
+repository = "https://github.com/baron/vindex"
+readme = "README.md"
+keywords = ["downloader", "streaming", "hls", "aniworld", "scraper"]
+categories = ["command-line-utilities", "multimedia::video"]
 
 # Gemeinsame Abhängigkeiten (Versionen live verifiziert, crates.io · 2026-11-22).
 # Siehe ARCHITECTURE.md §2 für Begründung und Alternativen.
