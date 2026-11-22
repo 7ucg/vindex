@@ -85,6 +85,14 @@ curl -X POST -H "Content-Type: application/json" \
 curl http://127.0.0.1:8080/api/queue
 ```
 
+Die OpenAPI-3-Spezifikation (via `utoipa`) liegt offen — wie `/health`, ohne
+API-Key — unter `/openapi.json` und beschreibt alle Routen, Parameter und
+Response-Codes:
+
+```bash
+curl http://127.0.0.1:8080/openapi.json
+```
+
 Jede Quell-URL wird gegen eine Host-Allowlist geprüft (nur die unterstützten
 Portale); alles andere lehnt die API mit `400` ab.
 

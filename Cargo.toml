@@ -44,6 +44,8 @@ dialoguer = "0.12"
 # API
 axum = "0.8"
 tower = "0.5"
+# OpenAPI (compile-time Spezifikation; rein Derive-/Makro-basiert, kein axum-Zwang)
+utoipa = "6.0.0"
 
 # Interne Crates
 vindex-core = { path = "crates/core" }

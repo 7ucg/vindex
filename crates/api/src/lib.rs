@@ -3,8 +3,9 @@
 //! Funktionsfähige Teilmenge der Referenz-API (siehe README): Suche,
 //! Provider-Metadaten, Download-Queue. Die `/api/*`-Routen liegen hinter einer
 //! API-Key-Prüfung (siehe [`auth`]) und einem Request-Rate-Limit pro IP
-//! (Sliding-Window, siehe [`RateLimiter`]). SSO, Library, Auto-Sync und OpenAPI
-//! (`utoipa`) folgen gemäß `ARCHITECTURE.md` §9 (Schritt 11).
+//! (Sliding-Window, siehe [`RateLimiter`]). Eine OpenAPI-3-Spezifikation (via
+//! [`utoipa`]) wird offen unter `/openapi.json` ausgeliefert. SSO, Library und
+//! Auto-Sync folgen gemäß `ARCHITECTURE.md` §9 (Schritt 11).
 
 mod auth;
 
@@ -23,6 +24,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
+use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
 use vindex_core as core;
 
 /// Obergrenze gleichzeitig wartender/laufender Jobs, damit ein Client die Queue
@@ -124,13 +126,24 @@ impl RateLimiter {
             }
             // Hartes Limit: notfalls den am längsten inaktiven Bucket verdrängen.
             if st.map.len() >= MAX_TRACKED_KEYS {
-                if let Some(victim) = st
+                // Nur einen Bucket verdrängen, dessen letzter Treffer schon außerhalb
+                // des Fensters liegt — einen lebenden Bucket zu löschen, würde per
+                // Key-Churn das Limit aushebeln. Gibt es keinen, wird der neue Request
+                // abgelehnt (fail closed).
+                let victim = st
                     .map
                     .iter()
                     .min_by_key(|(_, dq)| dq.back().copied())
-                    .map(|(k, _)| *k)
-                {
-                    st.map.remove(&victim);
+                    .filter(|(_, dq)| {
+                        dq.back()
+                            .is_none_or(|&t| now.duration_since(t) >= self.window)
+                    })
+                    .map(|(k, _)| *k);
+                match victim {
+                    Some(v) => {
+                        st.map.remove(&v);
+                    }
+                    None => return Err(self.window.as_secs().max(1)),
                 }
             }
         }
@@ -236,6 +249,7 @@ fn router_with(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/openapi.json", get(openapi_json))
         .merge(api)
         .with_state(state)
 }
@@ -262,6 +276,20 @@ fn client_ip(req: &Request) -> IpAddr {
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+/// Liefert die OpenAPI-3-Spezifikation als JSON. Offen (kein API-Key), wie
+/// `/health`, damit Clients/Tools das Schema ohne Anmeldung lesen können.
+#[utoipa::path(
+    get,
+    path = "/openapi.json",
+    tag = "meta",
+    responses(
+        (status = 200, description = "OpenAPI-3-Spezifikation dieser API", content_type = "application/json")
+    )
+)]
+async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
 }
 
 /// Startet den Daemon auf *addr* (z. B. `127.0.0.1:8080`).
@@ -295,15 +323,40 @@ pub async fn serve(addr: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Liveness-Check. Offen (kein API-Key), antwortet immer mit `ok`.
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "meta",
+    responses(
+        (status = 200, description = "Dienst ist erreichbar", body = String, content_type = "text/plain")
+    )
+)]
 async fn health() -> &'static str {
     "ok"
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct SearchParams {
+    /// Suchbegriff; filtert den Katalog (Teilstring, case-insensitiv).
     keyword: String,
 }
 
+/// Durchsucht den Portal-Katalog nach *keyword* (max. 50 Treffer).
+#[utoipa::path(
+    get,
+    path = "/api/search",
+    tag = "vindex",
+    params(SearchParams),
+    responses(
+        (status = 200, description = "Trefferliste", body = SearchResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 429, description = "Rate-Limit überschritten", body = ErrorResponse),
+        (status = 502, description = "Katalog konnte nicht abgerufen werden", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
 async fn search(
     State(state): State<AppState>,
     Query(p): Query<SearchParams>,
@@ -335,11 +388,28 @@ async fn search(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct ProvidersParams {
+    /// Quell-URL einer Episode/Folge auf einem unterstützten Portal.
     url: String,
 }
 
+/// Listet die verfügbaren Hoster-Links je Sprache zu einer Quell-URL auf.
+#[utoipa::path(
+    get,
+    path = "/api/providers",
+    tag = "vindex",
+    params(ProvidersParams),
+    responses(
+        (status = 200, description = "Hoster-Links je Sprache", body = ProvidersResponse),
+        (status = 400, description = "Fehlende/ungültige oder nicht erlaubte Quell-URL", body = ErrorResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 429, description = "Rate-Limit überschritten", body = ErrorResponse),
+        (status = 502, description = "Provider-Abruf fehlgeschlagen", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
 async fn providers(
     State(state): State<AppState>,
     Query(p): Query<ProvidersParams>,
@@ -367,17 +437,36 @@ async fn providers(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct DownloadReq {
+    /// Quell-URL einer Episode/Folge/Films auf einem unterstützten Portal.
+    #[schema(example = "https://aniworld.to/anime/stream/x/staffel-1/episode-1")]
     url: String,
+    /// Gewünschte Sprache (z. B. `German Dub`). Fällt auf die Einstellung zurück.
     #[serde(default)]
     language: Option<String>,
+    /// Bevorzugter Hoster (z. B. `VOE`). Fällt auf die Fallback-Kette zurück.
     #[serde(default)]
     provider: Option<String>,
+    /// Maximale Qualität (z. B. `1080p`). Fällt auf die Einstellung zurück.
     #[serde(default)]
     quality: Option<String>,
 }
 
+/// Reiht einen Download in die Queue ein und startet ihn im Hintergrund.
+#[utoipa::path(
+    post,
+    path = "/api/download",
+    tag = "vindex",
+    request_body = DownloadReq,
+    responses(
+        (status = 202, description = "Auftrag angenommen und eingereiht", body = DownloadAccepted),
+        (status = 400, description = "Fehlende/ungültige oder nicht erlaubte Quell-URL", body = ErrorResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 429, description = "Queue voll oder Rate-Limit überschritten", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
 async fn download(
     State(state): State<AppState>,
     Json(req): Json<DownloadReq>,
@@ -484,6 +573,18 @@ async fn set_status(state: &AppState, id: u64, status: JobStatus, detail: &str) 
     }
 }
 
+/// Gibt die aktuelle Download-Queue mit Status je Eintrag zurück.
+#[utoipa::path(
+    get,
+    path = "/api/queue",
+    tag = "vindex",
+    responses(
+        (status = 200, description = "Aktuelle Queue", body = QueueResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 429, description = "Rate-Limit überschritten", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
 async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
     let jobs = state.jobs.lock().await;
     let items: Vec<_> = jobs
@@ -542,6 +643,120 @@ fn capture_num(url: &str, marker: &str) -> Option<u32> {
         .ok()
 }
 
+// ---------------------------------------------------------------------------
+// OpenAPI-Spezifikation
+//
+// Die folgenden Typen beschreiben ausschließlich die Antwortkörper für die
+// generierte Spezifikation. Die Handler liefern weiterhin dynamisches JSON
+// (`serde_json::Value`); diese Structs ändern das Laufzeitverhalten nicht.
+// ---------------------------------------------------------------------------
+
+/// Einheitlicher Fehlerkörper der API.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct ErrorResponse {
+    /// Menschenlesbare Fehlermeldung.
+    error: String,
+}
+
+/// Ein einzelner Suchtreffer.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct SearchResult {
+    /// Titel des Treffers.
+    title: String,
+    /// Direkte Quell-URL zum Stream.
+    url: String,
+}
+
+/// Antwort von `GET /api/search`.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct SearchResponse {
+    results: Vec<SearchResult>,
+}
+
+/// Antwort von `GET /api/providers`: Hoster-Links, nach Sprache und dann nach
+/// Hoster-Name gruppiert (`{ "German Dub": { "VOE": "https://…" } }`).
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct ProvidersResponse {
+    #[schema(additional_properties = true)]
+    providers: serde_json::Value,
+}
+
+/// Antwort von `POST /api/download` (202).
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct DownloadAccepted {
+    /// Kennung des eingereihten Auftrags.
+    queue_id: u64,
+    /// Status direkt nach dem Einreihen (`queued`).
+    status: String,
+}
+
+/// Ein Eintrag der Download-Queue.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct QueueItem {
+    /// Kennung des Auftrags.
+    id: u64,
+    /// Quell-URL des Downloads.
+    url: String,
+    /// Aktueller Status: `queued`, `running`, `completed` oder `failed`.
+    status: String,
+    /// Nach außen sichtbares Detail (Dateiname bzw. knappe Fehlermeldung).
+    detail: String,
+}
+
+/// Antwort von `GET /api/queue`.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct QueueResponse {
+    items: Vec<QueueItem>,
+}
+
+/// Ergänzt das API-Key-Sicherheitsschema (`X-API-Key`-Header) in der Spez.
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "api_key",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
+        );
+    }
+}
+
+/// Gebündelte OpenAPI-3-Spezifikation der HTTP-API.
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "vindex HTTP-API",
+        description = "Suche, Provider-Metadaten und Download-Queue von vindex.",
+        license(name = "MIT")
+    ),
+    paths(health, openapi_json, search, providers, download, queue),
+    components(schemas(
+        DownloadReq,
+        DownloadAccepted,
+        SearchResponse,
+        SearchResult,
+        ProvidersResponse,
+        QueueResponse,
+        QueueItem,
+        ErrorResponse
+    )),
+    modifiers(&SecurityAddon),
+    tags(
+        (name = "vindex", description = "Geschützte /api/*-Routen (API-Key nötig, sofern konfiguriert)."),
+        (name = "meta", description = "Offene Routen ohne API-Key.")
+    )
+)]
+pub struct ApiDoc;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +810,46 @@ mod tests {
         let (status, body) = send(router_with(state(&["geheim"])), get_req("/health", None)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "ok");
+    }
+
+    #[tokio::test]
+    async fn openapi_json_ist_offen_ohne_key() {
+        // /openapi.json liegt wie /health vor der API-Key-Middleware: trotz
+        // konfiguriertem Key und ohne Key im Request darf es NICHT 401 sein.
+        let (status, _) = send(
+            router_with(state(&["geheim"])),
+            get_req("/openapi.json", None),
+        )
+        .await;
+        assert_ne!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn openapi_json_liefert_gueltige_spez() {
+        let (status, body) = send(
+            router_with(state(&["geheim"])),
+            get_req("/openapi.json", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let spec: serde_json::Value = serde_json::from_str(&body).expect("Body ist JSON");
+
+        // OpenAPI-Version vorhanden und 3.x.
+        let version = spec["openapi"].as_str().expect("openapi-Feld");
+        assert!(version.starts_with("3."), "unerwartete Version: {version}");
+
+        // Die vier /api/*-Pfade sind beschrieben.
+        let paths = &spec["paths"];
+        for p in [
+            "/api/search",
+            "/api/providers",
+            "/api/download",
+            "/api/queue",
+        ] {
+            assert!(paths.get(p).is_some(), "Pfad fehlt in der Spez: {p}");
+        }
     }
 
     #[tokio::test]

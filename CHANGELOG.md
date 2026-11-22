@@ -14,6 +14,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   nacheinander mit demselben Sprach-/Hoster-/Qualitäts-Setup geladen (Delay dazwischen),
   ein Fehler bricht den Batch nicht ab; am Ende folgt eine Zusammenfassung mit den
   fehlgeschlagenen URLs.
+- API: OpenAPI-3-Spezifikation (via `utoipa`), offen ausgeliefert unter
+  `GET /openapi.json`. Annotiert `/health` und die vier `/api/*`-Routen inkl.
+  Query-/Body-Parameter, Response-Codes (200/202/400/401/429/502) und
+  API-Key-Sicherheitsschema. Das Laufzeitverhalten der Endpunkte bleibt gleich.
 
 ### Geplant
 
@@ -22,7 +26,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - „keep watching", Proxy-Rotation.
 - Watch via mpv/IINA, Syncplay, Anime4K.
 - Nativer HLS-Downloader (ohne ffmpeg).
-- API: Library, Auto-Sync, OpenAPI, persistenter Key-Store mit Scopes.
+- API: Library, Auto-Sync, persistenter Key-Store mit Scopes.
 - Desktop-Fenster-Frontend auf der `core`-Facade.
 
 ## [0.1.0] - 2026-11-22
