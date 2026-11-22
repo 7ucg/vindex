@@ -15,6 +15,7 @@
 //! - [`naming`]     — Datei-Templates, Episoden-Nummerierung.
 //! - [`config`]     — `VINDEX_*`-Einstellungen.
 //! - [`aniskip`]    — Intro/Outro-Zeiten.
+//! - [`mpv`]        — mpv-Argumentbau und Wiedergabe-Start (Watch-Modus).
 //! - [`watchstate`] — „keep watching": Fortschritt pro Serie merken.
 
 pub mod aniskip;
@@ -25,6 +26,7 @@ pub mod extract;
 pub mod hoster;
 pub mod http;
 pub mod model;
+pub mod mpv;
 pub mod naming;
 pub mod ratelimit;
 pub mod site;

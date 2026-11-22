@@ -32,10 +32,12 @@ HTTP-API/Daemon und Desktop-Backend.
   opt-in über `VINDEX_IMPERSONATE`, standardmäßig deaktiviert.
 - Konfiguration über `VINDEX_*`-Variablen und `.env`.
 - AniSkip-Abruf für Intro- und Outro-Zeiten.
+- Watch-Modus: `vindex watch <url>` spielt eine Episode/einen Film direkt in mpv ab
+  (statt Download), mit Referer-Header und AniSkip als überspringbare Kapitel.
 - Schnittstellen: CLI mit interaktivem Menü, HTTP-API-Daemon, Desktop-Backend.
 
 Was noch fehlt (Headless-Browser-Fallback, einzelne Hoster,
-Watch/Syncplay, weitere API-Flächen, Desktop-Frontend), steht in
+Syncplay, weitere API-Flächen, Desktop-Frontend), steht in
 [ARCHITECTURE.md](ARCHITECTURE.md) und [CHANGELOG.md](CHANGELOG.md).
 
 ## Nutzung
@@ -60,6 +62,11 @@ vindex download --batch episoden.txt --language "German Dub" --quality 1080p
 
 # Nächste Folge einer Serie (merkt sich den Fortschritt pro Serie)
 vindex download --continue "https://aniworld.to/anime/stream/<slug>"
+
+# Episode/Film direkt in mpv abspielen statt laden (Referer + AniSkip-Kapitel)
+vindex watch "https://aniworld.to/anime/stream/<slug>/staffel-1/episode-1" \
+  --language "German Dub" --provider VOE
+# Voraussetzung: mpv ist installiert und im PATH.
 
 # Interaktives Menü
 vindex menu

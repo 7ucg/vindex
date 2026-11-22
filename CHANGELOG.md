@@ -9,6 +9,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- CLI: Watch-Modus — `vindex watch <episode-url>` löst den Stream über dieselbe
+  Sprach-/Hoster-Fallback-Kette wie `download` auf (neue `core::download::resolve_playable`,
+  ohne Mux) und spielt ihn direkt in mpv ab, statt ihn herunterzuladen. Der Referer wird als
+  `--http-header-fields=Referer: …` mitgegeben, der Medientitel als `--force-media-title`.
+  Der Start läuft über `tokio::process::Command` mit getrennten Argumenten (keine Shell); die
+  Stream-URL ist ein eigenes Argument, fehlendes mpv ergibt einen sauberen Fehler statt Panic.
+  AniSkip-Zeiten werden über `core::mpv::AniSkipTimes` als überspringbare Kapitel eingehängt
+  (`--chapters-file=memory://…` im ffmetadata-Format); die MAL-ID-Auflösung, die die Zeiten
+  tatsächlich liefert, steht noch aus (siehe TODO „AniSkip-Wiring").
 - Proxy-Rotation: `VINDEX_PROXY` (komma-getrennt) verteilt die Anfragen round-robin über
   einen Proxy-Pool (reqwest- und Impersonate-Client). Fail-closed — ein kaputter Proxy
   bricht den Client-Bau ab, statt ungeproxt weiterzulaufen. Hinweis: über einen Proxy

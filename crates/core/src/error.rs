@@ -20,6 +20,9 @@ pub enum Error {
     #[error("ffmpeg/ffprobe fehlgeschlagen: {0}")]
     Ffmpeg(String),
 
+    #[error("mpv fehlgeschlagen: {0}")]
+    Mpv(String),
+
     #[error("Parsing-Fehler: {0}")]
     Parse(String),
 

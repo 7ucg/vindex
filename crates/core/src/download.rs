@@ -185,6 +185,105 @@ pub async fn download_url(
     }
 }
 
+/// Löst den ersten abspielbaren Stream zu *url* auf — **ohne** Download/Mux.
+///
+/// Durchläuft dieselbe Fallback-Kette Sprache → Hoster wie [`download_url`]
+/// (inklusive Filmo-Routing und URL-Autokorrektur) und gibt den ersten
+/// erfolgreich aufgelösten [`Resolved`] (Stream-URL + Referer) zurück. Gedacht für
+/// den Watch-Modus, der den Stream an mpv übergibt statt ihn zu muxen.
+///
+/// Die Qualitätsauswahl bleibt dem Player überlassen (bei HLS wählt mpv die
+/// Variante selbst); `prefs` steuert hier nur Sprach- und Hoster-Reihenfolge.
+pub async fn resolve_playable(
+    client: &reqwest::Client,
+    url: &str,
+    prefs: &DownloadPrefs,
+) -> Result<Resolved> {
+    let corrected = site::autocorrect::autocorrect(url).map(|c| c.url);
+    let url = corrected.as_deref().unwrap_or(url);
+    if site::is_filmo(url) {
+        resolve_movie_playable(client, url, prefs).await
+    } else {
+        resolve_episode_playable(client, url, prefs).await
+    }
+}
+
+/// Watch-Variante von [`download_episode`]: nur Auflösung, kein Mux.
+async fn resolve_episode_playable(
+    client: &reqwest::Client,
+    episode_url: &str,
+    prefs: &DownloadPrefs,
+) -> Result<Resolved> {
+    site::validate_source_url(episode_url).map_err(Error::Parse)?;
+    let base = site::base_for_url(episode_url);
+    let links = site::serienstream::provider_links(client, base, episode_url).await?;
+
+    for &lang in &prefs.languages {
+        let Some(hmap) = links.hosters_for(lang) else {
+            continue;
+        };
+        for &hoster in &prefs.hosters {
+            let Some(embed) = hmap.get(&hoster) else {
+                continue;
+            };
+            match hoster::resolve(client, hoster, embed).await {
+                Ok(r) => {
+                    tracing::info!("Stream aufgelöst: [{}/{}]", lang.as_str(), hoster.as_str());
+                    return Ok(r);
+                }
+                Err(e) => {
+                    tracing::debug!("Hoster {} fehlgeschlagen: {e}", hoster.as_str());
+                    continue;
+                }
+            }
+        }
+    }
+    Err(Error::NoStream)
+}
+
+/// Watch-Variante von [`download_movie`]: nur Auflösung, kein Mux.
+async fn resolve_movie_playable(
+    client: &reqwest::Client,
+    movie_url: &str,
+    prefs: &DownloadPrefs,
+) -> Result<Resolved> {
+    site::validate_source_url(movie_url).map_err(Error::Parse)?;
+    let movie = site::filmo::movie(client, movie_url).await?;
+    let csrf = movie
+        .csrf
+        .as_deref()
+        .ok_or_else(|| Error::extract("Filmo", "CSRF-Token fehlt"))?;
+
+    for &lang in &prefs.languages {
+        let Some(hmap) = movie.hosters_for(lang) else {
+            continue;
+        };
+        for &hoster in &prefs.hosters {
+            let Some(token) = hmap.get(&hoster) else {
+                continue;
+            };
+            let embed = match site::filmo::resolve_embed(client, movie_url, csrf, token).await {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!("Filmo-Redirect ({}) fehlgeschlagen: {e}", hoster.as_str());
+                    continue;
+                }
+            };
+            match hoster::resolve(client, hoster, &embed).await {
+                Ok(r) => {
+                    tracing::info!("Stream aufgelöst: [{}/{}]", lang.as_str(), hoster.as_str());
+                    return Ok(r);
+                }
+                Err(e) => {
+                    tracing::debug!("Hoster {} fehlgeschlagen: {e}", hoster.as_str());
+                    continue;
+                }
+            }
+        }
+    }
+    Err(Error::NoStream)
+}
+
 /// Muxt einen aufgelösten Stream — bei HLS mit Tier-Sweep, sonst direkt.
 async fn try_download_resolved(
     client: &reqwest::Client,

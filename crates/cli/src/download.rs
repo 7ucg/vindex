@@ -71,8 +71,8 @@ pub struct DownloadArgs {
 
 /// Aus Optionen und Einstellungen aufgelöste Download-Vorgaben. Der Dateiname
 /// hängt an der jeweiligen URL und wird erst pro Download ergänzt.
-struct ResolvedPrefs {
-    language: Language,
+pub(crate) struct ResolvedPrefs {
+    pub(crate) language: Language,
     hosters: Vec<Hoster>,
     max_quality: Quality,
     min_quality: Quality,
@@ -82,7 +82,7 @@ struct ResolvedPrefs {
 
 impl ResolvedPrefs {
     /// Baut die vollständigen `DownloadPrefs` für eine konkrete URL.
-    fn for_url(&self, url: &str) -> DownloadPrefs {
+    pub(crate) fn for_url(&self, url: &str) -> DownloadPrefs {
         DownloadPrefs {
             languages: vec![self.language],
             hosters: self.hosters.clone(),
@@ -97,11 +97,29 @@ impl ResolvedPrefs {
 
 /// Löst Sprache/Hoster/Qualität/Ziel einmalig aus Optionen und Einstellungen auf.
 fn resolve_prefs(args: &DownloadArgs, settings: &Settings) -> anyhow::Result<ResolvedPrefs> {
-    let language = match &args.language {
+    resolve_prefs_from(
+        args.language.as_deref(),
+        args.provider.as_deref(),
+        args.quality.as_deref(),
+        args.output_dir.clone(),
+        settings,
+    )
+}
+
+/// Gemeinsame Auflösung von Sprache/Hoster/Qualität/Ziel aus einzelnen Optionen —
+/// von `download` **und** `watch` genutzt, damit beide dieselbe Fallback-Logik teilen.
+pub(crate) fn resolve_prefs_from(
+    language: Option<&str>,
+    provider: Option<&str>,
+    quality: Option<&str>,
+    output_dir: Option<PathBuf>,
+    settings: &Settings,
+) -> anyhow::Result<ResolvedPrefs> {
+    let language = match language {
         Some(l) => Language::from_str(l).map_err(|e| anyhow::anyhow!(e))?,
         None => settings.language,
     };
-    let hosters = match &args.provider {
+    let hosters = match provider {
         Some(p) => {
             let h = Hoster::from_str(p).map_err(|e| anyhow::anyhow!(e))?;
             let mut v = vec![h];
@@ -110,14 +128,11 @@ fn resolve_prefs(args: &DownloadArgs, settings: &Settings) -> anyhow::Result<Res
         }
         None => settings.effective_hosters(),
     };
-    let max_quality = match &args.quality {
+    let max_quality = match quality {
         Some(q) => Quality::from_str(q).map_err(|e| anyhow::anyhow!(e))?,
         None => settings.max_quality,
     };
-    let out_dir = args
-        .output_dir
-        .clone()
-        .unwrap_or_else(|| settings.download_path.clone());
+    let out_dir = output_dir.unwrap_or_else(|| settings.download_path.clone());
     Ok(ResolvedPrefs {
         language,
         hosters,

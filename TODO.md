@@ -40,10 +40,15 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## Download & Wiedergabe
 
-- **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) läuft nativ,
-  das Remuxen nutzt aber noch ffmpeg. Ein eigener TS-Remuxer würde ffmpeg ersetzen; dazu
-  AES-128-Entschlüsselung für verschlüsselte Playlists (fallen aktuell auf ffmpeg zurück).
-- **Watch** via mpv/IINA inkl. AniSkip-Wiring, dazu Syncplay und Anime4K.
+- **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) und die
+  AES-128-Entschlüsselung laufen nativ, nur das Remuxen nutzt noch ffmpeg. Ein eigener
+  TS-Remuxer würde ffmpeg ganz ersetzen; `SAMPLE-AES` bleibt vorerst beim ffmpeg-Pfad.
+- **Watch** via mpv erledigt (`vindex watch`): Stream-Auflösung ohne Download
+  (`core::download::resolve_playable`), mpv-Start mit Referer-Header und Medientitel, AniSkip
+  als überspringbare Kapitel (`core::mpv::build_mpv_args` → `--chapters-file=memory://…`).
+  **Offen (AniSkip-Wiring):** die MAL-ID-Auflösung (via Jikan), damit `aniskip::skip_times`
+  die Intro/Outro-Zeiten tatsächlich liefert — aktuell spielt `watch` ohne Kapitel.
+  Außerdem offen: IINA-Variante, Syncplay und Anime4K.
 
 ## Desktop
 

@@ -6,6 +6,7 @@
 mod census;
 mod download;
 mod interactive;
+mod watch;
 
 use clap::{Parser, Subcommand};
 
@@ -26,6 +27,9 @@ enum Command {
     /// Lädt eine Episode/einen Film oder per `--batch <datei>` eine ganze Episodenliste
     /// (Sprache/Hoster/Qualität mit Fallback).
     Download(download::DownloadArgs),
+    /// Spielt eine Episode/einen Film direkt in mpv ab (Referer + AniSkip-Kapitel),
+    /// statt sie herunterzuladen (Sprache/Hoster/Qualität wie `download`).
+    Watch(watch::WatchArgs),
     /// Interaktives Menü: suchen → Staffel/Episode/Sprache wählen → laden.
     Menu,
     /// Startet den HTTP-API-Daemon.
@@ -52,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Census(args) => census::run(args).await,
         Command::Search(args) => download::run_search(args).await,
         Command::Download(args) => download::run_download(args).await,
+        Command::Watch(args) => watch::run_watch(args).await,
         Command::Menu => interactive::run().await,
         Command::Serve(args) => vindex_api::serve(&args.addr).await,
     }
