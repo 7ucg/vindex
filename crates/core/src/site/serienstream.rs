@@ -1,11 +1,13 @@
 //! Scraper für die SerienStream-Software.
 //!
-//! Die Selektoren hier (`/anime/stream/<slug>/…`, `li[data-lang-key][data-link-target]`,
-//! `/redirect/N`) treffen aktuell **aniworld.to**. serienstream.to wurde inzwischen
-//! umgebaut: `/serie/<slug>/…`-Pfade, Hoster über `data-provider-name`/`data-play-url`/
-//! `data-link-id` statt `data-lang-key`, dazu häufige Cloudflare-Captchas — dieser
-//! Scraper liefert dort keine Hoster-Links. s.to ist stillgelegt (→ serienstream.to).
-//! Ein eigener serienstream.to-Pfad steht aus (siehe TODO.md). Portiert aus
+//! Die Selektoren der Episoden-/Staffel-Logik (`/anime/stream/<slug>/…`) treffen
+//! aktuell **aniworld.to**. [`parse_provider_links`] bedient dagegen **beide**
+//! Hoster-Markups: zuerst aniworlds `li[data-lang-key][data-link-target]` mit
+//! `<h4>`-Hostername und `/redirect/N`, und falls das nichts liefert, das neue
+//! serienstream.to-Markup (`button[data-provider-name][data-play-url]` mit
+//! `data-language-id`/`-label`, Link `/r?t=<token>`). serienstream.to leidet
+//! zusätzlich unter häufigen Cloudflare-Captchas; der Parser ist nur gegen ein
+//! Fixture verifiziert. s.to ist stillgelegt (→ serienstream.to). Portiert aus
 //! `pages/aniworld_to.py` und `models/aniworld_to/*`.
 
 use scraper::{Html, Selector};
@@ -117,9 +119,22 @@ fn parse_episodes(body: &str, base: &str, season: u32) -> Vec<Episode> {
 }
 
 /// Reine HTML→Hoster-Links-Logik von [`provider_links`].
+///
+/// Bedient beide Markups: zuerst das aniworld-Markup; liefert das keine Links,
+/// wird auf das neue serienstream.to-Markup zurückgefallen.
 fn parse_provider_links(body: &str, base: &str) -> ProviderLinks {
-    let mut links = ProviderLinks::default();
     let doc = Html::parse_document(body);
+    let links = parse_provider_links_aniworld(&doc, base);
+    if !links.is_empty() {
+        return links;
+    }
+    parse_provider_links_serienstream(&doc, base)
+}
+
+/// aniworld.to-Markup: `<li data-lang-key="…" data-link-target="…">` mit `<h4>`
+/// als Hostername und `…/redirect/N` als Ziel.
+fn parse_provider_links_aniworld(doc: &Html, base: &str) -> ProviderLinks {
+    let mut links = ProviderLinks::default();
     let li_sel = Selector::parse("li[data-lang-key][data-link-target]").unwrap();
     let h4_sel = Selector::parse("h4").unwrap();
     for li in doc.select(&li_sel) {
@@ -146,6 +161,60 @@ fn parse_provider_links(body: &str, base: &str) -> ProviderLinks {
             .insert(hoster, format!("{base}{target}"));
     }
     links
+}
+
+/// Neues serienstream.to-Markup: Jeder Hoster ist ein `<button>` mit
+/// `data-provider-name` (Hostername), `data-play-url="/r?t=<token>"` (serverseitiger
+/// Weiterleitungs-Link, analog aniworlds `/redirect/N`) und der Sprache direkt am
+/// Button über `data-language-id`/`data-language-label`. Das `<token>` ist ein
+/// Laravel-Crypt-Payload und wird **nicht** entschlüsselt, sondern unverändert in
+/// die absolute URL übernommen.
+fn parse_provider_links_serienstream(doc: &Html, base: &str) -> ProviderLinks {
+    let mut links = ProviderLinks::default();
+    let btn_sel = Selector::parse("button[data-provider-name][data-play-url]").unwrap();
+    for btn in doc.select(&btn_sel) {
+        let el = btn.value();
+        let lang =
+            language_from_serienstream(el.attr("data-language-id"), el.attr("data-language-label"));
+        let Some(lang) = lang else {
+            continue;
+        };
+        let Some(play_url) = el.attr("data-play-url") else {
+            continue;
+        };
+        let Some(hoster) = el
+            .attr("data-provider-name")
+            .and_then(|n| Hoster::from_site_name(n.trim()))
+        else {
+            continue;
+        };
+        links
+            .by_language
+            .entry(lang)
+            .or_default()
+            .insert(hoster, format!("{base}{play_url}"));
+    }
+    links
+}
+
+/// Mappt die serienstream.to-Sprachkennung auf [`Language`].
+///
+/// serienstream.to führt westliche Serien, keine Anime: `data-language-id="1"`
+/// („Deutsch") ist die deutsche Synchro → [`Language::GermanDub`], `="2"`
+/// („Englisch") die englische Originaltonspur → [`Language::EnglishDub`] (die
+/// `…Sub`-Varianten tragen anime-spezifische Anzeigenamen und passen hier nicht).
+/// `data-language-id` hat Vorrang; fehlt sie, entscheidet das `data-language-label`.
+fn language_from_serienstream(id: Option<&str>, label: Option<&str>) -> Option<Language> {
+    match id.map(str::trim) {
+        Some("1") => return Some(Language::GermanDub),
+        Some("2") => return Some(Language::EnglishDub),
+        _ => {}
+    }
+    match label.map(|l| l.trim().to_ascii_lowercase()).as_deref() {
+        Some("deutsch") => Some(Language::GermanDub),
+        Some("englisch") => Some(Language::EnglishDub),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +271,93 @@ mod tests {
         assert_eq!(
             links.link(Language::EnglishSub, Hoster::Voe),
             Some("https://example.test/redirect/2")
+        );
+    }
+
+    // Synthetisches serienstream.to-Markup: echte Struktur, aber frei erfundene
+    // Tokens/Ids/Titel (kein echter Laravel-Crypt-Payload, kein Copyright-Inhalt).
+    const SERIENSTREAM_HTML: &str = r#"
+    <div id="episode-links" class="row">
+        <div class="col-12"><h5 class="h6 text-muted">Deutsch</h5></div>
+        <div class="col-12 col-sm-6">
+            <div class="link-wrapper">
+                <button type="button" class="link-box btn btn-dark"
+                        data-link-id="1000001"
+                        data-play-url="/r?t=SYNTH-DE-VOE-TOKEN"
+                        data-auto-embed="1"
+                        data-provider-name="VOE"
+                        data-language-label="Deutsch"
+                        data-language-id="1">
+                    <span class="text-white">VOE</span>
+                </button>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6">
+            <div class="link-wrapper">
+                <button type="button" class="link-box btn btn-dark"
+                        data-link-id="1000002"
+                        data-play-url="/r?t=SYNTH-DE-VIDOZA-TOKEN"
+                        data-auto-embed="1"
+                        data-provider-name=" Vidoza "
+                        data-language-label="Deutsch"
+                        data-language-id="1">
+                    <span class="text-white">Vidoza</span>
+                </button>
+            </div>
+        </div>
+        <div class="col-12"><h5 class="h6 text-muted">Englisch</h5></div>
+        <div class="col-12 col-sm-6">
+            <div class="link-wrapper">
+                <button type="button" class="link-box btn btn-dark"
+                        data-link-id="1000003"
+                        data-play-url="/r?t=SYNTH-EN-VOE-TOKEN"
+                        data-auto-embed="1"
+                        data-provider-name="VOE"
+                        data-language-label="Englisch"
+                        data-language-id="2">
+                    <span class="text-white">VOE</span>
+                </button>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6">
+            <div class="link-wrapper">
+                <button type="button" class="link-box btn btn-dark"
+                        data-link-id="1000004"
+                        data-play-url="/r?t=SYNTH-EN-UNKNOWN-TOKEN"
+                        data-auto-embed="1"
+                        data-provider-name="UnbekannterHoster"
+                        data-language-label="Englisch"
+                        data-language-id="2">
+                    <span class="text-white">UnbekannterHoster</span>
+                </button>
+            </div>
+        </div>
+    </div>"#;
+
+    #[test]
+    fn serienstream_hoster_links_nach_sprache_gruppiert() {
+        let links = parse_provider_links(SERIENSTREAM_HTML, BASE_T);
+        assert_eq!(
+            links.link(Language::GermanDub, Hoster::Voe),
+            Some("https://example.test/r?t=SYNTH-DE-VOE-TOKEN")
+        );
+        assert_eq!(
+            links.link(Language::GermanDub, Hoster::Vidoza),
+            Some("https://example.test/r?t=SYNTH-DE-VIDOZA-TOKEN")
+        );
+        assert_eq!(
+            links.link(Language::EnglishDub, Hoster::Voe),
+            Some("https://example.test/r?t=SYNTH-EN-VOE-TOKEN")
+        );
+        // Unbekannter Hoster wird übersprungen; sonst nichts zusätzlich.
+        assert!(links.link(Language::EnglishDub, Hoster::Vidoza).is_none());
+        assert_eq!(
+            links.hosters_for(Language::GermanDub).map(|m| m.len()),
+            Some(2)
+        );
+        assert_eq!(
+            links.hosters_for(Language::EnglishDub).map(|m| m.len()),
+            Some(1)
         );
     }
 
