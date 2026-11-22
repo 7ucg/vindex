@@ -6,6 +6,7 @@ import { Placeholder } from "./views/Placeholder";
 import { Show } from "solid-js";
 import { PortalView } from "./views/PortalView";
 import { Detail } from "./views/Detail";
+import { Downloads } from "./views/Downloads";
 import { Player } from "./views/Player";
 import { view, playback } from "./lib/store";
 
@@ -29,11 +30,7 @@ export default function App(): JSX.Element {
             />
           </Match>
           <Match when={view() === "downloads"}>
-            <Placeholder
-              title="Downloads"
-              badge="bald"
-              desc="Download-Warteschlange mit Prioritäten, Pause/Fortsetzen, Bandbreitenlimit und Verlauf."
-            />
+            <Downloads />
           </Match>
           <Match when={view() === "aniworld"}>
             <PortalView portal="aniworld" />

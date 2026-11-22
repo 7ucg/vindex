@@ -6,8 +6,15 @@ import {
   Show,
   type JSX,
 } from "solid-js";
-import { seasons, episodes, resolvePlayback, type Episode } from "../lib/api";
+import { seasons, episodes, resolvePlayback, startDownload, type Episode } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
+
+function pad(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+function sanitize(s: string): string {
+  return s.replace(/[\\/:*?"<>|]/g, "").trim();
+}
 
 function seasonLabel(n: number): string {
   return n === 0 ? "Filme" : `Staffel ${n}`;
@@ -38,6 +45,20 @@ export function Detail(): JSX.Element {
 
   const [busy, setBusy] = createSignal<string | null>(null);
   const [playErr, setPlayErr] = createSignal<string | null>(null);
+
+  const load = async (e: Episode) => {
+    const base =
+      e.season === 0
+        ? `${sanitize(sel.title)} - Film ${pad(e.index_in_season)}`
+        : `${sanitize(sel.title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
+    const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
+    try {
+      await startDownload(e.url, base, title);
+      setView("downloads");
+    } catch (err) {
+      setPlayErr(String(err));
+    }
+  };
 
   const watch = async (e: Episode) => {
     setBusy(e.url);
@@ -130,7 +151,9 @@ export function Detail(): JSX.Element {
                   >
                     {busy() === e.url ? "löst auf …" : "Ansehen"}
                   </button>
-                  <button class="chip">Laden</button>
+                  <button class="chip" onClick={() => load(e)}>
+                    Laden
+                  </button>
                 </div>
               </div>
             )}

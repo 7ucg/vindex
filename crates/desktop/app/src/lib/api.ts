@@ -2,6 +2,7 @@
 // Jede Funktion mappt 1:1 auf ein #[tauri::command]; das Frontend ruft nie direkt
 // ins Netz, sondern immer über diese Schicht in den Rust-Kern.
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface AppInfo {
   name: string;
@@ -61,4 +62,30 @@ export function episodes(url: string, season: number): Promise<Episode[]> {
 
 export function appSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("app_settings");
+}
+
+export interface JobView {
+  id: number;
+  title: string;
+  status: string; // queued | resolving | running | muxing | done | error | cancelled
+  done: number;
+  total: number;
+  bytes: number;
+  error: string | null;
+}
+
+export function startDownload(url: string, fileName: string, title: string): Promise<number> {
+  return invoke<number>("start_download", { url, fileName, title });
+}
+
+export function cancelDownload(id: number): Promise<void> {
+  return invoke("cancel_download", { id });
+}
+
+export function listDownloads(): Promise<JobView[]> {
+  return invoke<JobView[]>("list_downloads");
+}
+
+export function onDownloadUpdate(cb: (job: JobView) => void): Promise<UnlistenFn> {
+  return listen<JobView>("download:update", (e) => cb(e.payload));
 }

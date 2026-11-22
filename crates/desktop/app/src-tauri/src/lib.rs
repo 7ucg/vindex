@@ -4,6 +4,7 @@
 //! mappt auf die Facade bzw. `vindex_core` und reicht serialisierbare DTOs ans
 //! Frontend. **Keine** eigene Netz-/Scraping-/Download-Logik hier — die lebt im Kern.
 
+mod downloads;
 mod stream_proxy;
 
 use std::sync::Arc;
@@ -12,10 +13,12 @@ use serde::Serialize;
 use tauri::{Manager, State};
 use vindex_desktop::{core, Backend};
 
-/// Gehaltener Zustand: die Facade (HTTP-Client) + der lokale Referer-Proxy.
+/// Gehaltener Zustand: die Facade (HTTP-Client), der lokale Referer-Proxy und
+/// der Download-Manager.
 struct AppState {
     backend: Backend,
     proxy: Arc<stream_proxy::Proxy>,
+    downloads: Arc<downloads::Downloads>,
 }
 
 /// Ein Suchtreffer fürs Frontend (serialisierbare Spiegelung von `SearchHit`).
@@ -150,6 +153,35 @@ async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<Pla
 }
 
 #[tauri::command]
+fn start_download(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+    title: String,
+    state: State<'_, AppState>,
+) -> u64 {
+    let settings = state.backend.settings();
+    downloads::start(
+        state.downloads.clone(),
+        app,
+        url,
+        file_name,
+        title,
+        settings,
+    )
+}
+
+#[tauri::command]
+fn cancel_download(id: u64, state: State<'_, AppState>) {
+    state.downloads.cancel(id);
+}
+
+#[tauri::command]
+fn list_downloads(state: State<'_, AppState>) -> Vec<downloads::JobView> {
+    state.downloads.list()
+}
+
+#[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
@@ -183,7 +215,12 @@ pub fn run() {
                     "Stream-Proxy-Start fehlgeschlagen: {e}"
                 ))
             })?;
-            app.manage(AppState { backend, proxy });
+            let downloads = Arc::new(downloads::Downloads::default());
+            app.manage(AppState {
+                backend,
+                proxy,
+                downloads,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -193,6 +230,9 @@ pub fn run() {
             seasons,
             episodes,
             resolve_playback,
+            start_download,
+            cancel_download,
+            list_downloads,
             app_settings
         ])
         .run(tauri::generate_context!())
