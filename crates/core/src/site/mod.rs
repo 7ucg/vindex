@@ -1,0 +1,101 @@
+//! Seiten-Scraper.
+//!
+//! [`aniworld`] enthält das Census-Fundament; [`serienstream`] den generischen
+//! Download-Scraper für aniworld.to **und** serienstream.to. [`aniworld`]/[`sto`] sind dünne
+//! Wrapper, die die Basis-URL festlegen.
+
+pub mod aniworld;
+pub mod filmo;
+pub mod serienstream;
+pub mod sto;
+
+use crate::model::{BASE, BASE_STO};
+
+/// Wählt die passende Basis-URL anhand einer Episoden-/Serien-URL.
+pub fn base_for_url(url: &str) -> &'static str {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("serienstream.to") || lower.contains("serienstream") {
+        BASE_STO
+    } else {
+        BASE
+    }
+}
+
+/// True, wenn die URL auf filmo.to zeigt (eigener Resolver-Pfad).
+pub fn is_filmo(url: &str) -> bool {
+    url.to_ascii_lowercase().contains("filmo.to")
+}
+
+/// Erlaubte Quell-Hosts. Alles andere wird abgewiesen, damit die serverseitig
+/// abgerufene URL nicht auf interne/beliebige Ziele zeigen kann (SSRF-Schutz).
+pub const ALLOWED_HOSTS: &[&str] = &[
+    "aniworld.to",
+    "www.aniworld.to",
+    "s.to",
+    "www.s.to",
+    "serienstream.to",
+    "www.serienstream.to",
+    "filmo.to",
+    "www.filmo.to",
+];
+
+/// Validiert eine vom Aufrufer gelieferte Quell-URL vor jedem serverseitigen
+/// Abruf: nur `https` und nur ein Host aus [`ALLOWED_HOSTS`].
+///
+/// Schützt gegen SSRF, wenn die URL aus einer nicht vertrauenswürdigen Quelle
+/// stammt (API-Request). Die anschließende Hoster-Auflösung folgt bewusst
+/// Redirects zu den Hoster-Domains — diese Ziele stammen aus der geparsten Seite,
+/// nicht aus Nutzereingaben.
+pub fn validate_source_url(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("ungültige URL: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("nur https erlaubt".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+        .ok_or_else(|| "URL ohne Host".to_string())?;
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Host nicht erlaubt: {host}"));
+    }
+    Ok(())
+}
+
+/// Extrahiert den Serien-Slug aus einer aniworld-/serienstream.to-URL
+/// (`…/anime/stream/<slug>/…` bzw. `…/serie/stream/<slug>/…`).
+pub fn slug_from_url(url: &str) -> Option<String> {
+    for marker in ["/anime/stream/", "/serie/stream/"] {
+        if let Some(rest) = url.split(marker).nth(1) {
+            let slug = rest.split('/').next().unwrap_or("").trim();
+            if !slug.is_empty() {
+                return Some(slug.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_supported_hosts() {
+        assert!(
+            validate_source_url("https://aniworld.to/anime/stream/x/staffel-1/episode-1").is_ok()
+        );
+        assert!(validate_source_url("https://serienstream.to/serie/stream/y").is_ok());
+        assert!(validate_source_url("https://s.to/serie/stream/y").is_ok());
+    }
+
+    #[test]
+    fn rejects_ssrf_targets() {
+        assert!(validate_source_url("http://aniworld.to/x").is_err()); // kein https
+        assert!(validate_source_url("https://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_source_url("https://localhost/admin").is_err());
+        assert!(validate_source_url("https://evil.example/aniworld.to").is_err());
+        assert!(validate_source_url("https://aniworld.to.evil.example/x").is_err());
+        assert!(validate_source_url("file:///etc/passwd").is_err());
+        assert!(validate_source_url("not a url").is_err());
+    }
+}

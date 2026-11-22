@@ -1,0 +1,51 @@
+//! CLI-Einstiegspunkt für `vindex`.
+//!
+//! Befehle: `census` (Katalog zählen), `search` (Titel suchen),
+//! `download` (Episode laden), `menu` (interaktiv), `serve` (API-Daemon).
+
+mod census;
+mod download;
+mod interactive;
+
+use clap::{Parser, Subcommand};
+
+/// Modularer AniWorld-Downloader (WIP).
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Untersucht aniworld.to und zählt Serien, Filme, Staffeln und Folgen.
+    Census(census::CensusArgs),
+    /// Sucht Titel im aniworld.to-Katalog (Teilstring, case-insensitiv).
+    Search(download::SearchArgs),
+    /// Lädt eine Episode oder einen Film herunter (Sprache/Hoster/Qualität mit Fallback).
+    Download(download::DownloadArgs),
+    /// Interaktives Menü: suchen → Staffel/Episode/Sprache wählen → laden.
+    Menu,
+    /// Startet den HTTP-API-Daemon.
+    Serve(ServeArgs),
+}
+
+#[derive(Parser, Debug)]
+struct ServeArgs {
+    /// Adresse zum Lauschen.
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    addr: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Census(args) => census::run(args).await,
+        Command::Search(args) => download::run_search(args).await,
+        Command::Download(args) => download::run_download(args).await,
+        Command::Menu => interactive::run().await,
+        Command::Serve(args) => vindex_api::serve(&args.addr).await,
+    }
+}

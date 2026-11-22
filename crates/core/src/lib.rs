@@ -1,0 +1,34 @@
+//! # vindex-core
+//!
+//! Kern-Library für `vindex`. Stellt die wiederverwendbare Logik bereit,
+//! die CLI, API/Daemon und Desktop-App gemeinsam nutzen.
+//!
+//! ## Module
+//! - [`model`]      — Datentypen (Sprache, Qualität, Hoster, Episode, Links).
+//! - [`error`]      — Fehlertyp [`error::Error`] + [`error::Result`].
+//! - [`http`]       — Client, UA-Rotation, Cloudflare-Erkennung.
+//! - [`site`]       — Seiten-Scraper (aniworld.to, s.to) + Census.
+//! - [`hoster`]     — Stream-Resolver je Hoster (VOE, SpeedFiles, …).
+//! - [`extract`]    — HLS-Master-Parsing, Qualitäts-Tiers.
+//! - [`download`]   — ffmpeg-Mux, Qualitäts-Sweep, Fallback-Kette.
+//! - [`ratelimit`]  — pro-Hoster-Throttle (governor) + Backoff (backon).
+//! - [`naming`]     — Datei-Templates, Episoden-Nummerierung.
+//! - [`config`]     — `VINDEX_*`-Einstellungen.
+//! - [`aniskip`]    — Intro/Outro-Zeiten.
+
+pub mod aniskip;
+pub mod config;
+pub mod download;
+pub mod error;
+pub mod extract;
+pub mod hoster;
+pub mod http;
+pub mod model;
+pub mod naming;
+pub mod ratelimit;
+pub mod site;
+
+pub use error::{Error, Result};
+pub use model::{
+    CatalogEntry, Classified, Episode, Hoster, Kind, Language, ProviderLinks, Quality,
+};

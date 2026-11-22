@@ -1,0 +1,22 @@
+[package]
+name = "vindex-api"
+description = "HTTP-API / Daemon für vindex (axum)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "vindex-api"
+path = "src/main.rs"
+
+[dependencies]
+vindex-core = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

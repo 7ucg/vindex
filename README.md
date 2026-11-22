@@ -1,2 +1,127 @@
 # vindex
 
+Downloader und Streamer für deutsche Streaming-Portale (aniworld.to,
+s.to / serienstream.to, filmo.to), in Rust. Eine Kern-Library, darauf CLI,
+HTTP-API/Daemon und Desktop-Backend.
+
+> Status: frühe Alpha. Scraping, Hoster-Auflösung, Stream-Extraktion,
+> Download-Engine, CLI und HTTP-API-Daemon sind da und bauen grün. Die
+> Download-Pfade hängen an Live-Seiten, Hostern und Cloudflare und sind deshalb
+> wartungsintensiv. Mehr in [ARCHITECTURE.md](ARCHITECTURE.md) und
+> [CHANGELOG.md](CHANGELOG.md).
+
+## Funktionen
+
+- Portale: aniworld.to und s.to / serienstream.to (Serien, Staffeln, Episoden
+  samt `Filme`-Tab), filmo.to (Filme).
+- Katalogsuche, Parsing von Slug, Staffel und Episode, Hoster-Auflösung über
+  Redirects.
+- Stream-Extraktion je Hoster: VOE, Vidmoly, Vidoza, Doodstream, SpeedFiles,
+  Filemoon (Legacy-Pfad). Streamtape, Luluvdo und LoadX sind eingeplant, haben
+  aber noch keinen Extraktor.
+- Sprachauswahl (German Dub, German Sub, English Sub, je nach Portal) mit
+  Fallback über Hoster und Sprache.
+- Qualitäts-Sweep zwischen Max- und Min-Grenze (4K bis 360p).
+- Download-Engine auf ffmpeg-Basis, mit Retry, Reconnect und Abbruch.
+- Naming-Templates im Jellyfin-Layout, Rate-Limiting pro Hoster, Backoff,
+  User-Agent-Rotation, Cloudflare-Erkennung.
+- Konfiguration über `VINDEX_*`-Variablen und `.env`.
+- AniSkip-Abruf für Intro- und Outro-Zeiten.
+- Schnittstellen: CLI mit interaktivem Menü, HTTP-API-Daemon, Desktop-Backend.
+
+Was noch fehlt (TLS-Impersonate und Browser-Fallback, einzelne Hoster,
+Watch/Syncplay, weitere API-Flächen, Desktop-Frontend), steht in
+[ARCHITECTURE.md](ARCHITECTURE.md) und [CHANGELOG.md](CHANGELOG.md).
+
+## Nutzung
+
+### CLI
+
+```bash
+# Katalog zählen
+vindex census --catalog-only
+vindex census --episodes --output census.csv
+
+# Suchen
+vindex search "naruto"
+
+# Episode/Film laden (Sprache/Hoster/Qualität mit Fallback)
+vindex download "https://aniworld.to/anime/stream/<slug>/staffel-1/episode-1" \
+  --language "German Dub" --provider VOE --quality 1080p
+vindex download "https://filmo.to/movies/<slug>"
+
+# Interaktives Menü
+vindex menu
+
+# HTTP-API-Daemon starten
+vindex serve --addr 127.0.0.1:8080
+```
+
+### Als Library
+
+```toml
+[dependencies]
+vindex-core = "0.1"
+```
+
+```rust
+use vindex_core::{config::Settings, download::{download_url, DownloadPrefs}, http};
+// Episode/Film auflösen und herunterladen …
+```
+
+### HTTP-API
+
+```bash
+vindex serve --addr 127.0.0.1:8080
+curl "http://127.0.0.1:8080/api/search?keyword=naruto"
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1","language":"German Dub","provider":"VOE"}' \
+  http://127.0.0.1:8080/api/download
+curl http://127.0.0.1:8080/api/queue
+```
+
+Jede Quell-URL wird gegen eine Host-Allowlist geprüft (nur die unterstützten
+Portale); alles andere lehnt die API mit `400` ab.
+
+## Build
+
+```bash
+cargo build --release --workspace
+cargo test --workspace
+```
+
+## Workspace-Struktur
+
+```
+vindex/
+├─ crates/
+│  ├─ core/      # Library: Scraper, Hoster-Resolver, Modell, Download-Engine
+│  ├─ cli/       # CLI + interaktives Menü (Binary: vindex)
+│  ├─ api/       # HTTP-API / Daemon (Binary: vindex-api)
+│  └─ desktop/   # Backend-Facade auf core
+└─ ARCHITECTURE.md
+```
+
+## Voraussetzungen
+
+| Tool | Zweck | Pflicht? |
+| --- | --- | --- |
+| Rust (stable, Edition 2021) | Build | ja |
+| ffmpeg / ffprobe | Muxing HLS/mp4, Auflösungs-Erkennung | für Downloads |
+| mpv (bzw. IINA auf macOS) | Streaming / Watch | optional |
+| yt-dlp | generischer Download-Fallback | optional |
+
+## Credits
+
+Aufbau und Portal-Logik lehnen sich an bestehende Open-Source-Downloader an:
+
+- AniWorld-Downloader (`phoenixthrush/AniWorld-Downloader`): Modelle, Extraktoren,
+  AniSkip, HTTP-API-Design.
+- Aniloader (`NINJAMINEBRO`): Hoster-Deobfuskation, Cloudflare-Fallback,
+  Quality-Sweep.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE).
+
+

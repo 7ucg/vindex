@@ -1,0 +1,22 @@
+[package]
+name = "vindex"
+description = "CLI für vindex (Census, Download, Suche, interaktives Menü)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "vindex"
+path = "src/main.rs"
+
+[dependencies]
+vindex-core = { workspace = true }
+vindex-api = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+clap = { workspace = true }
+indicatif = { workspace = true }
+dialoguer = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
