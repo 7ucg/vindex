@@ -71,6 +71,14 @@ export function titleMeta(url: string): Promise<TitleMeta> {
   return invoke<TitleMeta>("title_meta", { url });
 }
 
+export function cover(url: string): Promise<string | null> {
+  return invoke<string | null>("cover", { url });
+}
+
+export function proxyPrefix(): Promise<string> {
+  return invoke<string>("proxy_prefix");
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

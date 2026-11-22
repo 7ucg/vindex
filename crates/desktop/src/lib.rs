@@ -189,6 +189,12 @@ impl Backend {
         site::og_meta(&self.client, url).await
     }
 
+    /// Nur das Poster-Cover eines Titels (für das Grid, lazy pro Karte).
+    pub async fn cover(&self, url: &str) -> Result<Option<String>> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        Ok(site::og_meta(&self.client, url).await?.0)
+    }
+
     /// AniSkip-Intervalle (Intro/Outro) für eine Episode. Braucht die MAL-ID
     /// (über Jikan aufgelöst) und die Episodennummer der Staffel. Leere Liste,
     /// wenn nichts gefunden wird (oder Jikan nicht erreichbar ist).

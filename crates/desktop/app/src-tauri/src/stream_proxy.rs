@@ -56,6 +56,12 @@ impl Proxy {
     pub fn stream_url(&self, upstream: &str, referer: Option<&str>) -> String {
         proxy_url(&self.base, &self.token, upstream, referer)
     }
+
+    /// Prefix zum Bauen von Proxy-URLs im Frontend: `<base>/s?t=<token>&u=`.
+    /// Das Frontend hängt die base64url-kodierte Upstream-URL an (für Bild-Lazy-Load).
+    pub fn image_prefix(&self) -> String {
+        format!("{}/s?t={}&u=", self.base, self.token)
+    }
 }
 
 /// Startet den Proxy auf einem freien lokalen Port. Lebt für die Programmdauer.

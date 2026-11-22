@@ -211,6 +211,17 @@ async fn title_meta(url: String, state: State<'_, AppState>) -> Result<TitleMeta
 }
 
 #[tauri::command]
+async fn cover(url: String, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    state.backend.cover(&url).await.map_err(|e| e.to_string())
+}
+
+/// Prefix, mit dem das Frontend Bild-Proxy-URLs baut: `<base>/s?t=<token>&u=`.
+#[tauri::command]
+fn proxy_prefix(state: State<'_, AppState>) -> String {
+    state.proxy.image_prefix()
+}
+
+#[tauri::command]
 async fn aniskip(
     url: String,
     season: u32,
@@ -398,6 +409,8 @@ pub fn run() {
             episodes,
             resolve_playback,
             title_meta,
+            cover,
+            proxy_prefix,
             aniskip,
             start_download,
             cancel_download,

@@ -4,6 +4,7 @@ import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
 import { watchlist } from "../lib/watchlist";
+import { Cover } from "./Cover";
 
 // Home: eine funktionierende Katalog-Suche über den echten Kern.
 // „Weiterschauen"/Empfehlungen folgen, sobald der Watch-State im Frontend hängt.
@@ -82,7 +83,7 @@ export function Home(): JSX.Element {
             {(it) => (
               <div class="card" title={it.url} onClick={() => resume(it.url, it.r)}>
                 <div class="poster">
-                  <div class="ph" />
+                  <Cover url={it.url} title={it.r.title} />
                   <div class="play-ov">
                     <button class="play-btn">
                       <IconPlay />
@@ -117,7 +118,7 @@ export function Home(): JSX.Element {
             {(it) => (
               <div class="card" title={it.url} onClick={() => openTitle(it.title, it.url)}>
                 <div class="poster">
-                  <div class="ph" />
+                  <Cover url={it.url} title={it.title} />
                   <div class="play-ov">
                     <button class="play-btn">
                       <IconPlay />
@@ -156,7 +157,7 @@ export function Home(): JSX.Element {
             {(h) => (
               <div class="card" title={h.url} onClick={() => openTitle(h.title, h.url)}>
                 <div class="poster">
-                  <div class="ph" />
+                  <Cover url={h.url} title={h.title} />
                   <div class="play-ov">
                     <button class="play-btn">
                       <IconPlay />

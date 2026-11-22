@@ -2,20 +2,9 @@ import { createResource, createSignal, createMemo, For, Show, type JSX } from "s
 import { catalog, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
+import { Cover } from "./Cover";
 
 type Sort = "az" | "za";
-
-// Deterministische Platzhalter-Fläche aus dem Titel (bis echte Poster aus dem Kern kommen).
-function hue(title: string): number {
-  let h = 0;
-  for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) % 360;
-  return h;
-}
-function placeholder(title: string): string {
-  const a = hue(title);
-  const b = (a + 40) % 360;
-  return `radial-gradient(120% 120% at 30% 10%, hsl(${a} 45% 32%), hsl(${b} 55% 12%))`;
-}
 
 const LABEL: Record<Portal, string> = {
   aniworld: "aniworld.to",
@@ -94,7 +83,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
             {(h) => (
               <div class="card" title={h.url} onClick={() => openTitle(h.title, h.url)}>
                 <div class="poster">
-                  <div class="ph" style={{ background: placeholder(h.title) }} />
+                  <Cover url={h.url} title={h.title} />
                   <div class="play-ov">
                     <button class="play-btn">
                       <IconPlay />
