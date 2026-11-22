@@ -183,6 +183,9 @@ async fn title_meta(url: String, state: State<'_, AppState>) -> Result<TitleMeta
         .title_meta(&url)
         .await
         .map_err(|e| e.to_string())?;
+    // Poster durch den lokalen Proxy laden (SSRF-geprüft; die CSP erlaubt Bilder
+    // nur von 127.0.0.1, nicht von beliebigen https-Hosts).
+    let poster = poster.map(|u| state.proxy.stream_url(&u, None));
     Ok(TitleMetaDto {
         poster,
         description,

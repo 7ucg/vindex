@@ -70,11 +70,14 @@ pub async fn og_meta(
     url: &str,
 ) -> crate::error::Result<(Option<String>, Option<String>)> {
     let body = fetch_text(client, url).await?;
-    Ok(parse_og(&body))
+    let base = reqwest::Url::parse(url).ok();
+    Ok(parse_og(&body, base.as_ref()))
 }
 
-/// Reine HTML→Open-Graph-Logik von [`og_meta`] (ohne Netz, testbar).
-fn parse_og(body: &str) -> (Option<String>, Option<String>) {
+/// Reine HTML→Open-Graph-Logik von [`og_meta`] (ohne Netz, testbar). Das
+/// `og:image` wird gegen die Seiten-URL absolut aufgelöst und muss `https` sein —
+/// sonst `None` (keine rohe, gescrapte URL ans Frontend).
+fn parse_og(body: &str, base: Option<&reqwest::Url>) -> (Option<String>, Option<String>) {
     use scraper::{Html, Selector};
     let doc = Html::parse_document(body);
     let pick = |prop: &str| -> Option<String> {
@@ -85,7 +88,22 @@ fn parse_og(body: &str) -> (Option<String>, Option<String>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    (pick("og:image"), pick("og:description"))
+    (
+        pick("og:image").and_then(|raw| validate_https_url(&raw, base)),
+        pick("og:description"),
+    )
+}
+
+/// Löst eine evtl. relative URL gegen `base` auf und akzeptiert nur `https`.
+fn validate_https_url(raw: &str, base: Option<&reqwest::Url>) -> Option<String> {
+    let abs = match reqwest::Url::parse(raw) {
+        Ok(u) => u,
+        Err(_) => base?.join(raw).ok()?,
+    };
+    if abs.scheme() != "https" {
+        return None;
+    }
+    Some(abs.to_string())
 }
 
 /// Normalisierter Host einer URL (ohne Trailing-Dot, lowercase). `None`, wenn die
@@ -171,19 +189,36 @@ mod tests {
 
     #[test]
     fn og_meta_liest_image_und_description() {
+        let base = reqwest::Url::parse("https://aniworld.to/anime/stream/x").unwrap();
         let html = r#"<html><head>
             <meta property="og:title" content="X">
             <meta property="og:image" content="https://cdn.example/poster.jpg">
             <meta property="og:description" content="  Eine Beschreibung.  ">
             </head><body></body></html>"#;
-        let (img, desc) = parse_og(html);
+        let (img, desc) = parse_og(html, Some(&base));
         assert_eq!(img.as_deref(), Some("https://cdn.example/poster.jpg"));
         assert_eq!(desc.as_deref(), Some("Eine Beschreibung."));
     }
 
     #[test]
+    fn og_image_relativ_wird_absolut_https() {
+        let base = reqwest::Url::parse("https://aniworld.to/anime/stream/x").unwrap();
+        let html = r#"<meta property="og:image" content="/img/cover.jpg">"#;
+        let (img, _) = parse_og(html, Some(&base));
+        assert_eq!(img.as_deref(), Some("https://aniworld.to/img/cover.jpg"));
+    }
+
+    #[test]
+    fn og_image_nicht_https_ist_none() {
+        let base = reqwest::Url::parse("https://aniworld.to/x").unwrap();
+        let html = r#"<meta property="og:image" content="http://evil.example/x.jpg">"#;
+        let (img, _) = parse_og(html, Some(&base));
+        assert!(img.is_none());
+    }
+
+    #[test]
     fn og_meta_fehlend_ist_none() {
-        let (img, desc) = parse_og("<html><head></head><body>x</body></html>");
+        let (img, desc) = parse_og("<html><head></head><body>x</body></html>", None);
         assert!(img.is_none());
         assert!(desc.is_none());
     }
