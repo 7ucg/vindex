@@ -227,38 +227,13 @@ impl Backend {
         core::hoster::resolve(&self.client, hoster, embed_url).await
     }
 
-    /// Löst eine Episoden-URL zum ersten spielbaren Stream auf — dieselbe
-    /// Sprache×Hoster-Auswahl wie der Downloader, nur ohne Download. Für
-    /// aniworld/serienstream (Serien). Ergebnis geht durch den Referer-Proxy
+    /// Löst eine Episoden-/Film-URL zum ersten spielbaren Stream auf — exakt der
+    /// erprobte Pfad des Downloaders/`watch` (`resolve_playable`): inklusive
+    /// Autocorrect und filmo-Film-Flow. Ergebnis geht durch den Referer-Proxy
     /// des Frontends an den Player.
-    pub async fn resolve_playback(
-        &self,
-        url: &str,
-        languages: &[Language],
-        hosters: &[Hoster],
-    ) -> Result<Resolved> {
+    pub async fn resolve_playback(&self, url: &str, prefs: &DownloadPrefs) -> Result<Resolved> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
-        if site::is_filmo(url) {
-            return Err(core::error::Error::Parse(
-                "Direktes Abspielen für filmo folgt (eigener CSRF-/Redirect-Pfad)".into(),
-            ));
-        }
-        let base = site::base_for_url(url);
-        let links = site::serienstream::provider_links(&self.client, base, url).await?;
-        for &lang in languages {
-            let Some(hmap) = links.hosters_for(lang) else {
-                continue;
-            };
-            for &hoster in hosters {
-                let Some(embed) = hmap.get(&hoster) else {
-                    continue;
-                };
-                if let Ok(r) = core::hoster::resolve(&self.client, hoster, embed).await {
-                    return Ok(r);
-                }
-            }
-        }
-        Err(core::error::Error::NoStream)
+        core::download::resolve_playable(&self.client, url, prefs).await
     }
 
     /// Lädt eine Episode/einen Film anhand fertiger [`DownloadPrefs`] herunter

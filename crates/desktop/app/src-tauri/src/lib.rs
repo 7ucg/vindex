@@ -150,24 +150,32 @@ async fn episodes(
 
 #[tauri::command]
 async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<PlaybackDto, String> {
-    // Sprache/Hoster-Reihenfolge wie beim Downloader (aus den Settings).
+    // Sprache/Hoster/Qualität wie beim Downloader (aus den Settings).
     let s = state.backend.settings();
-    let languages = vec![s.language];
-    let hosters = s.effective_hosters();
+    let prefs = vindex_desktop::prefs_from_settings(
+        &s,
+        "stream",
+        &vindex_desktop::DownloadOverrides::default(),
+    );
 
     let resolved = state
         .backend
-        .resolve_playback(&url, &languages, &hosters)
+        .resolve_playback(&url, &prefs)
         .await
         .map_err(|e| {
-            tracing::warn!(url = %url, "resolve_playback fehlgeschlagen: {e}");
+            tracing::warn!("resolve_playback fehlgeschlagen: {e}");
             e.to_string()
         })?;
 
-    tracing::info!(
+    // Nur Host loggen, nie die volle URL (enthält signierte Token/Query).
+    let host = reqwest::Url::parse(&resolved.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "?".into());
+    tracing::debug!(
         is_hls = resolved.is_hls,
         has_referer = resolved.referer.is_some(),
-        stream = %resolved.url,
+        host = %host,
         "Stream aufgelöst"
     );
 

@@ -42,6 +42,9 @@ pub struct WatchArgs {
     /// Synchronisierte Wiedergabe über Syncplay (steuert mpv). Vorrang vor `--player`.
     #[arg(long)]
     pub syncplay: bool,
+    /// Nur auflösen und die Stream-URL als JSON ausgeben (kein Player). Fürs Debuggen.
+    #[arg(long)]
+    pub print_url: bool,
 }
 
 pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
@@ -70,6 +73,22 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
     let stream = resolve_playable(&client, &args.url, &prefs)
         .await
         .map_err(|e| anyhow::anyhow!("Konnte keinen abspielbaren Stream finden: {e}"))?;
+
+    // Debug: nur die aufgelöste Stream-URL als JSON ausgeben, nicht abspielen.
+    if args.print_url {
+        let referer = stream
+            .referer
+            .as_deref()
+            .map(|r| format!("\"{}\"", r.replace('"', "\\\"")))
+            .unwrap_or_else(|| "null".into());
+        println!(
+            "{{\"url\":\"{}\",\"referer\":{},\"is_hls\":{}}}",
+            stream.url.replace('"', "\\\""),
+            referer,
+            stream.is_hls
+        );
+        return Ok(());
+    }
 
     // AniSkip-Kapitel: optional. Slug/Staffel/Episode aus der URL ableiten, die
     // MAL-ID über Jikan auflösen und die Skip-Zeiten von AniSkip holen. Jeder
