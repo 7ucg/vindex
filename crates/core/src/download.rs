@@ -794,8 +794,29 @@ async fn download_hls_native(
     }
 
     if no_ffmpeg {
-        // Ganz ohne ffmpeg: den zusammengesetzten MPEG-TS-Stream direkt als `.ts`
-        // finalisieren (der Inhalt ist bereits valides TS; mpv/VLC spielen das).
+        report(progress, Progress::Muxing);
+        // Ohne ffmpeg: erst nativ nach MKV remuxen (H.264+AAC). Nur wenn die Datei in
+        // den Speicher passt — sonst, und bei nicht unterstützten Strömen, als roher
+        // `.ts` finalisieren (der zusammengesetzte TS ist bereits abspielbar).
+        let size = tokio::fs::metadata(&part)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        if size <= MAX_REMUX_BYTES {
+            if let Ok(ts) = tokio::fs::read(&part).await {
+                let remuxed =
+                    tokio::task::spawn_blocking(move || crate::remux::remux_ts_to_mkv(&ts))
+                        .await
+                        .unwrap_or_else(|_| Err(Error::extract("remux", "Task abgebrochen")));
+                if let Ok(mkv) = remuxed {
+                    let mkv_path = out_path.with_extension("mkv");
+                    tokio::fs::write(&mkv_path, &mkv).await.map_err(Error::Io)?;
+                    tokio::fs::remove_file(&part).await.ok();
+                    return Ok(true);
+                }
+            }
+        }
+        // Fallback: roher MPEG-TS.
         let ts_path = out_path.with_extension("ts");
         tokio::fs::rename(&part, &ts_path)
             .await
@@ -819,6 +840,10 @@ const MAX_SEGMENT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ENCRYPTED_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 /// Obergrenze über alle Segmente zusammen.
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Obergrenze für den In-Memory-TS→MKV-Remux (`VINDEX_NO_FFMPEG`). Größere Dateien
+/// werden als roher `.ts` finalisiert statt im Speicher remuxt.
+const MAX_REMUX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Holt alle Segmente nacheinander (mit Retry, streamend) und schreibt sie
 /// fortlaufend in *part*. Jedes Segment wird vor dem Abruf validiert (nur

@@ -9,9 +9,6 @@ Nur offene Arbeit. Erledigtes steht im [CHANGELOG.md](CHANGELOG.md), Hintergrund
   Fortschritts-Kanal (`core::download::Progress`/`ProgressSink`, `Backend::download_with_progress`)
   sind da; offen ist nur das Fenster selbst (Event-Loop + Widgets), das wegen der System-
   Bibliotheken (WebKitGTK bzw. GPU) bewusst außerhalb des Workspaces liegt.
-- **Echter TS→MKV-Remuxer ohne ffmpeg** (optional). `VINDEX_NO_FFMPEG` liefert bereits einen
-  rohen `.ts`-Stream ohne ffmpeg; ein eigener Remuxer für `.mkv`-Container wäre die Kür.
-  `SAMPLE-AES` bliebe am ffmpeg-Pfad. Braucht echte TS-Segmente zum Verifizieren.
 
 ## Betrieb
 

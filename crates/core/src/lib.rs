@@ -31,6 +31,7 @@ pub mod model;
 pub mod mpv;
 pub mod naming;
 pub mod ratelimit;
+pub mod remux;
 pub mod site;
 pub mod watchstate;
 

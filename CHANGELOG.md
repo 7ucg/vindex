@@ -15,11 +15,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   gelesen, die erste nicht-vertrauenswürdige IP gewinnt, so lässt sie sich nicht fälschen). Ohne
   Trusted-Proxies bleibt `X-Forwarded-For` unbeachtet. Reine Logik `real_client_ip` getestet.
 - Download: ffmpeg-freier HLS-Pfad (`VINDEX_NO_FFMPEG`). Der native HLS-Download
-  (`VINDEX_NATIVE_HLS`, inkl. AES-128-Entschlüsselung) wird dann als roher MPEG-TS-Stream in eine
-  `.ts`-Datei finalisiert, statt mit ffmpeg zu remuxen — der zusammengesetzte TS ist bereits
-  abspielbar. Einzel-MP4 und SAMPLE-AES bleiben am ffmpeg-Pfad; ist nur der native Pfad nicht
-  anwendbar, bricht der Download ohne ffmpeg-Fallback ab. `final_output_path` wählt die tatsächlich
-  geschriebene Datei (`.ts` statt der ursprünglichen Endung).
+  (`VINDEX_NATIVE_HLS`, inkl. AES-128-Entschlüsselung) wird dann ohne ffmpeg finalisiert:
+  ein **nativer TS→MKV-Remuxer** (`core::remux`) demuxt den MPEG-TS, baut aus H.264+AAC eine
+  echte Matroska-Datei (avcC/ASC, PTS-korrekte SimpleBlocks, Access Units an AUD-Grenzen,
+  B-Frame-Dekodierreihenfolge erhalten) — gegen ein echtes HLS-Segment mit ffmpeg verifiziert
+  (0 Decode-Fehler, 288 Video- + 517 Audio-Frames, korrekte Dauer). Zu große Dateien (>2 GiB,
+  In-Memory-Grenze), andere Codecs oder SAMPLE-AES werden als roher `.ts` finalisiert.
+  `final_output_path` wählt die tatsächlich geschriebene Datei (`.mkv`/`.ts`).
 - Watch: synchronisierte Wiedergabe `--syncplay` (`core::mpv::build_syncplay_args`/
   `play_syncplay`), jetzt sicher umgesetzt. Die tokenisierte Stream-URL geht nicht an den
   Syncplay-Server/-Raum (`--filename-privacy`/`--file-size-privacy = DontSend`), und die mpv-

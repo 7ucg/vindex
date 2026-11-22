@@ -26,8 +26,8 @@ HTTP-API/Daemon und Desktop-Backend.
 - Download-Engine auf ffmpeg-Basis, mit Retry, Reconnect, Abbruch und
   Fortschrittsmeldungen (CLI-Statuszeile, Progress-Kanal für das Desktop-Backend);
   optionaler nativer HLS-Segment-Download (`VINDEX_NATIVE_HLS`) inkl. AES-128-Entschlüsselung.
-  Ganz ohne ffmpeg (`VINDEX_NO_FFMPEG`): der native HLS-Download wird als roher MPEG-TS (`.ts`)
-  finalisiert statt remuxt (Einzel-MP4 und SAMPLE-AES brauchen weiter ffmpeg).
+  Ganz ohne ffmpeg (`VINDEX_NO_FFMPEG`): ein nativer TS→MKV-Remuxer baut aus H.264+AAC eine
+  echte `.mkv` (sehr große Dateien, andere Codecs oder SAMPLE-AES fallen auf rohen `.ts` zurück).
 - Naming-Templates im Jellyfin-Layout, Rate-Limiting pro Hoster, Backoff,
   User-Agent-Rotation, Cloudflare-Erkennung.
 - TLS-Impersonate-Fallback (Anti-Bot Stufe 2) über `wreq` mit Chrome-Fingerprint —
