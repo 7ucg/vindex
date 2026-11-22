@@ -149,6 +149,9 @@ pub fn client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(20))
         .redirect(safe_redirect_policy())
+        // Cookie-Store: einige Portale (filmo.to) binden CSRF-/Session-Cookies, die
+        // zwischen Seiten-GET und Folge-POST mitgehen müssen (per Domain gescopet).
+        .cookie_store(true)
         .dns_resolver(std::sync::Arc::new(GuardedResolver));
     apply_proxy(b)?.build()
 }
@@ -161,6 +164,7 @@ pub fn browser_client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(30))
         .redirect(safe_redirect_policy())
+        .cookie_store(true)
         .dns_resolver(std::sync::Arc::new(GuardedResolver));
     apply_proxy(b)?.build()
 }
@@ -661,4 +665,3 @@ mod tests {
         assert_eq!(next_user_agent(), first);
     }
 }
-

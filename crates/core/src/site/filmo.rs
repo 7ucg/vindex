@@ -223,3 +223,5 @@ mod tests {
         assert_eq!(percent_encode("a/b c"), "a%2Fb%20c");
     }
 }
+
+
