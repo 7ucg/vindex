@@ -51,4 +51,17 @@ mod tests {
     fn vidoza_no_sources() {
         assert!(extract_url_from_html("<html>nope</html>").is_none());
     }
+
+    #[test]
+    fn vidoza_src_ohne_sourcescode_wird_ignoriert() {
+        // Ohne den sourcesCode-Marker zählt ein beliebiges src: nicht (Guard).
+        let html = r#"<script>src: "https://evil/other.mp4"</script>"#;
+        assert!(extract_url_from_html(html).is_none());
+    }
+
+    #[test]
+    fn vidoza_sourcescode_aber_kein_src_ist_none() {
+        let html = r#"<script>sourcesCode: [] // noch kein src</script>"#;
+        assert!(extract_url_from_html(html).is_none());
+    }
 }

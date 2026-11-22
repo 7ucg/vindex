@@ -92,4 +92,29 @@ mod tests {
         );
         assert_eq!(token(html).as_deref(), Some("XYZ123"));
     }
+
+    #[test]
+    fn pass_md5_absolute_url_bleibt() {
+        let html = r#"$.get('https://dood.li/pass_md5/x/y', fn)"#;
+        assert_eq!(
+            pass_md5_url(html).as_deref(),
+            Some("https://dood.li/pass_md5/x/y")
+        );
+    }
+
+    #[test]
+    fn pass_md5_relativ_ohne_fuehrenden_slash_wird_praefixiert() {
+        // Relativer Pfad mit Segment vor pass_md5 (ohne führenden Slash) → Base davor.
+        let html = r#"$.get('dl/pass_md5/x/y', fn)"#;
+        assert_eq!(
+            pass_md5_url(html).as_deref(),
+            Some("https://dood.li/dl/pass_md5/x/y")
+        );
+    }
+
+    #[test]
+    fn pass_md5_und_token_fehlen_ist_none() {
+        assert!(pass_md5_url("<html>kein get</html>").is_none());
+        assert!(token("<html>kein token</html>").is_none());
+    }
 }

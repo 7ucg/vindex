@@ -51,4 +51,27 @@ mod tests {
             Some("https://cdn.vidmoly/hls/master.m3u8")
         );
     }
+
+    #[test]
+    fn vidmoly_findet_m3u8_im_zweiten_script() {
+        // Script-Inhalte werden zusammengefügt; der Treffer darf in einem späteren Block stehen.
+        let html =
+            r#"<script>var a=1;</script><script>file: 'https://cdn/v/master.m3u8?x=1'</script>"#;
+        assert_eq!(
+            extract_url_from_html(html).as_deref(),
+            Some("https://cdn/v/master.m3u8?x=1")
+        );
+    }
+
+    #[test]
+    fn vidmoly_nicht_m3u8_file_wird_ignoriert() {
+        // Nur .m3u8 zählt; ein mp4-file: ist kein Treffer.
+        let html = r#"<script>file:"https://cdn/v.mp4"</script>"#;
+        assert!(extract_url_from_html(html).is_none());
+    }
+
+    #[test]
+    fn vidmoly_ohne_script_ist_none() {
+        assert!(extract_url_from_html("<html>nichts</html>").is_none());
+    }
 }
