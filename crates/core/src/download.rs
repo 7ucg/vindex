@@ -486,7 +486,6 @@ async fn load_aes128_ctx(
     key: &HlsKey,
     text: &str,
     media_url: &str,
-    referer: Option<&str>,
 ) -> Result<Aes128Ctx> {
     let uri = key
         .uri
@@ -497,19 +496,17 @@ async fn load_aes128_ctx(
     if !is_http_url(&key_url) || crate::http::host_is_forbidden_ip_literal(&key_url) {
         return Err(Error::extract("HLS", "Schlüssel-URL nicht erlaubt"));
     }
-    // Schlüssel nur vom selben Origin wie die Playlist laden — sonst könnte ein
-    // manipuliertes EXT-X-KEY den Request (samt Referer) auf einen fremden Host lenken.
+    // Schlüssel nur vom selben Origin wie die Playlist laden.
     if !same_origin(&key_url, media_url) {
         return Err(Error::extract("HLS", "Schlüssel-URL auf fremdem Origin"));
     }
 
-    // Schlüsselantwort streamen und hart deckeln — ein Schlüssel ist 16 Byte.
-    let resp = crate::http::get_retry(client, &key_url, referer)
+    // Schlüssel ohne Referer laden (kein Header-Leak, falls doch umgeleitet wird)
+    // und jede Umleitung verwerfen — ein Schlüssel wird nicht per Redirect geholt.
+    let resp = crate::http::get_retry(client, &key_url, None)
         .await?
         .error_for_status()?;
-    // Nach etwaigen Redirects erneut prüfen: landet der Abruf auf einem fremden
-    // Origin, wird er verworfen (die Host-Pin darf nicht per Umleitung fallen).
-    if !same_origin(resp.url().as_str(), media_url) {
+    if resp.url().as_str() != key_url {
         return Err(Error::extract("HLS", "Schlüssel-Abruf wurde umgeleitet"));
     }
     let mut stream = resp.bytes_stream();
@@ -566,9 +563,7 @@ async fn download_hls_native(
     let cipher = match hls_encryption(&text) {
         HlsEncryption::None => None,
         HlsEncryption::Unsupported => return Ok(false),
-        HlsEncryption::Aes128(key) => {
-            Some(load_aes128_ctx(client, &key, &text, media_url, referer).await?)
-        }
+        HlsEncryption::Aes128(key) => Some(load_aes128_ctx(client, &key, &text, media_url).await?),
     };
     let segments = media_segment_urls(&text, media_url);
     if segments.is_empty() {
