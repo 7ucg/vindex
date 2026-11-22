@@ -25,6 +25,7 @@ pub mod error;
 pub mod extract;
 pub mod hoster;
 pub mod http;
+pub mod library;
 pub mod model;
 pub mod mpv;
 pub mod naming;

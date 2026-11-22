@@ -225,6 +225,9 @@ pub struct AppState {
     /// Anlegen/Löschen aus, die Auth-Middleware liest stets den aktuellen.
     auth: Arc<RwLock<auth::AuthConfig>>,
     rate: Arc<RateLimiter>,
+    /// Zielverzeichnis, einmal beim Start aus den Settings gelesen (kein
+    /// `Settings::load()`/`.env`-Neuladen pro Request).
+    download_path: Arc<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -236,6 +239,7 @@ impl AppState {
             next_id: Arc::new(AtomicU64::new(1)),
             auth: Arc::new(RwLock::new(auth::AuthConfig::from_settings(&settings))),
             rate: Arc::new(RateLimiter::new(rate_limit_from_env(), RATE_LIMIT_WINDOW)),
+            download_path: Arc::new(settings.download_path.clone()),
         }
     }
 
@@ -663,46 +667,6 @@ async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "items": items }))
 }
 
-/// Höchstzahl Bibliothekseinträge in einer Antwort.
-const MAX_LIBRARY_ENTRIES: usize = 10_000;
-
-/// Medien-Dateiendungen, die als Bibliothekseintrag zählen.
-const LIBRARY_EXTENSIONS: &[&str] = &["mkv", "mp4", "ts", "webm", "mov"];
-
-/// Scannt ein Verzeichnis (nicht rekursiv) nach Mediendateien und gibt Name +
-/// Größe zurück, alphabetisch sortiert. Rein und testbar. Gibt nur den Dateinamen
-/// zurück (keine Pfade), überspringt Unterverzeichnisse und Nicht-Medien.
-fn list_library(dir: &std::path::Path) -> Vec<LibraryEntry> {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<LibraryEntry> = Vec::new();
-    for entry in read.flatten() {
-        if out.len() >= MAX_LIBRARY_ENTRIES {
-            break;
-        }
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let is_media = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .is_some_and(|e| LIBRARY_EXTENSIONS.contains(&e.as_str()));
-        if !is_media {
-            continue;
-        }
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        out.push(LibraryEntry { name, size_bytes });
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
-}
-
 /// Listet die fertigen Downloads im konfigurierten Zielverzeichnis.
 #[utoipa::path(
     get,
@@ -715,9 +679,19 @@ fn list_library(dir: &std::path::Path) -> Vec<LibraryEntry> {
     ),
     security(("api_key" = []))
 )]
-async fn library() -> Json<LibraryResponse> {
-    let settings = core::config::Settings::load();
-    let items = list_library(&settings.download_path);
+async fn library(State(state): State<AppState>) -> Json<LibraryResponse> {
+    let dir = state.download_path.clone();
+    // Datei-I/O vom async-Reactor fernhalten.
+    let entries = tokio::task::spawn_blocking(move || core::library::list(&dir))
+        .await
+        .unwrap_or_default();
+    let items = entries
+        .into_iter()
+        .map(|e| LibraryEntry {
+            name: e.name,
+            size_bytes: e.size_bytes,
+        })
+        .collect();
     Json(LibraryResponse { items })
 }
 
@@ -1210,6 +1184,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             auth: Arc::new(RwLock::new(auth::AuthConfig::with_keys(keys))),
             rate: Arc::new(RateLimiter::new(max, RATE_LIMIT_WINDOW)),
+            download_path: Arc::new(std::path::PathBuf::from("/tmp")),
         }
     }
 
@@ -1221,6 +1196,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             auth: Arc::new(RwLock::new(auth::AuthConfig::with_scoped(keys))),
             rate: Arc::new(RateLimiter::new(DEFAULT_RATE_LIMIT, RATE_LIMIT_WINDOW)),
+            download_path: Arc::new(std::path::PathBuf::from("/tmp")),
         }
     }
 
@@ -1712,31 +1688,5 @@ mod tests {
 
         std::env::remove_var("VINDEX_API_KEYS_FILE");
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn library_listet_nur_medien_sortiert() {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("vindex-lib-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("b.mkv"), b"xx").unwrap();
-        std::fs::write(dir.join("a.mp4"), b"yyyy").unwrap();
-        std::fs::write(dir.join("notiz.txt"), b"kein medium").unwrap();
-        std::fs::create_dir_all(dir.join("unterordner")).unwrap();
-
-        let items = list_library(&dir);
-        // Nur Medien, alphabetisch, Unterordner und .txt ausgelassen.
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].name, "a.mp4");
-        assert_eq!(items[0].size_bytes, 4);
-        assert_eq!(items[1].name, "b.mkv");
-        assert_eq!(items[1].size_bytes, 2);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn library_fehlendes_verzeichnis_ist_leer() {
-        assert!(list_library(std::path::Path::new("/nicht/vorhanden/xyz")).is_empty());
     }
 }

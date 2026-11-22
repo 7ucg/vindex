@@ -211,7 +211,9 @@ async fn related_ids(client: &reqwest::Client, mal_id: u64) -> Result<Vec<u64>> 
     if !resp.status().is_success() {
         return Ok(vec![]);
     }
-    Ok(parse_related_ids(&capped_text(resp, MAX_RESPONSE_BYTES).await?))
+    Ok(parse_related_ids(
+        &capped_text(resp, MAX_RESPONSE_BYTES).await?,
+    ))
 }
 
 /// Sammelt (begrenzt) die komplette Staffel-Kette ab `start` ein und gibt sie

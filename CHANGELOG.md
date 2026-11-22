@@ -9,10 +9,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
-- API: `GET /api/library` listet die fertigen Downloads im konfigurierten Zielverzeichnis
-  (nur Dateiname + Größe, keine Pfade; nicht rekursiv, nur Medien-Endungen, auf 10 000 Einträge
-  gedeckelt). Braucht wie die anderen GET-Routen den `read`-Scope. Scan-Logik als reine,
-  testbare Funktion.
+- Bibliothek: `vindex library` (CLI) und `GET /api/library` listen die fertigen Downloads im
+  konfigurierten Zielverzeichnis (nur Dateiname + Größe, keine Pfade). Gemeinsame Scan-Logik in
+  `core::library::list`: nicht rekursiv, nur Medien-Endungen, **folgt keinen Symlinks** (nur
+  echte Dateien direkt im Verzeichnis), auf 10 000 Einträge und 200 000 betrachtete Einträge
+  gedeckelt. Die API-Route braucht den `read`-Scope und scannt über `spawn_blocking`; das
+  Zielverzeichnis wird einmal beim Start gelesen (kein `.env`-Neuladen pro Request).
 - Watch: Anime4K-Upscaling `--anime4k <modus>` (`core::mpv::Anime4kMode`/`anime4k_glsl_value`).
   Die offiziellen GLSL-Shader-Ketten (A, B, C, A+A, B+B, C+A) werden als `--glsl-shaders` an
   mpv (bzw. `--mpv-glsl-shaders` an IINA) übergeben; die Shader liegen im Verzeichnis
