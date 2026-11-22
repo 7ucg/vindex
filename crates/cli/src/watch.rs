@@ -132,7 +132,28 @@ fn resolve_anime4k(args: &WatchArgs) -> anyhow::Result<Option<String>> {
                 "Anime4K braucht ein Shader-Verzeichnis: --anime4k-dir <pfad> oder VINDEX_ANIME4K_DIR"
             )
         })?;
-    Ok(Some(anime4k_glsl_value(mode, std::path::Path::new(&dir))))
+    // Pfad (auch aus dem Env) auflösen und prüfen, bevor er an den Shader-Loader
+    // geht: muss ein existierendes Verzeichnis sein, und jede erwartete Shader-Datei
+    // muss wirklich darin liegen — sonst zeigt mpv auf fremde GLSL-Dateien.
+    let canonical = std::path::Path::new(&dir)
+        .canonicalize()
+        .map_err(|_| anyhow::anyhow!("Anime4K-Shader-Verzeichnis nicht gefunden: {dir}"))?;
+    if !canonical.is_dir() {
+        return Err(anyhow::anyhow!("Anime4K-Pfad ist kein Verzeichnis: {dir}"));
+    }
+    for shader in mode.shaders() {
+        if !canonical.join(shader).is_file() {
+            return Err(anyhow::anyhow!(
+                "Anime4K-Shader fehlt: {shader} in {}",
+                canonical.display()
+            ));
+        }
+    }
+    anime4k_glsl_value(mode, &canonical)
+        .ok_or_else(|| {
+            anyhow::anyhow!("Anime4K-Shader-Pfad enthält ein unzulässiges Zeichen (: oder ;)")
+        })
+        .map(Some)
 }
 
 /// Löst die AniSkip-Kapitel für eine Episoden-URL auf: Slug/Staffel/Episode aus

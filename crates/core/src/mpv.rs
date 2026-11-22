@@ -214,12 +214,21 @@ impl Anime4kMode {
 
 /// Baut den Wert für mpvs `--glsl-shaders` aus Modus + Shader-Verzeichnis: die
 /// Shader-Pfade, getrennt durch `:` (mpv-Listensyntax). Ohne Flag-Präfix.
-pub fn anime4k_glsl_value(mode: Anime4kMode, shader_dir: &std::path::Path) -> String {
-    mode.shaders()
-        .iter()
-        .map(|s| shader_dir.join(s).to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(":")
+///
+/// `None`, wenn ein Pfad selbst ein Listen-Trennzeichen (`:`/`;`) enthält — sonst
+/// könnte ein so benanntes Verzeichnis mpvs Shader-Liste um Fremd-Einträge erweitern
+/// (Separator-Injection). Auf Windows (Laufwerksbuchstabe `C:`) greift das; Anime4K
+/// ist hier auf Unix/macOS ausgelegt.
+pub fn anime4k_glsl_value(mode: Anime4kMode, shader_dir: &std::path::Path) -> Option<String> {
+    let mut parts = Vec::with_capacity(mode.shaders().len());
+    for s in mode.shaders() {
+        let p = shader_dir.join(s).to_string_lossy().into_owned();
+        if p.contains(':') || p.contains(';') {
+            return None;
+        }
+        parts.push(p);
+    }
+    Some(parts.join(":"))
 }
 
 /// Baut die mpv-Options-Tokens (Härtung, Referer, Titel, AniSkip-Kapitel, optional
@@ -557,17 +566,23 @@ mod tests {
         assert_eq!(Anime4kMode::from_name("bb"), Some(Anime4kMode::Bb));
         assert_eq!(Anime4kMode::from_name("x"), None);
 
-        let value = anime4k_glsl_value(Anime4kMode::A, Path::new("/shaders"));
+        let value = anime4k_glsl_value(Anime4kMode::A, Path::new("/shaders")).unwrap();
         // Pfade mit `:` getrennt, jeder Shader unter dem Verzeichnis.
         assert!(value.starts_with("/shaders/Anime4K_Clamp_Highlights.glsl:"));
         assert!(value.contains("/shaders/Anime4K_Upscale_CNN_x2_M.glsl"));
         assert_eq!(value.split(':').count(), Anime4kMode::A.shaders().len());
+
+        // Separator-Injection: ein `:` im Verzeichnis ergibt None.
+        assert_eq!(
+            anime4k_glsl_value(Anime4kMode::A, Path::new("/ev:il")),
+            None
+        );
     }
 
     #[test]
     fn anime4k_landet_als_glsl_shaders_option() {
         use std::path::Path;
-        let value = anime4k_glsl_value(Anime4kMode::C, Path::new("/s"));
+        let value = anime4k_glsl_value(Anime4kMode::C, Path::new("/s")).unwrap();
         let args = build_player_args(
             Player::Mpv,
             "https://x/v.m3u8",
