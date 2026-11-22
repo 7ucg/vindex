@@ -383,6 +383,11 @@ pub fn build_syncplay_args(
         "--file-size-privacy".to_string(),
         "DontSend".to_string(),
         "--".to_string(),
+        // Belt-and-braces: Härtung auch als Flag, falls Syncplay sie durchreicht.
+        // KEIN `--no-config` hier, sonst würde mpv die MPV_HOME-mpv.conf ignorieren;
+        // die „keine Nutzer-Config"-Härtung übernimmt MPV_HOME (siehe play_syncplay).
+        "--ytdl=no".to_string(),
+        "--load-scripts=no".to_string(),
     ];
     args.extend(mpv_dynamic_tokens(referer, title, aniskip, anime4k));
     Ok(args)
@@ -439,15 +444,23 @@ pub async fn play_syncplay(args: &[String]) -> Result<()> {
         std::process::id(),
         epoch_nanos()
     ));
-    tokio::fs::create_dir_all(&dir).await.map_err(Error::Io)?;
+    // Fail-closed & TOCTOU-sicher: das Verzeichnis **exklusiv** mit 0700 anlegen —
+    // existiert der Pfad schon (z. B. ein untergeschobener Symlink), ist das ein harter
+    // Fehler, kein Weiterlaufen. Jeder Fehler bricht die Wiedergabe ab (sonst liefe mpv
+    // womöglich ungehärtet).
+    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-    tokio::fs::write(dir.join("mpv.conf"), SYNCPLAY_MPV_CONF)
-        .await
-        .map_err(Error::Io)?;
+    builder
+        .create(&dir)
+        .map_err(|e| Error::Mpv(format!("MPV_HOME-Verzeichnis nicht anlegbar: {e}")))?;
+    std::fs::write(dir.join("mpv.conf"), SYNCPLAY_MPV_CONF).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&dir);
+        Error::Mpv(format!("MPV_HOME-Config nicht schreibbar: {e}"))
+    })?;
 
     let mut cmd = Command::new("syncplay");
     cmd.kill_on_drop(true).env("MPV_HOME", &dir).args(args);
@@ -750,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn syncplay_args_privacy_und_keine_haertungsflags() {
+    fn syncplay_args_privacy_und_haertung() {
         let url = "https://cdn.example/s.m3u8";
         let args = build_syncplay_args(url, Some("https://ref"), Some("T"), None, None).unwrap();
         // URL positional, Player-Pfad gesetzt.
@@ -764,15 +777,16 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|w| w == ["--file-size-privacy", "DontSend"]));
-        // Nach `--` nur dynamische Optionen, KEINE Härtungsflags (die kommen über MPV_HOME).
+        // Nach `--`: Härtung als Flag (belt-and-braces), aber KEIN --no-config (das würde
+        // die MPV_HOME-Config ausschalten), plus die dynamischen Optionen.
         let sep = args.iter().position(|a| a == "--").unwrap();
         let after = &args[sep + 1..];
+        assert!(after.iter().any(|a| a == "--ytdl=no"));
+        assert!(after.iter().any(|a| a == "--load-scripts=no"));
+        assert!(!after.iter().any(|a| a == "--no-config"));
         assert!(after
             .iter()
             .any(|a| a == "--http-header-fields-append=Referer: https://ref"));
-        assert!(!after.iter().any(|a| a == "--no-config"));
-        assert!(!after.iter().any(|a| a == "--ytdl=no"));
-        assert!(!after.iter().any(|a| a == "--load-scripts=no"));
     }
 
     #[test]
