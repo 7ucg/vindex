@@ -1,4 +1,14 @@
-import { createResource, createSignal, createMemo, For, Show, type JSX } from "solid-js";
+import {
+  createResource,
+  createSignal,
+  createMemo,
+  createEffect,
+  onMount,
+  onCleanup,
+  For,
+  Show,
+  type JSX,
+} from "solid-js";
 import { catalog, seasons, episodes, startDownload, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
@@ -19,8 +29,8 @@ const LABEL: Record<Portal, string> = {
   filmo: "filmo.to",
 };
 
-// Großer Kataloge bändigen: erst mal eine Obergrenze rendern (Virtual-List folgt).
-const RENDER_CAP = 300;
+// Große Kataloge: progressiv rendern (Batch beim Scrollen), nicht alle 2500 auf einmal.
+const BATCH = 60;
 
 export function PortalView(props: { portal: Portal }): JSX.Element {
   const [items] = createResource(() => props.portal, catalog);
@@ -30,6 +40,27 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [selectMode, setSelectMode] = createSignal(false);
   const [picked, setPicked] = createSignal<Map<string, string>>(new Map());
   const [bulkBusy, setBulkBusy] = createSignal(false);
+  const [shown, setShown] = createSignal(BATCH);
+  let sentinel: HTMLDivElement | undefined;
+
+  // Beim Wechsel von Portal, Filter oder Sortierung wieder von vorn.
+  createEffect(() => {
+    filter();
+    sort();
+    void props.portal;
+    setShown(BATCH);
+  });
+
+  onMount(() => {
+    const io = new IntersectionObserver(
+      (e) => {
+        if (e[0]?.isIntersecting) setShown((n) => Math.min(n + BATCH, visible().length));
+      },
+      { rootMargin: "600px" },
+    );
+    if (sentinel) io.observe(sentinel);
+    onCleanup(() => io.disconnect());
+  });
 
   const isMovie = () => props.portal === "filmo";
 
@@ -150,7 +181,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
 
       <Show when={visible().length > 0}>
         <div class="grid">
-          <For each={visible().slice(0, RENDER_CAP)}>
+          <For each={visible().slice(0, shown())}>
             {(h) => (
               <div
                 class="card"
@@ -175,10 +206,10 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
             )}
           </For>
         </div>
-        <Show when={visible().length > RENDER_CAP}>
+        <div ref={sentinel} style={{ height: "1px" }} />
+        <Show when={shown() < visible().length}>
           <p class="note">
-            {RENDER_CAP} von {visible().length} gezeigt — tippe zum Filtern. Endloses Scrollen
-            mit Virtual-List folgt.
+            {shown()} von {visible().length} gezeigt — scrolle für mehr.
           </p>
         </Show>
       </Show>
