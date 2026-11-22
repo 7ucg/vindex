@@ -75,10 +75,13 @@ fn chapter_block(start: f64, end: f64, title: &str) -> String {
     format!("[CHAPTER]\nTIMEBASE=1/1000\nSTART={start_ms}\nEND={end_ms}\ntitle={title}\n")
 }
 
-/// Entfernt CR/LF, damit ein Wert in `--http-header-fields` keine zusätzlichen
-/// Header-Zeilen einschleusen kann (analog zum ffmpeg-Pfad).
+/// Entfernt CR/LF sowie das Komma (mpvs `--http-header-fields` trennt die Liste an
+/// Kommata) und Anführungszeichen, damit ein Wert keine zusätzlichen Header
+/// einschleusen kann.
 fn sanitize(v: &str) -> String {
-    v.chars().filter(|c| *c != '\r' && *c != '\n').collect()
+    v.chars()
+        .filter(|c| !matches!(c, '\r' | '\n' | ',' | '"'))
+        .collect()
 }
 
 /// Baut die mpv-Argumentliste. Reine Funktion ohne Seiteneffekt — testbar ohne
@@ -101,8 +104,18 @@ pub fn build_mpv_args(
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
+    // Härtung: keine Nutzer-Config, kein ytdl-Hook, keine Lua-Scripts — so kann eine
+    // (aus gescraptem HTML stammende) URL weder Scripts noch den ytdl-Pfad erreichen.
+    args.push("--no-config".to_string());
+    args.push("--ytdl=no".to_string());
+    args.push("--load-scripts=no".to_string());
+
     if let Some(r) = referer {
-        args.push(format!("--http-header-fields=Referer: {}", sanitize(r)));
+        // `-append`, damit kein Komma die Header-Liste aufsplittet.
+        args.push(format!(
+            "--http-header-fields-append=Referer: {}",
+            sanitize(r)
+        ));
     }
     if let Some(t) = title {
         args.push(format!("--force-media-title={}", sanitize(t)));
@@ -158,8 +171,9 @@ mod tests {
             None,
         );
         // Referer-Header exakt wie erwartet.
-        assert!(args
-            .contains(&"--http-header-fields=Referer: https://hoster.example/embed".to_string()));
+        assert!(args.contains(
+            &"--http-header-fields-append=Referer: https://hoster.example/embed".to_string()
+        ));
         // Medientitel gesetzt.
         assert!(args.contains(&"--force-media-title=Dark S01E03".to_string()));
         // URL ist das letzte Argument und ein eigenes Argument.
@@ -171,7 +185,9 @@ mod tests {
     #[test]
     fn ohne_referer_kein_header_arg() {
         let args = build_mpv_args("https://cdn.example/v.mp4", None, Some("Titel"), None);
-        assert!(!args.iter().any(|a| a.starts_with("--http-header-fields=")));
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("--http-header-fields-append=")));
         assert!(args.contains(&"--force-media-title=Titel".to_string()));
         assert_eq!(args.last().unwrap(), "https://cdn.example/v.mp4");
     }
@@ -180,16 +196,35 @@ mod tests {
     fn ohne_titel_kein_titel_arg() {
         let args = build_mpv_args("https://cdn.example/v.mp4", Some("https://ref"), None, None);
         assert!(!args.iter().any(|a| a.starts_with("--force-media-title=")));
-        assert!(args.contains(&"--http-header-fields=Referer: https://ref".to_string()));
+        assert!(args.contains(&"--http-header-fields-append=Referer: https://ref".to_string()));
     }
 
     #[test]
     fn ohne_referer_und_titel_nur_trenner_und_url() {
         let args = build_mpv_args("https://cdn.example/v.mp4", None, None, None);
+        // Härtungsflags, dann Trenner und URL als letztes Argument.
         assert_eq!(
             args,
-            vec!["--".to_string(), "https://cdn.example/v.mp4".to_string()]
+            vec![
+                "--no-config".to_string(),
+                "--ytdl=no".to_string(),
+                "--load-scripts=no".to_string(),
+                "--".to_string(),
+                "https://cdn.example/v.mp4".to_string()
+            ]
         );
+    }
+
+    #[test]
+    fn referer_mit_komma_wird_entschaerft() {
+        // Ein Komma im Referer darf die Header-Liste nicht aufsplitten.
+        let args = build_mpv_args("https://x/v", Some("https://r/a,b"), None, None);
+        let header = args
+            .iter()
+            .find(|a| a.starts_with("--http-header-fields-append="))
+            .unwrap();
+        assert!(!header.contains(','));
+        assert_eq!(header, "--http-header-fields-append=Referer: https://r/ab");
     }
 
     #[test]
@@ -270,11 +305,14 @@ mod tests {
         );
         let header = args
             .iter()
-            .find(|a| a.starts_with("--http-header-fields="))
+            .find(|a| a.starts_with("--http-header-fields-append="))
             .unwrap();
         assert!(!header.contains('\r'));
         assert!(!header.contains('\n'));
-        assert_eq!(header, "--http-header-fields=Referer: https://refX-Evil: 1");
+        assert_eq!(
+            header,
+            "--http-header-fields-append=Referer: https://refX-Evil: 1"
+        );
     }
 
     #[test]
