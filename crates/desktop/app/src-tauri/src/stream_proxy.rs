@@ -11,8 +11,11 @@
 //! der Bind ist localhost-only, jede Anfrage braucht das (CSPRNG-)Token, und der
 //! `Host`-Header muss auf localhost zeigen.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
@@ -39,16 +42,23 @@ const DESKTOP_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
 
 const MAX_REDIRECTS: u8 = 6;
 
-/// Griff auf den laufenden Proxy: nur Basis-URL und Token, um Player-URLs zu bauen.
+/// Freigegebene lokale Dateien (vom Backend vorab validiert) — nur per opaker ID
+/// erreichbar, nie per Pfad in der URL (kein Path-Traversal übers Frontend).
+type LocalStore = Arc<Mutex<HashMap<u64, PathBuf>>>;
+
+/// Griff auf den laufenden Proxy: Basis-URL, Token und die Freigabe lokaler Dateien.
 pub struct Proxy {
     base: String,
     token: String,
+    locals: LocalStore,
+    next_local: AtomicU64,
 }
 
 struct ProxyState {
     token: String,
     client: reqwest::Client,
     base: String,
+    locals: LocalStore,
 }
 
 impl Proxy {
@@ -61,6 +71,14 @@ impl Proxy {
     /// Das Frontend hängt die base64url-kodierte Upstream-URL an (für Bild-Lazy-Load).
     pub fn image_prefix(&self) -> String {
         format!("{}/s?t={}&u=", self.base, self.token)
+    }
+
+    /// Gibt eine (bereits validierte) lokale Mediendatei frei und liefert die
+    /// Proxy-URL, über die der In-Window-Player sie per HTTP+Range abspielt.
+    pub fn local_url(&self, path: PathBuf) -> String {
+        let id = self.next_local.fetch_add(1, Ordering::Relaxed) + 1;
+        self.locals.lock().unwrap().insert(id, path);
+        format!("{}/local?t={}&id={}", self.base, self.token, id)
     }
 }
 
@@ -81,10 +99,12 @@ pub async fn start() -> std::io::Result<Arc<Proxy>> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
 
+    let locals: LocalStore = Arc::new(Mutex::new(HashMap::new()));
     let state = Arc::new(ProxyState {
         token: token.clone(),
         client,
         base: base.clone(),
+        locals: locals.clone(),
     });
     // Der WebView holt die Streams cross-origin (tauri://localhost → 127.0.0.1).
     // Ohne CORS blockt der Browser die Antwort (hls.js: manifestLoadError). Der
@@ -96,6 +116,7 @@ pub async fn start() -> std::io::Result<Arc<Proxy>> {
         .expose_headers(tower_http::cors::Any);
     let router = Router::new()
         .route("/s", get(serve))
+        .route("/local", get(serve_local))
         .with_state(state)
         .layer(cors);
 
@@ -103,7 +124,107 @@ pub async fn start() -> std::io::Result<Arc<Proxy>> {
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok(Arc::new(Proxy { base, token }))
+    Ok(Arc::new(Proxy {
+        base,
+        token,
+        locals,
+        next_local: AtomicU64::new(0),
+    }))
+}
+
+#[derive(Deserialize)]
+struct LocalQ {
+    t: String,
+    id: u64,
+}
+
+/// Liefert eine freigegebene lokale Mediendatei per HTTP mit Range-Unterstützung
+/// (fürs Spulen). Nur per Token + vorab registrierte ID — kein Pfad aus der URL.
+async fn serve_local(
+    State(st): State<Arc<ProxyState>>,
+    headers: HeaderMap,
+    Query(q): Query<LocalQ>,
+) -> Response {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    if !host_is_local(&headers) || !ct_eq(q.t.as_bytes(), st.token.as_bytes()) {
+        return (StatusCode::FORBIDDEN, "bad request").into_response();
+    }
+    let Some(path) = st.locals.lock().unwrap().get(&q.id).cloned() else {
+        return (StatusCode::NOT_FOUND, "unbekannte id").into_response();
+    };
+
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return (StatusCode::NOT_FOUND, "nicht lesbar").into_response(),
+    };
+    let len = match file.metadata().await {
+        Ok(m) => m.len(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "stat").into_response(),
+    };
+    let mime = mime_for(&path);
+
+    // Range parsen (bytes=start-[end]); sonst die ganze Datei.
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| parse_range(s, len));
+
+    let (start, end) = range.unwrap_or((0, len.saturating_sub(1)));
+    if len == 0 || start > end || end >= len {
+        return (StatusCode::RANGE_NOT_SATISFIABLE, "range").into_response();
+    }
+    if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "seek").into_response();
+    }
+    let take = file.take(end - start + 1);
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(take));
+
+    let partial = range.is_some();
+    let mut builder = Response::builder()
+        .status(if partial {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        })
+        .header(CONTENT_TYPE, mime)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CONTENT_LENGTH, (end - start + 1).to_string());
+    if partial {
+        builder = builder.header(CONTENT_RANGE, format!("bytes {start}-{end}/{len}"));
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "body").into_response())
+}
+
+/// `bytes=start-end` (end optional) → (start, end) inkl.; `None` bei Unfug.
+fn parse_range(h: &str, len: u64) -> Option<(u64, u64)> {
+    let spec = h.strip_prefix("bytes=")?;
+    let (a, b) = spec.split_once('-')?;
+    let start: u64 = a.trim().parse().ok()?;
+    let end: u64 = if b.trim().is_empty() {
+        len.saturating_sub(1)
+    } else {
+        b.trim().parse().ok()?
+    };
+    Some((start, end.min(len.saturating_sub(1))))
+}
+
+fn mime_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mkv" => "video/x-matroska",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "ts" => "video/mp2t",
+        _ => "application/octet-stream",
+    }
 }
 
 #[derive(Deserialize)]

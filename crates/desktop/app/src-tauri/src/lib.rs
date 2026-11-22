@@ -376,6 +376,14 @@ fn open_library_item(
         .map_err(|e| e.to_string())
 }
 
+/// Proxy-URL, über die der In-Window-Player eine lokale Datei per HTTP+Range
+/// spielt (nach Validierung). GStreamer im WebView spielt so MKV/TS.
+#[tauri::command]
+fn local_media_url(name: String, state: State<'_, AppState>) -> Result<String, String> {
+    let canon = library_path(&name, &state)?;
+    Ok(state.proxy.local_url(canon))
+}
+
 /// Zeigt eine Bibliotheksdatei im Dateimanager (vom Backend, nach Validierung).
 #[tauri::command]
 fn reveal_library_item(
@@ -465,6 +473,7 @@ pub fn run() {
             library,
             delete_library_item,
             open_library_item,
+            local_media_url,
             reveal_library_item,
             app_settings
         ])

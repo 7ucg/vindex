@@ -3,9 +3,11 @@ import {
   library,
   deleteLibraryItem,
   openLibraryItem,
+  localMediaUrl,
   revealLibraryItem,
   type LibraryEntry,
 } from "../lib/api";
+import { openPlayer } from "../lib/store";
 
 function size(bytes: number): string {
   const m = bytes / (1024 * 1024);
@@ -20,9 +22,17 @@ export function Library(): JSX.Element {
   const [entries, { refetch }] = createResource(library);
   const [busy, setBusy] = createSignal<string | null>(null);
 
-  // Lokale Dateien (MKV/TS) spielt der System-Player zuverlässig — das WebView
-  // kommt mit dem MKV-Container nicht klar. In-Window-Offline folgt mit libmpv.
-  const play = (e: LibraryEntry) => {
+  // Im Fenster abspielen: die Datei läuft über den Proxy (HTTP+Range) ins
+  // <video> (GStreamer demuxt MKV/TS). „Extern" öffnet mpv bzw. den System-Player.
+  const play = async (e: LibraryEntry) => {
+    try {
+      const url = await localMediaUrl(e.name);
+      openPlayer({ title: e.name, url, isHls: false });
+    } catch {
+      void openLibraryItem(e.name).catch(() => {});
+    }
+  };
+  const playExternal = (e: LibraryEntry) => {
     void openLibraryItem(e.name).catch(() => {});
   };
 
@@ -79,8 +89,11 @@ export function Library(): JSX.Element {
                   </div>
                 </div>
                 <div class="act">
-                  <button class="chip" onClick={() => play(e)}>
+                  <button class="chip" onClick={() => void play(e)}>
                     Abspielen
+                  </button>
+                  <button class="chip" onClick={() => playExternal(e)}>
+                    Extern
                   </button>
                   <button class="chip" onClick={() => void revealLibraryItem(e.name).catch(() => {})}>
                     Ordner
@@ -96,8 +109,9 @@ export function Library(): JSX.Element {
       </Show>
 
       <p class="note">
-        „Abspielen" nutzt mpv (spielt MKV/TS zuverlässig); ohne mpv den System-Player. Eingebettete
-        In-Window-Wiedergabe folgt mit dem libmpv-Pfad. Löschen entfernt die Datei vom Datenträger.
+        „Abspielen" läuft im Fenster (über den lokalen Proxy). Spielt das WebView einen Container
+        nicht ab, nutze „Extern" (mpv, sonst System-Player). Löschen entfernt die Datei vom
+        Datenträger.
       </p>
     </div>
   );

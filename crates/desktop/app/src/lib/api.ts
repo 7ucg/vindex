@@ -136,6 +136,10 @@ export function openLibraryItem(name: string): Promise<void> {
   return invoke("open_library_item", { name });
 }
 
+export function localMediaUrl(name: string): Promise<string> {
+  return invoke<string>("local_media_url", { name });
+}
+
 export function revealLibraryItem(name: string): Promise<void> {
   return invoke("reveal_library_item", { name });
 }

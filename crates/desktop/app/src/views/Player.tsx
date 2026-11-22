@@ -181,6 +181,12 @@ export function Player(props: { playback: Playback }): JSX.Element {
 
     el.addEventListener("playing", () => setLoading(false));
     el.addEventListener("waiting", () => setLoading(true));
+    el.addEventListener("error", () => {
+      if (!props.playback.isHls) {
+        setLoading(false);
+        setErr("Diese Datei spielt das Fenster nicht ab — nutze Extern (mpv / System-Player).");
+      }
+    });
     el.addEventListener("ended", onEnded);
     el.addEventListener("timeupdate", () => {
       const t = el.currentTime;
