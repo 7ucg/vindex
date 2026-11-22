@@ -50,8 +50,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 - Quell-URL-Validierung gegen eine Host-Allowlist (nur die unterstützten Portale, nur
   `https`) vor jedem serverseitigen Abruf — am API-Eingang (`400` bei Verstoß) und in
-  der Download-Engine. Schützt den Daemon vor SSRF. Noch offen: Revalidierung einzelner
-  Redirect-Hops; der Daemon bindet per Default an localhost und hat noch keine Auth.
+  der Download-Engine. Schützt den Daemon vor SSRF.
+- Portal-Routing (`base_for_url`, `is_filmo`) entscheidet über den geparsten Host statt
+  über Substring-Suche im Rohstring, damit ein fremder Portalname in Query/Pfad die
+  Basis-URL nicht umlenken kann.
+- Die Download-Engine übergibt ffmpeg nur `http`/`https`-Eingaben und setzt eine
+  Protokoll-Allowlist, damit ein manipulierter Hoster ffmpeg nicht auf `file:` o. Ä.
+  lenkt. Die HLS-Playlist wird über den konfigurierten Client (mit Timeout) und mit
+  Größenlimit geladen.
+- Noch offen: Revalidierung einzelner Redirect-Hops; der Daemon bindet per Default an
+  localhost und hat noch keine Auth.
 
 [Unreleased]: https://github.com/baron/vindex/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/baron/vindex/releases/tag/v0.1.0

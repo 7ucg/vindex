@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -14,6 +15,26 @@ use crate::extract::parse_hls_master;
 use crate::hoster::{self, Resolved};
 use crate::model::{Hoster, Language, Quality};
 use crate::site;
+
+/// Obergrenze für eine geladene HLS-Playlist. Master-/Media-Playlists sind klein;
+/// die Grenze verhindert, dass eine manipulierte Antwort den Speicher flutet.
+const MAX_PLAYLIST_BYTES: usize = 512 * 1024;
+
+/// Lädt einen Request und gibt den Body als Text zurück, aber höchstens `cap`
+/// Bytes. Wiederverwendet den konfigurierten Client (Timeout/UA) des Aufrufers.
+async fn fetch_text_capped(req: reqwest::RequestBuilder, cap: usize) -> Result<String> {
+    let resp = req.send().await?.error_for_status()?;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if buf.len() + chunk.len() > cap {
+            return Err(Error::extract("HLS", "Playlist überschreitet Größenlimit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
 
 /// Download-Präferenzen für eine Episode.
 #[derive(Debug, Clone)]
@@ -76,7 +97,7 @@ pub async fn download_episode(
                 }
             };
 
-            if try_download_resolved(&resolved, prefs, &out_path, &cancel).await? {
+            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel).await? {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
@@ -130,7 +151,7 @@ pub async fn download_movie(
                     continue;
                 }
             };
-            if try_download_resolved(&resolved, prefs, &out_path, &cancel).await? {
+            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel).await? {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
@@ -160,19 +181,20 @@ pub async fn download_url(
 
 /// Muxt einen aufgelösten Stream — bei HLS mit Tier-Sweep, sonst direkt.
 async fn try_download_resolved(
+    client: &reqwest::Client,
     resolved: &Resolved,
     prefs: &DownloadPrefs,
     out_path: &Path,
     cancel: &Option<CancellationToken>,
 ) -> Result<bool> {
     if resolved.is_hls {
-        // Master-Playlist laden und die passende Tier-Variante wählen.
-        let client = reqwest::Client::new();
+        // Master-Playlist über den konfigurierten Client (Timeout/UA) laden und die
+        // passende Tier-Variante wählen; Antwortgröße ist begrenzt.
         let mut req = client.get(&resolved.url);
         if let Some(r) = &resolved.referer {
             req = req.header("Referer", r);
         }
-        let text = req.send().await?.text().await?;
+        let text = fetch_text_capped(req, MAX_PLAYLIST_BYTES).await?;
         let variants = parse_hls_master(&text, &resolved.url);
 
         if variants.is_empty() {
@@ -209,6 +231,16 @@ pub async fn mux(
     cancel: &Option<CancellationToken>,
 ) -> Result<()> {
     const ATTEMPTS: u32 = 3;
+
+    // Nur http/https als ffmpeg-Eingabe zulassen. Ein manipulierter Hoster darf
+    // ffmpeg nicht auf file:, pipe: oder andere Protokolle lenken.
+    if !(stream.url.starts_with("http://") || stream.url.starts_with("https://")) {
+        return Err(Error::Ffmpeg(format!(
+            "nicht unterstütztes Stream-Schema (nur http/https): {}",
+            stream.url
+        )));
+    }
+
     if let Some(dir) = out_path.parent() {
         tokio::fs::create_dir_all(dir).await.ok();
     }
@@ -222,18 +254,20 @@ pub async fn mux(
         if let Some(referer) = &stream.referer {
             cmd.arg("-headers").arg(format!("Referer: {referer}\r\n"));
         }
-        if stream.url.starts_with("http") {
-            cmd.args([
-                "-reconnect",
-                "1",
-                "-reconnect_streamed",
-                "1",
-                "-reconnect_on_network_error",
-                "1",
-                "-reconnect_delay_max",
-                "5",
-            ]);
-        }
+        // Eingabe ist oben auf http/https begrenzt; die Protokoll-Allowlist hält
+        // ffmpeg beim Nachladen von HLS-Segmenten auf denselben Protokollen.
+        cmd.args([
+            "-protocol_whitelist",
+            "https,tls,tcp,crypto,http",
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_on_network_error",
+            "1",
+            "-reconnect_delay_max",
+            "5",
+        ]);
         cmd.args(["-i", &stream.url, "-c", "copy", "-nostdin", "-y"]);
         cmd.arg(out_path);
         cmd.stdout(std::process::Stdio::null());

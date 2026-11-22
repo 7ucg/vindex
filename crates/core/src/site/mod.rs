@@ -11,19 +11,29 @@ pub mod sto;
 
 use crate::model::{BASE, BASE_STO};
 
-/// Wählt die passende Basis-URL anhand einer Episoden-/Serien-URL.
+/// Normalisierter Host einer URL (ohne Trailing-Dot, lowercase). `None`, wenn die
+/// URL nicht parst oder keinen Host hat.
+fn host_of(url: &str) -> Option<String> {
+    reqwest::Url::parse(url).ok().and_then(|u| {
+        u.host_str()
+            .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+    })
+}
+
+/// Wählt die passende Basis-URL anhand des geparsten Hosts einer Episoden-/Serien-URL.
+///
+/// Routing über den echten Host, nicht über Substring-Suche im Rohstring — sonst
+/// würde z. B. `aniworld.to/x?q=serienstream.to` falsch einsortiert.
 pub fn base_for_url(url: &str) -> &'static str {
-    let lower = url.to_ascii_lowercase();
-    if lower.contains("serienstream.to") || lower.contains("serienstream") {
-        BASE_STO
-    } else {
-        BASE
+    match host_of(url).as_deref() {
+        Some("s.to" | "www.s.to" | "serienstream.to" | "www.serienstream.to") => BASE_STO,
+        _ => BASE,
     }
 }
 
 /// True, wenn die URL auf filmo.to zeigt (eigener Resolver-Pfad).
 pub fn is_filmo(url: &str) -> bool {
-    url.to_ascii_lowercase().contains("filmo.to")
+    matches!(host_of(url).as_deref(), Some("filmo.to" | "www.filmo.to"))
 }
 
 /// Erlaubte Quell-Hosts. Alles andere wird abgewiesen, damit die serverseitig
@@ -97,5 +107,22 @@ mod tests {
         assert!(validate_source_url("https://aniworld.to.evil.example/x").is_err());
         assert!(validate_source_url("file:///etc/passwd").is_err());
         assert!(validate_source_url("not a url").is_err());
+    }
+
+    #[test]
+    fn routing_uses_host_not_substring() {
+        assert_eq!(
+            base_for_url("https://serienstream.to/serie/stream/x"),
+            BASE_STO
+        );
+        assert_eq!(base_for_url("https://s.to/serie/stream/x"), BASE_STO);
+        assert_eq!(base_for_url("https://aniworld.to/anime/stream/x"), BASE);
+        // Query/Pfad mit fremdem Portalnamen darf die Basis nicht umlenken.
+        assert_eq!(
+            base_for_url("https://aniworld.to/anime/stream/x?ref=serienstream.to"),
+            BASE
+        );
+        assert!(is_filmo("https://filmo.to/movies/x"));
+        assert!(!is_filmo("https://aniworld.to/anime/stream/x?q=filmo.to"));
     }
 }
