@@ -99,6 +99,7 @@ curl -X POST -H "Content-Type: application/json" \
   -d '{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1","language":"German Dub","provider":"VOE"}' \
   http://127.0.0.1:8080/api/download
 curl http://127.0.0.1:8080/api/queue
+curl http://127.0.0.1:8080/api/library   # fertige Downloads im Zielverzeichnis
 ```
 
 Die OpenAPI-3-Spezifikation (via `utoipa`) liegt offen — wie `/health`, ohne

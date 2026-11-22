@@ -275,6 +275,7 @@ fn router_with(state: AppState) -> Router {
         .route("/api/providers", get(providers))
         .route("/api/download", post(download))
         .route("/api/queue", get(queue))
+        .route("/api/library", get(library))
         // Admin-geschützte Key-Verwaltung (Scope wird in der Auth-Middleware auf
         // Admin gesetzt). Löschen per Pfad (`/api/keys/{name}`) oder Query (`?name=`).
         .route(
@@ -662,6 +663,64 @@ async fn queue(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "items": items }))
 }
 
+/// Höchstzahl Bibliothekseinträge in einer Antwort.
+const MAX_LIBRARY_ENTRIES: usize = 10_000;
+
+/// Medien-Dateiendungen, die als Bibliothekseintrag zählen.
+const LIBRARY_EXTENSIONS: &[&str] = &["mkv", "mp4", "ts", "webm", "mov"];
+
+/// Scannt ein Verzeichnis (nicht rekursiv) nach Mediendateien und gibt Name +
+/// Größe zurück, alphabetisch sortiert. Rein und testbar. Gibt nur den Dateinamen
+/// zurück (keine Pfade), überspringt Unterverzeichnisse und Nicht-Medien.
+fn list_library(dir: &std::path::Path) -> Vec<LibraryEntry> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<LibraryEntry> = Vec::new();
+    for entry in read.flatten() {
+        if out.len() >= MAX_LIBRARY_ENTRIES {
+            break;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_media = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .is_some_and(|e| LIBRARY_EXTENSIONS.contains(&e.as_str()));
+        if !is_media {
+            continue;
+        }
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        out.push(LibraryEntry { name, size_bytes });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Listet die fertigen Downloads im konfigurierten Zielverzeichnis.
+#[utoipa::path(
+    get,
+    path = "/api/library",
+    tag = "vindex",
+    responses(
+        (status = 200, description = "Dateien im Download-Verzeichnis", body = LibraryResponse),
+        (status = 401, description = "Fehlender/ungültiger API-Key", body = ErrorResponse),
+        (status = 429, description = "Rate-Limit überschritten", body = ErrorResponse)
+    ),
+    security(("api_key" = []))
+)]
+async fn library() -> Json<LibraryResponse> {
+    let settings = core::config::Settings::load();
+    let items = list_library(&settings.download_path);
+    Json(LibraryResponse { items })
+}
+
 // ---------------------------------------------------------------------------
 // Key-Verwaltung (/api/keys) — Admin-Scope, wirkt auf den persistenten Store.
 // ---------------------------------------------------------------------------
@@ -966,6 +1025,21 @@ struct QueueResponse {
     items: Vec<QueueItem>,
 }
 
+/// Ein Eintrag der Bibliothek (eine Datei im Download-Verzeichnis).
+#[derive(serde::Serialize, ToSchema)]
+struct LibraryEntry {
+    /// Dateiname (ohne Pfad).
+    name: String,
+    /// Dateigröße in Bytes.
+    size_bytes: u64,
+}
+
+/// Antwort von `GET /api/library`.
+#[derive(serde::Serialize, ToSchema)]
+struct LibraryResponse {
+    items: Vec<LibraryEntry>,
+}
+
 /// Antwort von `POST /api/keys` (201): der Klartext wird **einmalig** geliefert.
 #[derive(ToSchema)]
 #[allow(dead_code)]
@@ -1027,6 +1101,7 @@ impl Modify for SecurityAddon {
         providers,
         download,
         queue,
+        library,
         create_key,
         list_keys,
         delete_key_query,
@@ -1040,6 +1115,8 @@ impl Modify for SecurityAddon {
         ProvidersResponse,
         QueueResponse,
         QueueItem,
+        LibraryResponse,
+        LibraryEntry,
         CreateKeyReq,
         CreateKeyResponse,
         KeyInfo,
@@ -1635,5 +1712,31 @@ mod tests {
 
         std::env::remove_var("VINDEX_API_KEYS_FILE");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn library_listet_nur_medien_sortiert() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("vindex-lib-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.mkv"), b"xx").unwrap();
+        std::fs::write(dir.join("a.mp4"), b"yyyy").unwrap();
+        std::fs::write(dir.join("notiz.txt"), b"kein medium").unwrap();
+        std::fs::create_dir_all(dir.join("unterordner")).unwrap();
+
+        let items = list_library(&dir);
+        // Nur Medien, alphabetisch, Unterordner und .txt ausgelassen.
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "a.mp4");
+        assert_eq!(items[0].size_bytes, 4);
+        assert_eq!(items[1].name, "b.mkv");
+        assert_eq!(items[1].size_bytes, 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn library_fehlendes_verzeichnis_ist_leer() {
+        assert!(list_library(std::path::Path::new("/nicht/vorhanden/xyz")).is_empty());
     }
 }

@@ -33,9 +33,10 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## API
 
-- **Weitere Flächen.** Library, Auto-Sync. (OpenAPI unter `/openapi.json`, das Request-
-  Rate-Limit, der persistente Key-Store mit Scopes und die admin-Key-Verwaltung unter
-  `/api/keys` sind erledigt.)
+- **Weitere Flächen.** `GET /api/library` (listet die fertigen Downloads im Zielverzeichnis,
+  nur Dateiname + Größe, read-Scope) ist erledigt. Offen: Auto-Sync (Abgleich des Bibliotheks-
+  Stands über mehrere Clients). (OpenAPI unter `/openapi.json`, das Request-Rate-Limit, der
+  persistente Key-Store mit Scopes und die admin-Key-Verwaltung unter `/api/keys` sind erledigt.)
 - **Produktions-Rate-Limit.** Das eingebaute Limit ist Best-Effort im Prozessspeicher; für
   öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
   Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
