@@ -2,17 +2,22 @@
 //!
 //! Funktionsfähige Teilmenge der Referenz-API (siehe README): Suche,
 //! Provider-Metadaten, Download-Queue. Die `/api/*`-Routen liegen hinter einer
-//! API-Key-Prüfung (siehe [`auth`]). SSO, Library, Auto-Sync, OpenAPI
-//! (`utoipa`) und ein `tower_governor`-Rate-Limit folgen gemäß
-//! `ARCHITECTURE.md` §9 (Schritt 11).
+//! API-Key-Prüfung (siehe [`auth`]) und einem Request-Rate-Limit pro IP
+//! (Sliding-Window, siehe [`RateLimiter`]). SSO, Library, Auto-Sync und OpenAPI
+//! (`utoipa`) folgen gemäß `ARCHITECTURE.md` §9 (Schritt 11).
 
 mod auth;
 
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Query, Request, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -27,6 +32,70 @@ const MAX_INFLIGHT_JOBS: usize = 100;
 /// Obergrenze der gesamten Job-Liste (inkl. fertiger). Darüber werden die
 /// abgeschlossenen Einträge verworfen, damit die Liste nicht unbegrenzt wächst.
 const MAX_JOBS_RETAINED: usize = 500;
+
+/// Standard-Rate-Limit: erlaubte Requests pro IP und Zeitfenster. Über
+/// `VINDEX_RATE_LIMIT` überschreibbar.
+const DEFAULT_RATE_LIMIT: u32 = 60;
+
+/// Zeitfenster des Rate-Limits (Sliding-Window).
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
+/// Liest das konfigurierte Rate-Limit aus `VINDEX_RATE_LIMIT`; ungültige oder
+/// fehlende Werte fallen auf [`DEFAULT_RATE_LIMIT`] zurück.
+fn rate_limit_from_env() -> u32 {
+    std::env::var("VINDEX_RATE_LIMIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_RATE_LIMIT)
+}
+
+/// Sliding-Window-Rate-Limit pro Client-IP. Hält je IP die Zeitstempel der
+/// Zugriffe im Fenster vor; ältere werden bei jedem Zugriff verworfen.
+pub struct RateLimiter {
+    max: u32,
+    window: Duration,
+    hits: StdMutex<HashMap<IpAddr, VecDeque<Instant>>>,
+}
+
+impl RateLimiter {
+    /// Baut ein Limit mit *max* Requests je *window* und IP.
+    pub(crate) fn new(max: u32, window: Duration) -> Self {
+        RateLimiter {
+            max,
+            window,
+            hits: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Registriert einen Zugriff von *ip*. `Ok(())` lässt ihn durch;
+    /// `Err(retry_after)` meldet das überschrittene Limit samt Sekunden bis zum
+    /// nächsten freien Slot (mindestens 1).
+    fn check(&self, ip: IpAddr) -> Result<(), u64> {
+        let now = Instant::now();
+        let mut map = self.hits.lock().expect("Rate-Limit-Mutex nicht vergiftet");
+        let dq = map.entry(ip).or_default();
+        // Zeitstempel außerhalb des Fensters verwerfen.
+        while let Some(&front) = dq.front() {
+            if now.duration_since(front) >= self.window {
+                dq.pop_front();
+            } else {
+                break;
+            }
+        }
+        if dq.len() as u32 >= self.max {
+            let oldest = *dq.front().expect("bei vollem Fenster nicht leer");
+            let retry = self
+                .window
+                .saturating_sub(now.duration_since(oldest))
+                .as_secs()
+                .max(1);
+            return Err(retry);
+        }
+        dq.push_back(now);
+        Ok(())
+    }
+}
 
 /// Status eines Queue-Eintrags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +133,7 @@ pub struct AppState {
     jobs: Arc<Mutex<Vec<Job>>>,
     next_id: Arc<AtomicU64>,
     auth: auth::AuthConfig,
+    rate: Arc<RateLimiter>,
 }
 
 impl AppState {
@@ -74,6 +144,7 @@ impl AppState {
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
             auth: auth::AuthConfig::from_settings(&settings),
+            rate: Arc::new(RateLimiter::new(rate_limit_from_env(), RATE_LIMIT_WINDOW)),
         }
     }
 }
@@ -91,15 +162,46 @@ fn router_with(state: AppState) -> Router {
         .route("/api/providers", get(providers))
         .route("/api/download", post(download))
         .route("/api/queue", get(queue))
+        // Innen: API-Key-Prüfung. Außen: Rate-Limit (greift vor der Auth, damit
+        // auch unauthentifizierte Fluten gedrosselt werden). `/health` bleibt
+        // von beidem ausgenommen.
         .layer(axum::middleware::from_fn_with_state(
             state.auth.clone(),
             auth::require_api_key,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.rate.clone(),
+            rate_limit,
         ));
 
     Router::new()
         .route("/health", get(health))
         .merge(api)
         .with_state(state)
+}
+
+/// Middleware für `/api/*`: drosselt Requests pro Client-IP. Bei Überschreitung
+/// `429` mit Header `Retry-After`.
+async fn rate_limit(State(rate): State<Arc<RateLimiter>>, req: Request, next: Next) -> Response {
+    let ip = client_ip(&req);
+    match rate.check(ip) {
+        Ok(()) => next.run(req).await,
+        Err(retry_after) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            Json(json!({ "error": "Rate-Limit erreicht, bitte später erneut versuchen" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Client-IP aus der Verbindung (`ConnectInfo`). Fehlt sie (z. B. im Test über
+/// `oneshot`), wird localhost angenommen.
+fn client_ip(req: &Request) -> IpAddr {
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
 /// Startet den Daemon auf *addr* (z. B. `127.0.0.1:8080`).
@@ -124,7 +226,12 @@ pub async fn serve(addr: &str) -> anyhow::Result<()> {
     }
 
     tracing::info!("vindex API lauscht auf http://{local}");
-    axum::serve(listener, router_with(state)).await?;
+    // `ConnectInfo` liefert dem Rate-Limit die echte Client-IP.
+    axum::serve(
+        listener,
+        router_with(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -383,11 +490,17 @@ mod tests {
     use tower::ServiceExt;
 
     fn state(keys: &[&str]) -> AppState {
+        state_mit_limit(keys, DEFAULT_RATE_LIMIT)
+    }
+
+    /// Wie [`state`], aber mit explizitem Rate-Limit für die Drossel-Tests.
+    fn state_mit_limit(keys: &[&str], max: u32) -> AppState {
         AppState {
             client: reqwest::Client::new(),
             jobs: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(AtomicU64::new(1)),
             auth: auth::AuthConfig::with_keys(keys),
+            rate: Arc::new(RateLimiter::new(max, RATE_LIMIT_WINDOW)),
         }
     }
 
@@ -492,6 +605,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_mit_gueltiger_url_wird_eingereiht_202() {
+        // Der Handler validiert die URL (netzfrei) und reiht den Job ein; der
+        // echte Abruf passiert erst im Hintergrund-Worker (darf scheitern). Hier
+        // zählt nur der sofort zurückgegebene Statuscode 202.
+        let (status, body) = send(
+            router_with(state(&[])),
+            post_json(
+                "/api/download",
+                r#"{"url":"https://aniworld.to/anime/stream/x/staffel-1/episode-1"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(body.contains("\"queue_id\""), "{body}");
+    }
+
+    #[tokio::test]
     async fn download_mit_kaputtem_json_ist_400() {
         let (status, _) = send(
             router_with(state(&[])),
@@ -537,6 +667,82 @@ mod tests {
     async fn unbekannte_route_ist_404() {
         let (status, _) = send(router_with(state(&[])), get_req("/nirgendwo", None)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_blockt_nach_n_requests_mit_retry_after() {
+        // Limit 3: die ersten drei /api/queue-Requests kommen durch (offen, 200),
+        // der vierte wird mit 429 + Retry-After gedrosselt.
+        let app = router_with(state_mit_limit(&[], 3));
+        for _ in 0..3 {
+            let resp = app
+                .clone()
+                .oneshot(get_req("/api/queue", None))
+                .await
+                .expect("Router antwortet");
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        let resp = app
+            .clone()
+            .oneshot(get_req("/api/queue", None))
+            .await
+            .expect("Router antwortet");
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry = resp
+            .headers()
+            .get(header::RETRY_AFTER)
+            .expect("Retry-After gesetzt")
+            .to_str()
+            .expect("Retry-After ist ASCII");
+        assert!(
+            retry.parse::<u64>().is_ok_and(|s| s >= 1),
+            "Retry-After-Sekunden: {retry}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_gilt_nicht_fuer_health() {
+        // /health liegt außerhalb der Middleware und bleibt auch über dem Limit offen.
+        let app = router_with(state_mit_limit(&["geheim"], 2));
+        for _ in 0..5 {
+            let resp = app
+                .clone()
+                .oneshot(get_req("/health", None))
+                .await
+                .expect("Router antwortet");
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+    }
+
+    #[test]
+    fn rate_limiter_laesst_bis_zum_limit_durch() {
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let rl = RateLimiter::new(2, RATE_LIMIT_WINDOW);
+        assert!(rl.check(ip).is_ok());
+        assert!(rl.check(ip).is_ok());
+        let retry = rl.check(ip).expect_err("drittes über Limit");
+        assert!(retry >= 1);
+    }
+
+    #[test]
+    fn rate_limiter_trennt_nach_ip() {
+        let a = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let b = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let rl = RateLimiter::new(1, RATE_LIMIT_WINDOW);
+        assert!(rl.check(a).is_ok());
+        assert!(rl.check(a).is_err(), "zweite von IP a blockt");
+        assert!(rl.check(b).is_ok(), "IP b hat eigenes Kontingent");
+    }
+
+    #[test]
+    fn rate_limiter_gibt_slot_nach_fenster_frei() {
+        // Winziges Fenster: nach kurzer Pause ist der Slot wieder frei.
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let rl = RateLimiter::new(1, Duration::from_millis(20));
+        assert!(rl.check(ip).is_ok());
+        assert!(rl.check(ip).is_err());
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(rl.check(ip).is_ok(), "nach Fensterablauf wieder frei");
     }
 
     #[test]

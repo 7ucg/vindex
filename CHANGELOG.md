@@ -14,7 +14,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Batch-Download über Episodendatei, „keep watching", Proxy-Rotation.
 - Watch via mpv/IINA, Syncplay, Anime4K.
 - Nativer HLS-Downloader (ohne ffmpeg).
-- API: Auth/API-Keys, Library, Auto-Sync, OpenAPI, Rate-Limit-Layer.
+- API: Library, Auto-Sync, OpenAPI, persistenter Key-Store mit Scopes.
 - Desktop-Fenster-Frontend auf der `core`-Facade.
 
 ## [0.1.0] - 2026-11-22
@@ -49,7 +49,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - CLI mit den Unterbefehlen `census`, `search`, `download`, `menu` (interaktiv) und
   `serve`.
 - HTTP-API-Daemon (axum): `/health`, `/api/search`, `/api/providers`, `/api/download`
-  (Hintergrund-Queue), `/api/queue`.
+  (Hintergrund-Queue), `/api/queue`. Die `/api/*`-Routen sind pro Client-IP
+  ratenbegrenzt (Sliding-Window, Standard 60 Req/min, `VINDEX_RATE_LIMIT`); über dem
+  Limit `429` mit `Retry-After`. `/health` bleibt ausgenommen.
 - Desktop-Backend-Facade auf `core`.
 - Unit-Tests für die Hoster-Deobfuskation (VOE, SpeedFiles), HLS-Parsing,
   Qualitäts-Tiers, Naming/Episoden-Nummern, User-Agent-Rotation und URL-Validierung.
@@ -69,8 +71,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - API-Key-Auth für den Daemon: `/api/*` verlangt bei gesetztem `VINDEX_API_KEYS` den
   Header `X-API-Key` bzw. `Authorization: Bearer` (konstanter Vergleich, `401` bei
   Fehler). Ohne Keys lässt sich nur auf localhost binden; ein öffentlicher Bind ohne
-  Auth bricht den Start ab. Dazu ein Queue-Limit gegen Flutung, eine Obergrenze der
-  gesamten Job-Liste und knappe Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
+  Auth bricht den Start ab. Dazu ein Request-Rate-Limit pro Client-IP (Sliding-Window)
+  gegen Flutung des Daemons, ein Queue-Limit, eine Obergrenze der gesamten Job-Liste und
+  knappe Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
 - Redirect-Policy für den HTTP-Client: jeder Hop muss `http`/`https` sein und darf nicht
   auf nicht-öffentliche IP-Ziele zeigen (loopback, privat, link-local, CGNAT, 0.0.0.0/8,
   192.0.0.0/24, 192.88.99.0/24, 198.18.0.0/15, unique-local sowie in IPv6 eingebettete

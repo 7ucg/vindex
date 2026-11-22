@@ -95,6 +95,10 @@ VINDEX_API_KEYS=geheim123 vindex serve --addr 0.0.0.0:8080
 curl -H "X-API-Key: geheim123" "http://127.0.0.1:8080/api/search?keyword=naruto"
 ```
 
+Die `/api/*`-Routen sind zusätzlich pro Client-IP ratenbegrenzt (Sliding-Window,
+Standard 60 Requests/Minute, über `VINDEX_RATE_LIMIT` einstellbar). Über dem Limit
+antwortet die API mit `429` und dem Header `Retry-After`. `/health` ist ausgenommen.
+
 ## Build
 
 ```bash
