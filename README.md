@@ -68,8 +68,8 @@ vindex download --continue "https://aniworld.to/anime/stream/<slug>"
 vindex watch "https://aniworld.to/anime/stream/<slug>/staffel-1/episode-1" \
   --language "German Dub" --provider VOE
 # Player wählbar: --player mpv (Standard) oder --player iina (macOS).
-# Synchron mit anderen schauen: --syncplay (steuert mpv über Syncplay).
-# Voraussetzung: mpv (bzw. iina-cli / syncplay) ist installiert und im PATH.
+# Optional Anime4K-Upscaling: --anime4k A --anime4k-dir /pfad/zu/shadern
+# Voraussetzung: mpv (bzw. iina-cli) ist installiert und im PATH.
 
 # Interaktives Menü
 vindex menu

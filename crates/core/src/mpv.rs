@@ -125,12 +125,111 @@ impl Player {
     }
 }
 
-/// Baut die mpv-Options-Tokens (Härtung, Referer, Titel, AniSkip-Kapitel) — ohne
-/// `--`-Trenner und ohne URL. Gemeinsame Basis für mpv und IINA.
+/// Anime4K-Upscaling-Modus (offizielle GLSL-Shader-Ketten, Anime4K v4.0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anime4kMode {
+    /// A — Restore + Upscale (für sehr degradiertes Material).
+    A,
+    /// B — weicheres Restore.
+    B,
+    /// C — Denoise + Upscale.
+    C,
+    /// A+A — stärkeres Restore.
+    Aa,
+    /// B+B — weiches Restore, zweistufig.
+    Bb,
+    /// C+A — Denoise plus Restore.
+    Ca,
+}
+
+impl Anime4kMode {
+    /// Parst einen Modusnamen (`A`, `B`, `C`, `A+A`/`AA`, `B+B`/`BB`, `C+A`/`CA`).
+    pub fn from_name(name: &str) -> Option<Anime4kMode> {
+        match name.trim().to_ascii_uppercase().replace('+', "").as_str() {
+            "A" => Some(Anime4kMode::A),
+            "B" => Some(Anime4kMode::B),
+            "C" => Some(Anime4kMode::C),
+            "AA" => Some(Anime4kMode::Aa),
+            "BB" => Some(Anime4kMode::Bb),
+            "CA" => Some(Anime4kMode::Ca),
+            _ => None,
+        }
+    }
+
+    /// Die Shader-Dateinamen der Kette (in Anwendungsreihenfolge).
+    pub fn shaders(&self) -> &'static [&'static str] {
+        match self {
+            Anime4kMode::A => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Restore_CNN_VL.glsl",
+                "Anime4K_Upscale_CNN_x2_VL.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+            Anime4kMode::B => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Restore_CNN_Soft_VL.glsl",
+                "Anime4K_Upscale_CNN_x2_VL.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+            Anime4kMode::C => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+            Anime4kMode::Aa => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Restore_CNN_VL.glsl",
+                "Anime4K_Upscale_CNN_x2_VL.glsl",
+                "Anime4K_Restore_CNN_M.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+            Anime4kMode::Bb => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Restore_CNN_Soft_VL.glsl",
+                "Anime4K_Upscale_CNN_x2_VL.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Restore_CNN_Soft_M.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+            Anime4kMode::Ca => &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
+                "Anime4K_AutoDownscalePre_x2.glsl",
+                "Anime4K_AutoDownscalePre_x4.glsl",
+                "Anime4K_Restore_CNN_M.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
+            ],
+        }
+    }
+}
+
+/// Baut den Wert für mpvs `--glsl-shaders` aus Modus + Shader-Verzeichnis: die
+/// Shader-Pfade, getrennt durch `:` (mpv-Listensyntax). Ohne Flag-Präfix.
+pub fn anime4k_glsl_value(mode: Anime4kMode, shader_dir: &std::path::Path) -> String {
+    mode.shaders()
+        .iter()
+        .map(|s| shader_dir.join(s).to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Baut die mpv-Options-Tokens (Härtung, Referer, Titel, AniSkip-Kapitel, optional
+/// Anime4K-Shader) — ohne `--`-Trenner und ohne URL. Gemeinsame Basis für mpv/IINA.
+/// `anime4k` ist der fertige `--glsl-shaders`-Wert (siehe [`anime4k_glsl_value`]).
 fn mpv_option_tokens(
     referer: Option<&str>,
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
+    anime4k: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -157,6 +256,9 @@ fn mpv_option_tokens(
             args.push(format!("--chapters-file=memory://{}", a.to_ffmetadata()));
         }
     }
+    if let Some(shaders) = anime4k {
+        args.push(format!("--glsl-shaders={}", sanitize(shaders)));
+    }
     args
 }
 
@@ -166,30 +268,21 @@ pub fn build_mpv_args(
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
 ) -> Vec<String> {
-    let mut args = mpv_option_tokens(referer, title, aniskip);
-    // Optionen-Ende: alles danach ist die (nicht als Option gedeutete) URL.
-    args.push("--".to_string());
-    args.push(stream_url.to_string());
-    args
+    build_mpv_args_with(stream_url, referer, title, aniskip, None)
 }
 
-/// Baut die Syncplay-Argumente für synchronisierte Wiedergabe. Syncplay steuert
-/// mpv: die Stream-URL ist das positionale Argument, der mpv-Pfad wird über
-/// `--player-path` gesetzt, und die gehärteten mpv-Optionen stehen hinter `--`.
-/// Syncplay läuft bewusst nur mit mpv (nicht IINA).
-pub fn build_syncplay_args(
+/// Wie [`build_mpv_args`], aber mit optionaler Anime4K-Shader-Kette (`--glsl-shaders`).
+pub fn build_mpv_args_with(
     stream_url: &str,
     referer: Option<&str>,
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
+    anime4k: Option<&str>,
 ) -> Vec<String> {
-    let mut args = vec![
-        stream_url.to_string(),
-        "--player-path".to_string(),
-        Player::Mpv.binary().to_string(),
-        "--".to_string(),
-    ];
-    args.extend(mpv_option_tokens(referer, title, aniskip));
+    let mut args = mpv_option_tokens(referer, title, aniskip, anime4k);
+    // Optionen-Ende: alles danach ist die (nicht als Option gedeutete) URL.
+    args.push("--".to_string());
+    args.push(stream_url.to_string());
     args
 }
 
@@ -202,11 +295,12 @@ pub fn build_player_args(
     referer: Option<&str>,
     title: Option<&str>,
     aniskip: Option<&AniSkipTimes>,
+    anime4k: Option<&str>,
 ) -> Vec<String> {
     match player {
-        Player::Mpv => build_mpv_args(stream_url, referer, title, aniskip),
+        Player::Mpv => build_mpv_args_with(stream_url, referer, title, aniskip, anime4k),
         Player::Iina => {
-            let mut args: Vec<String> = mpv_option_tokens(referer, title, aniskip)
+            let mut args: Vec<String> = mpv_option_tokens(referer, title, aniskip, anime4k)
                 .into_iter()
                 .map(|opt| format!("--mpv-{}", opt.trim_start_matches("--")))
                 .collect();
@@ -228,11 +322,6 @@ pub async fn play(args: &[String]) -> Result<()> {
 /// Wie [`play`], aber für einen frei gewählten [`Player`] (mpv oder IINA).
 pub async fn play_with(player: Player, args: &[String]) -> Result<()> {
     run_player(player.binary(), args).await
-}
-
-/// Startet Syncplay (synchronisierte Wiedergabe) mit den [`build_syncplay_args`].
-pub async fn play_syncplay(args: &[String]) -> Result<()> {
-    run_player("syncplay", args).await
 }
 
 /// Startet ein Player-Binary mit getrennten Argumenten (keine Shell) und wartet.
@@ -437,7 +526,14 @@ mod tests {
     #[test]
     fn iina_args_praefixen_mpv_optionen() {
         let url = "https://cdn.example/s.m3u8";
-        let args = build_player_args(Player::Iina, url, Some("https://ref"), Some("Titel"), None);
+        let args = build_player_args(
+            Player::Iina,
+            url,
+            Some("https://ref"),
+            Some("Titel"),
+            None,
+            None,
+        );
         // Jede mpv-Option trägt das --mpv-Präfix …
         assert!(args.contains(&"--mpv-no-config".to_string()));
         assert!(args.contains(&"--mpv-ytdl=no".to_string()));
@@ -454,27 +550,52 @@ mod tests {
     }
 
     #[test]
-    fn syncplay_args_url_positional_und_player_path() {
-        let url = "https://cdn.example/s.m3u8";
-        let args = build_syncplay_args(url, Some("https://ref"), Some("Titel"), None);
-        // URL ist das erste (positionale) Argument.
-        assert_eq!(args.first().unwrap(), url);
-        // mpv-Pfad wird gesetzt, der `--`-Trenner leitet die mpv-Optionen ein.
-        let pp = args.iter().position(|a| a == "--player-path").unwrap();
-        assert_eq!(args[pp + 1], "mpv");
-        let sep = args.iter().position(|a| a == "--").unwrap();
-        assert!(sep > pp);
-        // Die gehärteten mpv-Optionen stehen hinter `--`, die URL nicht erneut.
-        assert!(args[sep..].contains(&"--no-config".to_string()));
-        assert!(args[sep..].contains(&"--force-media-title=Titel".to_string()));
-        assert_eq!(args.iter().filter(|a| a.as_str() == url).count(), 1);
+    fn anime4k_modus_und_glsl_wert() {
+        use std::path::Path;
+        assert_eq!(Anime4kMode::from_name("a"), Some(Anime4kMode::A));
+        assert_eq!(Anime4kMode::from_name("C+A"), Some(Anime4kMode::Ca));
+        assert_eq!(Anime4kMode::from_name("bb"), Some(Anime4kMode::Bb));
+        assert_eq!(Anime4kMode::from_name("x"), None);
+
+        let value = anime4k_glsl_value(Anime4kMode::A, Path::new("/shaders"));
+        // Pfade mit `:` getrennt, jeder Shader unter dem Verzeichnis.
+        assert!(value.starts_with("/shaders/Anime4K_Clamp_Highlights.glsl:"));
+        assert!(value.contains("/shaders/Anime4K_Upscale_CNN_x2_M.glsl"));
+        assert_eq!(value.split(':').count(), Anime4kMode::A.shaders().len());
+    }
+
+    #[test]
+    fn anime4k_landet_als_glsl_shaders_option() {
+        use std::path::Path;
+        let value = anime4k_glsl_value(Anime4kMode::C, Path::new("/s"));
+        let args = build_player_args(
+            Player::Mpv,
+            "https://x/v.m3u8",
+            None,
+            None,
+            None,
+            Some(&value),
+        );
+        assert!(args.iter().any(|a| a == &format!("--glsl-shaders={value}")));
+        // IINA bekommt es mit --mpv-Präfix.
+        let iina = build_player_args(
+            Player::Iina,
+            "https://x/v.m3u8",
+            None,
+            None,
+            None,
+            Some(&value),
+        );
+        assert!(iina
+            .iter()
+            .any(|a| a == &format!("--mpv-glsl-shaders={value}")));
     }
 
     #[test]
     fn mpv_und_iina_tragen_dieselben_optionen() {
         let url = "https://cdn.example/s.m3u8";
-        let mpv = build_player_args(Player::Mpv, url, Some("https://r"), Some("T"), None);
-        let iina = build_player_args(Player::Iina, url, Some("https://r"), Some("T"), None);
+        let mpv = build_player_args(Player::Mpv, url, Some("https://r"), Some("T"), None, None);
+        let iina = build_player_args(Player::Iina, url, Some("https://r"), Some("T"), None, None);
         // Gleiche Zahl Optionen (mpv hat zusätzlich den `--`-Trenner).
         assert_eq!(mpv.len(), iina.len() + 1);
         assert_eq!(mpv.last().unwrap(), url);

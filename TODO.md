@@ -50,11 +50,13 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
   als überspringbare Kapitel (`core::mpv::build_mpv_args` → `--chapters-file=memory://…`).
   Die MAL-ID-Auflösung läuft jetzt über Jikan (`aniskip::resolve_mal_id`): Slug/Staffel aus der
   URL, Titelsuche, Relations-Kette für höhere Staffeln; AniSkip liefert damit echte Intro/Outro-
-  Kapitel. Player-Auswahl `--player mpv|iina` und synchronisierte Wiedergabe `--syncplay`
-  (`core::mpv::Player`/`build_player_args`/`build_syncplay_args`/`play_with`/`play_syncplay`)
-  sind erledigt. Offen: Anime4K (GLSL-Shader-Kette, braucht Shader-Assets); die Staffel→MAL-ID-
-  Zuordnung höherer Staffeln ist eine ID-Sortier-Heuristik und gegen echte Mehrstaffler noch
-  nicht verifiziert.
+  Kapitel. Player-Auswahl `--player mpv|iina` und Anime4K-Upscaling `--anime4k <modus>`
+  (`core::mpv::Player`/`build_player_args`/`Anime4kMode`/`anime4k_glsl_value`) sind erledigt.
+  **Syncplay zurückgestellt:** es teilt die tokenisierte Stream-URL mit einem Dritt-Server/Raum
+  und reicht die mpv-Härtungsflags nur unverifiziert weiter — kommt erst zurück, wenn das gegen
+  echtes Syncplay geprüft und fail-closed abgesichert ist (Privacy-Flags + garantierte Härtung
+  via `MPV_HOME`-Config). Außerdem offen: die Staffel→MAL-ID-Zuordnung höherer Staffeln ist eine
+  ID-Sortier-Heuristik und gegen echte Mehrstaffler noch nicht verifiziert.
 
 ## Desktop
 
