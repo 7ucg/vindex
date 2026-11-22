@@ -103,7 +103,14 @@ pub fn start(
     );
     emit(&app, &view);
 
-    let prefs = prefs_from_settings(&settings, file_name, &DownloadOverrides::default());
+    // Desktop lädt bewusst nativ + ffmpeg-frei: echte Segment-Fortschritte und
+    // der native TS→MKV-Remux (kein ffmpeg nötig; andere Codecs → roher .ts).
+    let overrides = DownloadOverrides {
+        native_hls: Some(true),
+        no_ffmpeg: Some(true),
+        ..DownloadOverrides::default()
+    };
+    let prefs = prefs_from_settings(&settings, file_name, &overrides);
 
     let sem = downloads.sem.clone();
 

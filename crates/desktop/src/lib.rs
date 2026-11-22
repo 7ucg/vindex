@@ -58,6 +58,8 @@ pub struct DownloadOverrides {
     pub out_dir: Option<PathBuf>,
     /// HLS-Segmente selbst holen.
     pub native_hls: Option<bool>,
+    /// Ohne ffmpeg muxen (nativer TS→MKV-Remux, sonst roher `.ts`).
+    pub no_ffmpeg: Option<bool>,
 }
 
 /// Bildet [`Settings`] (plus optionale [`DownloadOverrides`]) auf [`DownloadPrefs`]
@@ -82,7 +84,7 @@ pub fn prefs_from_settings(
             .unwrap_or_else(|| settings.download_path.clone()),
         file_name: file_name.into(),
         native_hls: overrides.native_hls.unwrap_or(settings.native_hls),
-        no_ffmpeg: settings.no_ffmpeg,
+        no_ffmpeg: overrides.no_ffmpeg.unwrap_or(settings.no_ffmpeg),
     }
 }
 
@@ -319,6 +321,7 @@ mod tests {
             min_quality: Some(Quality::P480),
             out_dir: Some(PathBuf::from("/tmp/vindex-test")),
             native_hls: Some(!settings.native_hls),
+            no_ffmpeg: Some(!settings.no_ffmpeg),
         };
         let prefs = prefs_from_settings(&settings, "x.mkv", &overrides);
 
@@ -328,6 +331,7 @@ mod tests {
         assert_eq!(prefs.min_quality, Quality::P480);
         assert_eq!(prefs.out_dir, PathBuf::from("/tmp/vindex-test"));
         assert_eq!(prefs.native_hls, !settings.native_hls);
+        assert_eq!(prefs.no_ffmpeg, !settings.no_ffmpeg);
     }
 
     /// URL-Validierung über die Facade: unterstützte Hosts ja, fremde nein.
