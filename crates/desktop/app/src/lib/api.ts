@@ -31,6 +31,10 @@ export function search(keyword: string): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { keyword });
 }
 
+export function catalog(portal: string): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("catalog", { portal });
+}
+
 export function appSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("app_settings");
 }

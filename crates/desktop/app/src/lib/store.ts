@@ -1,4 +1,4 @@
-// Globaler UI-Zustand (bewusst minimal für Phase 0): aktive Ansicht + aktives Portal.
+// Globaler UI-Zustand (bewusst minimal): aktive Ansicht + aktives Portal.
 import { createSignal } from "solid-js";
 
 export type View =

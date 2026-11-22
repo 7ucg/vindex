@@ -64,6 +64,22 @@ async fn search(keyword: String, state: State<'_, AppState>) -> Result<Vec<Searc
 }
 
 #[tauri::command]
+async fn catalog(portal: String, state: State<'_, AppState>) -> Result<Vec<SearchHitDto>, String> {
+    let hits = state
+        .backend
+        .catalog(&portal)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchHitDto {
+            title: h.title,
+            url: h.url,
+        })
+        .collect())
+}
+
+#[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
@@ -95,7 +111,12 @@ pub fn run() {
             app.manage(AppState { backend });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_info, search, app_settings])
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            search,
+            catalog,
+            app_settings
+        ])
         .run(tauri::generate_context!())
         .expect("Fehler beim Start der vindex-Desktop-App");
 }

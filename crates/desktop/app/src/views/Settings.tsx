@@ -38,8 +38,8 @@ export function Settings(): JSX.Element {
       </Show>
 
       <p class="note">
-        Nur-Lese-Ansicht (Phase 0). Bearbeitbare Einstellungen, Themes, Netzwerk/Proxy und
-        Shortcuts folgen in Phase 6. Werte stammen aus den <code>VINDEX_*</code>-Variablen und{" "}
+        Nur-Lese-Ansicht. Bearbeitbare Einstellungen, Themes, Netzwerk/Proxy und Shortcuts
+        folgen. Werte stammen aus den <code>VINDEX_*</code>-Variablen und{" "}
         <code>.env</code>.
       </p>
 

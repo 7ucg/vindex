@@ -104,6 +104,34 @@ impl Backend {
             .collect())
     }
 
+    /// Katalog eines Portals als Titel-Liste fürs Browsen (Grid).
+    ///
+    /// aniworld liefert den alphabetischen Katalog direkt. serienstream und filmo
+    /// haben portalseitig (noch) keinen durchblätterbaren Katalog im Kern — hier
+    /// kommt ein `Err`, das das Frontend als „noch nicht angebunden" zeigt.
+    pub async fn catalog(&self, portal: &str) -> Result<Vec<SearchHit>> {
+        match portal {
+            "aniworld" => {
+                let entries = site::aniworld::fetch_catalog(&self.client)
+                    .await
+                    .map_err(|e| core::error::Error::Parse(e.to_string()))?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{}/anime/stream/{}", core::model::BASE, e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
+            "serienstream" | "filmo" => Err(core::error::Error::Parse(format!(
+                "Katalog für {portal} ist im Kern noch nicht angebunden"
+            ))),
+            other => Err(core::error::Error::Parse(format!(
+                "unbekanntes Portal: {other}"
+            ))),
+        }
+    }
+
     /// Hoster-Links einer Episode (für die Download-Auswahl im Frontend).
     pub async fn providers(&self, episode_url: &str) -> Result<ProviderLinks> {
         // SSRF-Schutz: nur die unterstützten Portale als Quell-URL zulassen.

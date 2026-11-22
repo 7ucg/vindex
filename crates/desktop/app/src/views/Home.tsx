@@ -2,8 +2,8 @@ import { createSignal, For, Show, type JSX } from "solid-js";
 import { search, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 
-// Home: in Phase 0 eine funktionierende Katalog-Suche über den echten Kern.
-// „Weiterschauen"/Empfehlungen folgen, sobald Watch-State im Frontend hängt (Phase 4/5).
+// Home: eine funktionierende Katalog-Suche über den echten Kern.
+// „Weiterschauen"/Empfehlungen folgen, sobald der Watch-State im Frontend hängt.
 export function Home(): JSX.Element {
   const [keyword, setKeyword] = createSignal("");
   const [hits, setHits] = createSignal<SearchHit[]>([]);
@@ -94,8 +94,8 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && !loading()}>
         <div class="empty">
-          Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Portale, Poster-Grids
-          und Weiterschauen kommen mit Phase&nbsp;1.
+          Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links
+          zeigen den Katalog als Grid.
         </div>
       </Show>
     </div>
