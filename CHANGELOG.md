@@ -9,6 +9,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Watch/AniSkip: MAL-ID-Auflösung über Jikan (`aniskip::resolve_mal_id`). `vindex watch`
+  leitet Slug/Staffel/Episode aus der URL ab, sucht den MyAnimeList-Eintrag über die Jikan-
+  Titelsuche und zieht für höhere Staffeln die Relations-Kette (Sequel/Prequel/Side story)
+  nach. Damit liefert AniSkip echte Intro/Outro-Zeiten, die als überspringbare mpv-Kapitel
+  eingehängt werden. Parsing und Auswahl (`parse_search`, `pick_season1`, `parse_related_ids`,
+  `slug_to_query`) sind reine, netzfrei getestete Funktionen; jeder Fehlschlag (keine Episode,
+  kein Treffer, API nicht erreichbar) spielt still ohne Kapitel weiter statt abzubrechen.
 - API: admin-geschützte Key-Verwaltung unter `/api/keys`. `POST` legt einen Key an (gibt den
   Klartext einmalig zurück, speichert nur den sha256-Hash), `GET` listet `{name,scope}` (nie
   Hashes/Klartext), `DELETE /api/keys/{name}` widerruft. Änderungen wirken sofort (In-Memory-
@@ -21,8 +28,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Der Start läuft über `tokio::process::Command` mit getrennten Argumenten (keine Shell); die
   Stream-URL ist ein eigenes Argument, fehlendes mpv ergibt einen sauberen Fehler statt Panic.
   AniSkip-Zeiten werden über `core::mpv::AniSkipTimes` als überspringbare Kapitel eingehängt
-  (`--chapters-file=memory://…` im ffmetadata-Format); die MAL-ID-Auflösung, die die Zeiten
-  tatsächlich liefert, steht noch aus (siehe TODO „AniSkip-Wiring").
+  (`--chapters-file=memory://…` im ffmetadata-Format).
 - Proxy-Rotation: `VINDEX_PROXY` (komma-getrennt) verteilt die Anfragen round-robin über
   einen Proxy-Pool (reqwest- und Impersonate-Client). Fail-closed — ein kaputter Proxy
   bricht den Client-Bau ab, statt ungeproxt weiterzulaufen. Hinweis: über einen Proxy

@@ -46,9 +46,10 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 - **Watch** via mpv erledigt (`vindex watch`): Stream-Auflösung ohne Download
   (`core::download::resolve_playable`), mpv-Start mit Referer-Header und Medientitel, AniSkip
   als überspringbare Kapitel (`core::mpv::build_mpv_args` → `--chapters-file=memory://…`).
-  **Offen (AniSkip-Wiring):** die MAL-ID-Auflösung (via Jikan), damit `aniskip::skip_times`
-  die Intro/Outro-Zeiten tatsächlich liefert — aktuell spielt `watch` ohne Kapitel.
-  Außerdem offen: IINA-Variante, Syncplay und Anime4K.
+  Die MAL-ID-Auflösung läuft jetzt über Jikan (`aniskip::resolve_mal_id`): Slug/Staffel aus der
+  URL, Titelsuche, Relations-Kette für höhere Staffeln; AniSkip liefert damit echte Intro/Outro-
+  Kapitel. Offen: IINA-Variante, Syncplay und Anime4K; die Staffel→MAL-ID-Zuordnung höherer
+  Staffeln ist eine ID-Sortier-Heuristik und gegen echte Mehrstaffler noch nicht verifiziert.
 
 ## Desktop
 

@@ -4,10 +4,12 @@
 //! aber (mit Referer und optionalen AniSkip-Kapiteln) an mpv, statt zu muxen.
 
 use clap::Parser;
+use vindex_core::aniskip::{self, skip_times};
 use vindex_core::config::Settings;
 use vindex_core::download::resolve_playable;
 use vindex_core::http;
 use vindex_core::mpv::{build_mpv_args, play, AniSkipTimes};
+use vindex_core::watchstate::episode_from_url;
 
 use crate::download::{file_name_from_url, resolve_prefs_from};
 
@@ -53,16 +55,25 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Konnte keinen abspielbaren Stream finden: {e}"))?;
 
-    // AniSkip-Kapitel: optional. Die eigentliche Zeiten-Abfrage braucht eine
-    // MyAnimeList-ID (noch nicht aufgelöst, siehe TODO „AniSkip-Wiring"); sobald sie
-    // vorliegt, liefert `aniskip::skip_times` → `AniSkipTimes::from_intervals` die
-    // überspringbaren Kapitel, die `build_mpv_args` einhängt.
-    let aniskip: Option<AniSkipTimes> = None;
-    if settings.aniskip && aniskip.is_none() {
-        eprintln!(
-            "Hinweis: AniSkip aktiviert, aber die MAL-ID-Auflösung fehlt noch — spiele ohne Kapitel."
-        );
-    }
+    // AniSkip-Kapitel: optional. Slug/Staffel/Episode aus der URL ableiten, die
+    // MAL-ID über Jikan auflösen und die Skip-Zeiten von AniSkip holen. Jeder
+    // Fehlschlag (keine Episode, kein Treffer, API down) führt nur zu „ohne Kapitel",
+    // nie zum Abbruch der Wiedergabe.
+    let aniskip: Option<AniSkipTimes> = if settings.aniskip {
+        match resolve_aniskip(&client, &args.url).await {
+            Ok(Some(times)) => Some(times),
+            Ok(None) => {
+                eprintln!("Hinweis: Keine AniSkip-Zeiten gefunden — spiele ohne Kapitel.");
+                None
+            }
+            Err(e) => {
+                eprintln!("Hinweis: AniSkip-Auflösung fehlgeschlagen ({e}) — spiele ohne Kapitel.");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let title = title_from_url(&args.url);
     let mpv_args = build_mpv_args(
@@ -77,6 +88,28 @@ pub async fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Wiedergabe fehlgeschlagen: {e}"))?;
     Ok(())
+}
+
+/// Löst die AniSkip-Kapitel für eine Episoden-URL auf: Slug/Staffel/Episode aus
+/// der URL, MAL-ID über Jikan, Skip-Zeiten über AniSkip. `Ok(None)`, wenn die URL
+/// keine Episode ist, Jikan keinen Treffer hat oder AniSkip nichts liefert.
+async fn resolve_aniskip(
+    client: &reqwest::Client,
+    url: &str,
+) -> anyhow::Result<Option<AniSkipTimes>> {
+    // Filme (ohne Staffel/Episode) haben keine AniSkip-Daten.
+    let Some((slug, staffel, episode)) = episode_from_url(url) else {
+        return Ok(None);
+    };
+    let Some(mal_id) = aniskip::resolve_mal_id(client, &slug, staffel).await? else {
+        return Ok(None);
+    };
+    let intervals = skip_times(client, mal_id, episode).await?;
+    let times = AniSkipTimes::from_intervals(&intervals);
+    if times.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(times))
 }
 
 /// Leitet einen Medientitel aus der URL ab (wie der Dateiname, aber ohne `.mkv`).
