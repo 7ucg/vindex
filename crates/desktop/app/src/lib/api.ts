@@ -91,6 +91,14 @@ export function appSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("app_settings");
 }
 
+export function autostartEnabled(): Promise<boolean> {
+  return invoke<boolean>("autostart_enabled");
+}
+
+export function setAutostart(enabled: boolean): Promise<void> {
+  return invoke("set_autostart", { enabled });
+}
+
 export interface JobView {
   id: number;
   title: string;

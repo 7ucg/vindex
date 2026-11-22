@@ -1,5 +1,5 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
-import { appSettings, appInfo } from "../lib/api";
+import { appSettings, appInfo, autostartEnabled, setAutostart } from "../lib/api";
 import {
   applyTheme,
   getTheme,
@@ -36,6 +36,16 @@ export function Settings(): JSX.Element {
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
   const [density, setDensity] = createSignal<Density>(getDensity());
+  const [autostart, setAutostartSig] = createSignal(false);
+  autostartEnabled()
+    .then(setAutostartSig)
+    .catch(() => {});
+  const toggleAutostart = () => {
+    const next = !autostart();
+    setAutostart(next)
+      .then(() => setAutostartSig(next))
+      .catch(() => {});
+  };
 
   const pickTheme = (t: Theme) => {
     applyTheme(t);
@@ -99,6 +109,15 @@ export function Settings(): JSX.Element {
             </button>
           )}
         </For>
+      </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>System</h2>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <button class="chip" classList={{ on: autostart() }} onClick={toggleAutostart}>
+          {autostart() ? "★ Autostart an" : "☆ Beim Login starten"}
+        </button>
       </div>
 
       <Show when={settings()} fallback={<div class="spinner" />}>

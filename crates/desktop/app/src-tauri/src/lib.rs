@@ -413,6 +413,25 @@ fn reveal_library_item(
         .map_err(|e| e.to_string())
 }
 
+/// Ist der Autostart (Login) aktiviert?
+#[tauri::command]
+fn autostart_enabled(app: tauri::AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Autostart ein-/ausschalten.
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let m = app.autolaunch();
+    if enabled {
+        m.enable().map_err(|e| e.to_string())
+    } else {
+        m.disable().map_err(|e| e.to_string())
+    }
+}
+
 #[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
@@ -429,6 +448,37 @@ fn app_settings(state: State<'_, AppState>) -> SettingsDto {
         native_hls: s.native_hls,
         no_ffmpeg: s.no_ffmpeg,
     }
+}
+
+/// Tray-Icon mit Menü (Öffnen/Beenden) — Downloads laufen im Hintergrund weiter.
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let Some(icon) = app.default_window_icon().cloned() else {
+        return Ok(());
+    };
+    let show = MenuItem::with_id(app, "show", "Öffnen", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("vindex")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -452,7 +502,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
+            build_tray(app.handle())?;
+
             let backend = Backend::new().map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("Backend-Init fehlgeschlagen: {e}"))
             })?;
@@ -491,6 +547,8 @@ pub fn run() {
             open_library_item,
             local_media_url,
             reveal_library_item,
+            autostart_enabled,
+            set_autostart,
             app_settings
         ])
         .run(tauri::generate_context!())
