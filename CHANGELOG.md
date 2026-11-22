@@ -9,6 +9,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- CLI: „keep watching" — nach jedem Download wird pro Serie die zuletzt geladene Folge
+  gemerkt (`VINDEX_WATCH_STATE`-JSON), und `vindex download --continue <serien-url>` lädt
+  die nächste Folge (oder Staffel 1 / Episode 1, wenn nichts gemerkt).
 - API: persistenter Key-Store mit Scopes. Keys liegen als sha256-Hash (nie im Klartext) in
   einer JSON-Datei (`VINDEX_API_KEYS_FILE`); jeder Key hat einen Scope `read`/`write`/`admin`
   (GET braucht `read`, `POST /api/download` `write`, Admin deckt alles). Zu niedriger Scope

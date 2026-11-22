@@ -58,6 +58,9 @@ vindex download "https://filmo.to/movies/<slug>"
 # Mehrere Episoden aus einer Datei (eine URL pro Zeile, # = Kommentar)
 vindex download --batch episoden.txt --language "German Dub" --quality 1080p
 
+# Nächste Folge einer Serie (merkt sich den Fortschritt pro Serie)
+vindex download --continue "https://aniworld.to/anime/stream/<slug>"
+
 # Interaktives Menü
 vindex menu
 

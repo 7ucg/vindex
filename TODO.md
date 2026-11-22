@@ -41,8 +41,6 @@ die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und 
 
 ## Download & Wiedergabe
 
-- **„keep watching".** Fortsetzen ab der letzten Episode. (Batch-Download `--batch` ist
-  erledigt.)
 - **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) läuft nativ,
   das Remuxen nutzt aber noch ffmpeg. Ein eigener TS-Remuxer würde ffmpeg ersetzen; dazu
   AES-128-Entschlüsselung für verschlüsselte Playlists (fallen aktuell auf ffmpeg zurück).

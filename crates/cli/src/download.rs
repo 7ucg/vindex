@@ -7,7 +7,7 @@ use clap::Parser;
 use vindex_core::config::Settings;
 use vindex_core::download::{download_url, DownloadPrefs};
 use vindex_core::model::{Hoster, Language, Quality, BASE};
-use vindex_core::{http, naming, site};
+use vindex_core::{http, naming, site, watchstate};
 
 #[derive(Parser, Debug)]
 pub struct SearchArgs {
@@ -61,6 +61,12 @@ pub struct DownloadArgs {
     /// Zielverzeichnis (Default: Einstellung VINDEX_DOWNLOAD_PATH).
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
+    /// „keep watching": nächste Folge einer Serie laden. Erwartet eine Serien-
+    /// (oder Episoden-)URL; geladen wird die Folge nach der zuletzt gemerkten,
+    /// oder Staffel 1 / Episode 1, wenn für die Serie noch nichts gemerkt ist.
+    /// Schließt sich mit direkter URL und `--batch` aus.
+    #[arg(long = "continue", value_name = "SERIEN-URL")]
+    pub continue_url: Option<String>,
 }
 
 /// Aus Optionen und Einstellungen aufgelöste Download-Vorgaben. Der Dateiname
@@ -127,22 +133,48 @@ pub async fn run_download(args: DownloadArgs) -> anyhow::Result<()> {
     let client = http::browser_client()?;
     let resolved = resolve_prefs(&args, &settings)?;
 
-    match (&args.url, &args.batch) {
-        (Some(_), Some(_)) => {
-            anyhow::bail!("Bitte entweder eine URL ODER --batch angeben, nicht beides.")
-        }
-        (None, None) => {
-            anyhow::bail!("Keine URL angegeben. Bitte eine URL oder --batch <datei> nutzen.")
-        }
-        (Some(url), None) => {
-            let path = download_one(&client, &resolved, url).await?;
-            println!("Fertig: {}", path.display());
-            Ok(())
-        }
-        (None, Some(file)) => {
-            run_batch(&client, &resolved, file, settings.download_delay_secs).await
-        }
+    // Genau eine Quelle: direkte URL, --batch ODER --continue.
+    let modes =
+        args.url.is_some() as u8 + args.batch.is_some() as u8 + args.continue_url.is_some() as u8;
+    if modes > 1 {
+        anyhow::bail!("Bitte genau eine Quelle angeben: URL, --batch ODER --continue.");
     }
+
+    if let Some(url) = &args.url {
+        let path = download_one(&client, &resolved, url).await?;
+        println!("Fertig: {}", path.display());
+        Ok(())
+    } else if let Some(file) = &args.batch {
+        run_batch(&client, &resolved, file, settings.download_delay_secs).await
+    } else if let Some(series) = &args.continue_url {
+        run_continue(&client, &resolved, series).await
+    } else {
+        anyhow::bail!("Keine URL angegeben. Bitte eine URL, --batch <datei> oder --continue <serien-url> nutzen.")
+    }
+}
+
+/// „keep watching": lädt die Folge nach der zuletzt gemerkten (oder Staffel 1 /
+/// Episode 1, wenn nichts gemerkt). Die nächste URL wird aus Slug + (Staffel,
+/// Episode + 1) gebaut. Existiert die Folge nicht, meldet der Download das sauber
+/// als Fehler (kein Panic).
+async fn run_continue(
+    client: &reqwest::Client,
+    resolved: &ResolvedPrefs,
+    series_url: &str,
+) -> anyhow::Result<()> {
+    let slug = site::slug_from_url(series_url)
+        .ok_or_else(|| anyhow::anyhow!("Keine Serie in der URL erkannt: {series_url}"))?;
+    let (staffel, episode) = watchstate::load(&watchstate::default_path())
+        .next_after(&slug)
+        .unwrap_or((1, 1));
+    let url = watchstate::episode_url(series_url, staffel, episode)
+        .ok_or_else(|| anyhow::anyhow!("Konnte keine Episoden-URL für „{slug}\" bilden."))?;
+    println!("Weiter mit Staffel {staffel}, Episode {episode}: {url}");
+    let path = download_one(client, resolved, &url)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e} (existiert Staffel {staffel}, Episode {episode}?)"))?;
+    println!("Fertig: {}", path.display());
+    Ok(())
 }
 
 /// Lädt eine einzelne URL und meldet den Fortschritt. Fehler werden als
@@ -164,9 +196,30 @@ async fn download_one(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    download_url(client, url, &prefs, None)
+    let path = download_url(client, url, &prefs, None)
         .await
-        .map_err(|e| anyhow::anyhow!("Download fehlgeschlagen: {e}"))
+        .map_err(|e| anyhow::anyhow!("Download fehlgeschlagen: {e}"))?;
+    record_watch_progress(url);
+    Ok(path)
+}
+
+/// Aktualisiert nach erfolgreichem Episoden-Download den Watch-State (Slug +
+/// Staffel + Episode aus der URL). Bewusst hier in der CLI statt in `core::download`:
+/// der Store ist eine nutzerseitige Datei (Pfad in der Nutzer-Config), und der
+/// `--continue`-Workflow lebt ohnehin in der CLI — so bleibt die Download-Engine
+/// eine reine Library ohne Seiteneffekt auf eine Config-Datei.
+///
+/// Best-Effort: Film-URLs (kein Serien-Slug/Episode) und Schreibfehler werden still
+/// übergangen, damit ein geglückter Download nicht an der Zustandsdatei scheitert.
+fn record_watch_progress(url: &str) {
+    if let Some((slug, staffel, episode)) = watchstate::episode_from_url(url) {
+        let path = watchstate::default_path();
+        let mut state = watchstate::load(&path);
+        state.record(&slug, staffel, episode);
+        if let Err(e) = watchstate::save(&path, &state) {
+            eprintln!("Hinweis: Watch-State konnte nicht gespeichert werden: {e}");
+        }
+    }
 }
 
 /// Lädt alle URLs aus einer Episodendatei nacheinander. Ein Fehler bei einer
