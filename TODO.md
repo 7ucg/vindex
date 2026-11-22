@@ -1,91 +1,69 @@
 # TODO
 
 Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe stehen in
-[ARCHITECTURE.md](ARCHITECTURE.md); erledigte Punkte wandern ins
-[CHANGELOG.md](CHANGELOG.md).
+[ARCHITECTURE.md](ARCHITECTURE.md); erledigte Punkte stehen im [CHANGELOG.md](CHANGELOG.md).
 
-## Als Nächstes
+## Live-Verifikation (braucht echte Portale / Cloudflare)
 
-- **serienstream.to-Scraper.** Die Seite wurde umgebaut und weicht von aniworld.to ab
-  (live analysiert, Fixture in `dev-fixtures/serienstream-got-s1e1.html`):
-  - Pfad `/serie/<slug>/staffel-X/episode-Y`, 301 von `/serie/stream/…` auf
-    `http://…/serie/…`.
-  - Hoster pro Element über `data-provider-name` (Name), `data-link-id` (Id) und
-    `data-play-url="/r?t=<token>"`; Sprache über `data-language-id` (1=Deutsch,
-    2=Englisch) und `data-language-label`.
-  - `<token>` ist base64-JSON `{iv,value,mac,tag}` = Laravel-`Crypt` (AES-256-CBC+HMAC).
-    Nicht clientseitig entschlüsseln: `GET https://serienstream.to/r?t=<token>` folgt
-    serverseitig zum Hoster-Embed (wie aniworlds `/redirect/N`), den dann der normale
-    Hoster-Resolver übernimmt.
-  - Blocker: häufige Cloudflare-Captchas → braucht zusätzlich TLS-Impersonate/Browser
-    (Stufe 2/3). Der Parser lässt sich aber schon gegen das Fixture bauen und testen.
-  - s.to ist tot (Mirror s.to → serienstream.to bleibt sinnvoll).
-- **Fehlende Hoster-Resolver.** Streamtape, Luluvdo und LoadX haben noch keinen Extraktor.
-  Keine fertige Vorlage; Baumuster (siehe auch die Referenz unter `Source-Third-projects/`):
-  - **Streamtape** wie Doodstream: Embed-HTML holen, `id="robotlink"`/`ideoolink`-innerHTML
-    + nachfolgenden `substring`-Teil zusammensetzen, `https:` davor, `&stream=1` anhängen.
-  - **Luluvdo** wie Filemoon: `/e/<code>` oder `/d/<code>` → packed JS → `unpack_js`
-    (`hoster::common`) → `sources:[{file:"…m3u8"}]`; neuere Varianten über JSON-API (AES-GCM).
-  - **LoadX** wie Vidstream: XHR-`getVideo`/`getSources` mit `X-Requested-With`, Antwort
-    `m3u8`/`securedLink`, ggf. AES-CBC.
-  Exakte Keys/Regexe müssen gegen Live-Embeds bestimmt werden — Embeds mit `dev/capture.sh`
-  sichern, sobald ein Portal diese Hoster anbietet.
+Diese Teile sind implementiert und (gegen Fixtures/netzfrei) getestet, aber NICHT gegen
+die echten Seiten bestätigt — das geht nur in einer Umgebung mit Zugriff und ggf. mit
+`VINDEX_IMPERSONATE=1`:
+
+- **serienstream.to-Parser.** Das neue Markup (`data-provider-name`/`data-play-url`
+  `/r?t=<token>`) wird geparst. Offen: ob der Abruf durch Cloudflare kommt und der
+  `/r?t=`-Redirect real zum Hoster führt.
+- **Resolver Streamtape / Luluvdo / LoadX.** Nach dokumentiertem Baumuster gebaut, nur
+  synthetisch getestet. Exakte Keys/Regexe gegen echte Embeds nachziehen (Embeds mit
+  `dev/capture.sh` sichern, sobald ein Portal sie anbietet). LoadX ist am unsichersten.
+- **TLS-Impersonate (Stufe 2).** `VINDEX_IMPERSONATE=1` gegen die echten CF-Seiten testen;
+  prüfen, ob der Chrome149-Fingerprint durchkommt.
 
 ## Netzwerk & Anti-Bot
 
-- **TLS-Impersonate (Stufe 2).** Umgesetzt (opt-in, `VINDEX_IMPERSONATE`, Default aus):
-  bei Cloudflare-Verdacht wird der Abruf einmalig über `wreq` mit Chrome-Fingerprint
-  wiederholt (`core::http::get_text_impersonate`, Hook in `site::fetch_text` und
-  `serienstream::provider_links`). Offen: gegen ein echtes Cloudflare-Ziel verifizieren
-  (bisher nur Bau + netzfreie Logik-/SSRF-Tests).
 - **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht
-  reicht.
+  reicht (echter Browser, z. B. chromiumoxide/headless).
 - **Proxy-Rotation** für geratelimitete CDNs.
 
 ## Hoster-Pflege
 
-- **Filemoon Byse-API.** Moderner Pfad mit AES-256-GCM; aktuell nur der Legacy-packed-JS-
-  Weg. Muster liegt in der Referenz (`extractors/provider/filemoon.py`).
+- **Filemoon Byse-API (AES-256-GCM).** Moderner `/api/videos/<code>`-Pfad; aktuell nur der
+  Legacy-packed-JS-Weg. Decrypt-Logik als reine, testbare Funktion; Legacy-Fallback behalten.
+  Muster: `Source-Third-projects/.../extractors/provider/filemoon.py`.
 
 ## API
 
-- **Persistenter Key-Store.** Statt statischer Keys aus der Umgebung: Keys mit sha256
-  speichern, Scopes (read/write/admin) an Methode und Route binden, Login-/Request-
-  Throttle mit `429` und `Retry-After`.
-- **Weitere Flächen.** Library, Auto-Sync, persistenter Key-Store mit Scopes.
-- **Produktions-Rate-Limit.** Das eingebaute Limit ist ein Best-Effort-Schutz im
-  Prozessspeicher. Für einen öffentlichen Betrieb gehört ein echtes Edge-/Reverse-Proxy-
-  Limit davor (bzw. ein verteilter Limiter mit Trusted-Proxy-`X-Forwarded-For`); der
-  In-Memory-Teil bleibt nur Defense-in-Depth.
+- **Persistenter Key-Store + Scopes.** Statt statischer Keys aus der Umgebung: Keys mit
+  sha256 speichern (sled/sqlite), Scopes (read/write/admin) an Methode+Route binden,
+  Login-Throttle (`429` + `Retry-After`).
+- **Weitere Flächen.** Library, Auto-Sync. (OpenAPI unter `/openapi.json` und das
+  Request-Rate-Limit sind erledigt.)
+- **Produktions-Rate-Limit.** Das eingebaute Limit ist Best-Effort im Prozessspeicher; für
+  öffentlichen Betrieb gehört ein Edge-/Reverse-Proxy-Limit davor (verteilter Limiter mit
+  Trusted-Proxy-`X-Forwarded-For`). Der In-Memory-Teil bleibt Defense-in-Depth.
 
 ## Download & Wiedergabe
 
-- **Batch-Download** über eine Episodenliste und ein „keep watching".
-- **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) läuft
-  nativ, das Remuxen der zusammengesetzten Datei nutzt aber noch ffmpeg. Ein eigener
-  TS-Remuxer würde ffmpeg ganz ersetzen; dazu AES-128-Entschlüsselung für verschlüsselte
-  Playlists (fallen aktuell auf ffmpeg zurück).
-- **Watch** via mpv/IINA inkl. AniSkip, dazu Syncplay und Anime4K.
-
-## Entwicklung, Tests & Methoden
-
-- **Fixture-basierte Scraper-/Resolver-Tests.** Reine Parse-Funktionen gegen gesicherte
-  HTML-Beispiele testen (synthetische, token-freie Fixtures im Repo; echte Live-Seiten
-  nur lokal in `dev-fixtures/`, gitignored). Deckt die Scraper ab, ohne Netz und ohne
-  Portal-Inhalte zu veröffentlichen.
-- **Capture-Methode** (`dev/capture.sh <url> <datei>`): sichert eine Live-Seite über
-  Cloudflare-DoH (1.1.1.1) mit Browser-UA nach `dev-fixtures/`. Grundlage, um neue
-  Hoster-/Portal-Varianten offline zu analysieren.
-- **Integrationstests gegen den Daemon** (axum-`oneshot`): Queue-Limit (429), Gesamt-Cap
-  und Statusübergänge sind noch ungetestet.
-- **Behobene Beobachtungen bewerten:** Suche ist reiner Substring-Abgleich (Punkt zählt);
-  `--quality` deckelt Single-MP4-Hoster nicht nach oben; `naming::clean_title` schreibt
-  klein. Jeweils entscheiden, ob gewünscht.
+- **„keep watching".** Fortsetzen ab der letzten Episode. (Batch-Download `--batch` ist
+  erledigt.)
+- **Vollständig ffmpeg-freies HLS.** Der Segment-Download (`VINDEX_NATIVE_HLS`) läuft nativ,
+  das Remuxen nutzt aber noch ffmpeg. Ein eigener TS-Remuxer würde ffmpeg ersetzen; dazu
+  AES-128-Entschlüsselung für verschlüsselte Playlists (fallen aktuell auf ffmpeg zurück).
+- **Watch** via mpv/IINA inkl. AniSkip-Wiring, dazu Syncplay und Anime4K.
 
 ## Desktop
 
-- **Facade vervollständigen.** `Backend` reicht bisher nur `search` und `providers`
-  durch. Vor einem GUI fehlen: Download (`download_episode`/`download_url` + `DownloadPrefs`)
-  mit Fortschritts-Reporting, Zugriff auf `config::Settings`, und die Hoster→Stream-Auflösung.
-  Dazu mindestens ein headless-Test (die Doku in `lib.rs` behauptet „testbar", 0 Tests).
-- **Fenster-Frontend** (tauri oder egui) auf der vervollständigten `core`-Facade.
+- **Fenster-Frontend** (tauri oder egui) auf der `core`-Facade. Die Facade reicht bereits
+  Suche, Provider, Download, Config und Hoster-Auflösung durch; fürs GUI fehlt noch
+  Fortschritts-Reporting (Progress-Kanal) und das Fenster selbst.
+
+## Tests & Produkt-Entscheidungen
+
+- **Mehr Scraper-Fixtures.** aniworld-Parser (`parse_episodes`) und weitere Hoster gegen
+  synthetische Fixtures absichern; Daemon-Integrationstests für Queue-Cap (`429`) ergänzen.
+- **Offene Entscheidungen** (Default: so lassen): Suche ist reiner Substring (Punkt zählt);
+  `--quality` deckelt Single-MP4-Hoster nicht nach oben; `naming::clean_title` schreibt klein.
+
+## Entwicklungs-Werkzeuge
+
+- `dev/capture.sh <url> <datei>` sichert Live-Seiten über DoH (1.1.1.1) nach `dev-fixtures/`
+  (gitignored) — Grundlage, um neue Hoster-/Portal-Varianten offline zu analysieren.
