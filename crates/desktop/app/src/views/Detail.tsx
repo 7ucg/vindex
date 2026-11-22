@@ -46,17 +46,53 @@ export function Detail(): JSX.Element {
   const [busy, setBusy] = createSignal<string | null>(null);
   const [playErr, setPlayErr] = createSignal<string | null>(null);
 
-  const load = async (e: Episode) => {
+  const [bulk, setBulk] = createSignal(false);
+
+  const enqueue = (e: Episode) => {
     const base =
       e.season === 0
         ? `${sanitize(sel.title)} - Film ${pad(e.index_in_season)}`
         : `${sanitize(sel.title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
     const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
+    return startDownload(e.url, base, title);
+  };
+
+  const load = async (e: Episode) => {
     try {
-      await startDownload(e.url, base, title);
+      await enqueue(e);
       setView("downloads");
     } catch (err) {
       setPlayErr(String(err));
+    }
+  };
+
+  // Ganze Staffel laden (die bereits geladene Folgenliste).
+  const loadSeason = async () => {
+    const list = eps() ?? [];
+    setBulk(true);
+    try {
+      for (const e of list) await enqueue(e);
+      setView("downloads");
+    } catch (err) {
+      setPlayErr(String(err));
+    } finally {
+      setBulk(false);
+    }
+  };
+
+  // Komplett laden: alle Staffeln, jede Folgenliste frisch holen.
+  const loadAll = async () => {
+    setBulk(true);
+    try {
+      for (const s of seasonList() ?? []) {
+        const list = await episodes(sel.url, s);
+        for (const e of list) await enqueue(e);
+      }
+      setView("downloads");
+    } catch (err) {
+      setPlayErr(String(err));
+    } finally {
+      setBulk(false);
     }
   };
 
@@ -113,6 +149,14 @@ export function Detail(): JSX.Element {
               </button>
             )}
           </For>
+          <div style={{ "margin-left": "auto", display: "flex", gap: "8px" }}>
+            <button class="chip" disabled={bulk()} onClick={loadSeason}>
+              {bulk() ? "reiht ein …" : "Staffel laden"}
+            </button>
+            <button class="chip" disabled={bulk()} onClick={loadAll}>
+              Alles laden
+            </button>
+          </div>
         </div>
       </Show>
 

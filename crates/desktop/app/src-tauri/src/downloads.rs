@@ -11,8 +11,12 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Semaphore;
 use vindex_desktop::core;
 use vindex_desktop::{prefs_from_settings, CancellationToken, DownloadOverrides, Progress};
+
+/// Wie viele Downloads gleichzeitig laufen dürfen (der Rest bleibt in der Warteschlange).
+const MAX_CONCURRENT: usize = 3;
 
 /// Frontend-Sicht auf einen Job (serialisierbar, geht per Event raus).
 #[derive(Clone, Serialize)]
@@ -32,10 +36,20 @@ struct Job {
     cancel: CancellationToken,
 }
 
-#[derive(Default)]
 pub struct Downloads {
     jobs: Mutex<HashMap<u64, Job>>,
     next: AtomicU64,
+    sem: Arc<Semaphore>,
+}
+
+impl Default for Downloads {
+    fn default() -> Self {
+        Downloads {
+            jobs: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(0),
+            sem: Arc::new(Semaphore::new(MAX_CONCURRENT)),
+        }
+    }
 }
 
 impl Downloads {
@@ -91,7 +105,18 @@ pub fn start(
 
     let prefs = prefs_from_settings(&settings, file_name, &DownloadOverrides::default());
 
+    let sem = downloads.sem.clone();
+
     tokio::spawn(async move {
+        // Auf einen freien Slot warten — bis dahin bleibt der Job „queued".
+        let _permit = sem.acquire_owned().await.ok();
+        if cancel.is_cancelled() {
+            if let Some(u) = downloads.update(id, |v| v.status = "cancelled".into()) {
+                emit(&app, &u);
+            }
+            return;
+        }
+
         // Sink: Fortschritt in die Job-Sicht schreiben und als Event rausschicken.
         let app_sink = app.clone();
         let dl_sink = downloads.clone();
