@@ -109,6 +109,10 @@ export function cancelDownload(id: number): Promise<void> {
   return invoke("cancel_download", { id });
 }
 
+export function retryDownload(id: number): Promise<number | null> {
+  return invoke<number | null>("retry_download", { id });
+}
+
 export function listDownloads(): Promise<JobView[]> {
   return invoke<JobView[]>("list_downloads");
 }

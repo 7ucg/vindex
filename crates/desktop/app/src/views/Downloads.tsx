@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, For, Show, type JSX } from "solid-js"
 import {
   listDownloads,
   cancelDownload,
+  retryDownload,
   onDownloadUpdate,
   type JobView,
 } from "../lib/api";
@@ -37,6 +38,9 @@ function barColor(status: string): string {
 
 export function Downloads(): JSX.Element {
   const [jobs, setJobs] = createSignal<JobView[]>([]);
+  // Tempo (Bytes/s) und Rest-Zeit (s) je Job, aus Byte-Deltas zwischen Events.
+  const [rate, setRate] = createSignal<Record<number, { speed: number; eta: number }>>({});
+  const prev = new Map<number, { bytes: number; ts: number }>();
   let unlisten: (() => void) | undefined;
 
   onMount(async () => {
@@ -46,16 +50,47 @@ export function Downloads(): JSX.Element {
       /* leer */
     }
     unlisten = await onDownloadUpdate((job) => {
-      setJobs((prev) => {
-        const i = prev.findIndex((j) => j.id === job.id);
-        if (i === -1) return [...prev, job];
-        const copy = prev.slice();
+      const now = Date.now();
+      const p = prev.get(job.id);
+      if (p && job.bytes > p.bytes && now > p.ts) {
+        const speed = (job.bytes - p.bytes) / ((now - p.ts) / 1000);
+        let eta = 0;
+        if (job.done > 0 && job.total > 0 && speed > 0) {
+          const estTotal = (job.bytes / job.done) * job.total;
+          eta = Math.max(0, (estTotal - job.bytes) / speed);
+        }
+        setRate((r) => ({ ...r, [job.id]: { speed, eta } }));
+      }
+      prev.set(job.id, { bytes: job.bytes, ts: now });
+
+      setJobs((cur) => {
+        const i = cur.findIndex((j) => j.id === job.id);
+        if (i === -1) return [...cur, job];
+        const copy = cur.slice();
         copy[i] = job;
         return copy;
       });
     });
   });
   onCleanup(() => unlisten?.());
+
+  const speedOf = (id: number): string => {
+    const r = rate()[id];
+    if (!r || !r.speed) return "";
+    const m = r.speed / (1024 * 1024);
+    return m >= 1 ? `${m.toFixed(1)} MB/s` : `${(r.speed / 1024).toFixed(0)} KB/s`;
+  };
+  const etaOf = (id: number): string => {
+    const r = rate()[id];
+    if (!r || !r.eta || !isFinite(r.eta)) return "";
+    const s = Math.round(r.eta);
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return mm > 0 ? `${mm}:${ss.toString().padStart(2, "0")}` : `${ss}s`;
+  };
+  const retry = (id: number) => {
+    void retryDownload(id).catch(() => {});
+  };
 
   const active = () => jobs().filter((j) => !["done", "error", "cancelled"].includes(j.status));
 
@@ -98,6 +133,12 @@ export function Downloads(): JSX.Element {
                       {" "}· {j.done}/{j.total}
                     </Show>
                     <Show when={j.bytes > 0}> · {mb(j.bytes)}</Show>
+                    <Show when={j.status === "running" && speedOf(j.id)}>
+                      {" "}· {speedOf(j.id)}
+                    </Show>
+                    <Show when={j.status === "running" && etaOf(j.id)}>
+                      {" "}· noch {etaOf(j.id)}
+                    </Show>
                     <Show when={j.error}> · {j.error}</Show>
                   </div>
                   <div class="track">
@@ -108,6 +149,11 @@ export function Downloads(): JSX.Element {
                   <Show when={!["done", "error", "cancelled"].includes(j.status)}>
                     <button class="chip" onClick={() => cancelDownload(j.id)}>
                       Abbrechen
+                    </button>
+                  </Show>
+                  <Show when={["error", "cancelled"].includes(j.status)}>
+                    <button class="chip" onClick={() => retry(j.id)}>
+                      Erneut
                     </button>
                   </Show>
                 </div>

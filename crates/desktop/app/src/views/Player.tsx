@@ -57,8 +57,13 @@ export function Player(props: { playback: Playback }): JSX.Element {
     c.width = v.videoWidth;
     c.height = v.videoHeight;
     c.getContext("2d")?.drawImage(v, 0, 0);
+    const safe =
+      props.playback.title
+        .replace(/[^\p{L}\p{N} ._-]/gu, "_")
+        .replace(/^\.+/, "")
+        .slice(0, 100) || "screenshot";
     const a = document.createElement("a");
-    a.download = `${props.playback.title}.png`;
+    a.download = `${safe}.png`;
     a.href = c.toDataURL("image/png");
     a.click();
   };

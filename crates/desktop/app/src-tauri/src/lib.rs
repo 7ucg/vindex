@@ -267,6 +267,21 @@ fn cancel_download(id: u64, state: State<'_, AppState>) {
     state.downloads.cancel(id);
 }
 
+/// Lädt einen (fehlgeschlagenen/abgebrochenen) Auftrag mit denselben Parametern erneut.
+#[tauri::command]
+fn retry_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) -> Option<u64> {
+    let (url, file_name, title) = state.downloads.params(id)?;
+    let settings = state.backend.settings();
+    Some(downloads::start(
+        state.downloads.clone(),
+        app,
+        url,
+        file_name,
+        title,
+        settings,
+    ))
+}
+
 #[tauri::command]
 fn list_downloads(state: State<'_, AppState>) -> Vec<downloads::JobView> {
     state.downloads.list()
@@ -469,6 +484,7 @@ pub fn run() {
             aniskip,
             start_download,
             cancel_download,
+            retry_download,
             list_downloads,
             library,
             delete_library_item,

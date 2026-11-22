@@ -34,6 +34,10 @@ pub struct JobView {
 struct Job {
     view: JobView,
     cancel: CancellationToken,
+    /// Original-Parameter, um den Auftrag erneut zu laden (Retry).
+    url: String,
+    file_name: String,
+    title: String,
 }
 
 pub struct Downloads {
@@ -66,6 +70,13 @@ impl Downloads {
         }
     }
 
+    /// Original-Parameter eines Jobs (für Retry): (url, file_name, title).
+    pub fn params(&self, id: u64) -> Option<(String, String, String)> {
+        let g = self.jobs.lock().unwrap();
+        let j = g.get(&id)?;
+        Some((j.url.clone(), j.file_name.clone(), j.title.clone()))
+    }
+
     fn update(&self, id: u64, f: impl FnOnce(&mut JobView)) -> Option<JobView> {
         let mut g = self.jobs.lock().unwrap();
         let j = g.get_mut(&id)?;
@@ -87,7 +98,7 @@ pub fn start(
     let cancel = CancellationToken::new();
     let view = JobView {
         id,
-        title,
+        title: title.clone(),
         status: "queued".into(),
         done: 0,
         total: 0,
@@ -99,6 +110,9 @@ pub fn start(
         Job {
             view: view.clone(),
             cancel: cancel.clone(),
+            url: url.clone(),
+            file_name: file_name.clone(),
+            title,
         },
     );
     emit(&app, &view);
