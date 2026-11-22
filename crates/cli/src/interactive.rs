@@ -112,6 +112,7 @@ pub async fn run() -> anyhow::Result<()> {
         min_quality: settings.min_quality,
         out_dir: settings.download_path.clone(),
         file_name: file_name.clone(),
+        native_hls: settings.native_hls,
     };
 
     println!("Lade „{file_name}\" ({}) ...", language.as_str());

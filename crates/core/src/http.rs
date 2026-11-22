@@ -131,11 +131,27 @@ fn safe_redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
+/// True, wenn der Host von *url* ein IP-Literal aus einem gesperrten Bereich ist.
+/// Für Hostnamen (die erst aufgelöst werden) greift stattdessen der DNS-Resolver.
+pub(crate) fn host_is_forbidden_ip_literal(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => is_forbidden_ip(ip),
+        Err(_) => false,
+    }
+}
+
 /// True für IP-Ziele, auf die ein Redirect nicht zeigen darf (loopback, privat,
 /// link-local, unspecified, CGNAT, unique-local u. a.). IPv6 wird vor der Prüfung
 /// auf eingebettete IPv4 normalisiert (mapped, 6to4, NAT64), damit die Sperre
 /// nicht über eine andere Schreibweise derselben Adresse umgangen wird.
-fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
+pub(crate) fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
     use std::net::{IpAddr, Ipv4Addr};
     match ip {
         IpAddr::V4(v4) => {

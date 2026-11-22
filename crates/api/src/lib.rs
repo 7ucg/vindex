@@ -275,6 +275,7 @@ async fn download(
             min_quality: settings.min_quality,
             out_dir: settings.download_path.clone(),
             file_name,
+            native_hls: settings.native_hls,
         };
         match core::download::download_url(&worker_state.client, &url, &prefs, None).await {
             Ok(path) => {
