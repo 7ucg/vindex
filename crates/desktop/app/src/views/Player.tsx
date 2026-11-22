@@ -27,6 +27,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
   const [goingNext, setGoingNext] = createSignal(false);
   const [skips, setSkips] = createSignal<SkipInterval[]>([]);
   const [skipTarget, setSkipTarget] = createSignal<{ end: number; label: string } | null>(null);
+  const [rate, setRate] = createSignal(1);
+  const [loopA, setLoopA] = createSignal<number | null>(null);
+  const [loopB, setLoopB] = createSignal<number | null>(null);
   let sleepHandle: number | undefined;
 
   const doSkip = () => {
@@ -34,6 +37,49 @@ export function Player(props: { playback: Playback }): JSX.Element {
     if (t && video) {
       video.currentTime = t.end + 0.1;
       setSkipTarget(null);
+    }
+  };
+
+  const setSpeed = (r: number) => {
+    const nr = Math.min(3, Math.max(0.25, Math.round(r * 100) / 100));
+    setRate(nr);
+    if (video) video.playbackRate = nr;
+  };
+  const frameStep = (dir: number) => {
+    if (!video) return;
+    video.pause();
+    video.currentTime += dir / 30;
+  };
+  const screenshot = () => {
+    const v = video;
+    if (!v || !v.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext("2d")?.drawImage(v, 0, 0);
+    const a = document.createElement("a");
+    a.download = `${props.playback.title}.png`;
+    a.href = c.toDataURL("image/png");
+    a.click();
+  };
+  const togglePip = async () => {
+    const v = video as (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> }) | undefined;
+    if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await v.requestPictureInPicture?.();
+    } catch {
+      /* PiP evtl. nicht verfügbar */
+    }
+  };
+  // A/B-Loop: erst A setzen, dann B; nochmal = löschen.
+  const markLoop = () => {
+    if (!video) return;
+    if (loopA() === null) setLoopA(video.currentTime);
+    else if (loopB() === null) setLoopB(Math.max(video.currentTime, loopA()! + 0.1));
+    else {
+      setLoopA(null);
+      setLoopB(null);
     }
   };
 
@@ -164,6 +210,24 @@ export function Player(props: { playback: Playback }): JSX.Element {
       case "s":
         doSkip();
         break;
+      case "p":
+        void togglePip();
+        break;
+      case "[":
+        setSpeed(rate() - 0.25);
+        break;
+      case "]":
+        setSpeed(rate() + 0.25);
+        break;
+      case ",":
+        frameStep(-1);
+        break;
+      case ".":
+        frameStep(1);
+        break;
+      case "a":
+        markLoop();
+        break;
       case "Escape":
         closePlayer();
         break;
@@ -192,6 +256,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
       const t = el.currentTime;
       const hit = skips().find((s) => t >= s.start && t < s.end - 0.3);
       setSkipTarget(hit ? { end: hit.end, label: hit.kind === "ed" ? "Outro" : "Intro" } : null);
+      const a = loopA();
+      const b = loopB();
+      if (a !== null && b !== null && t >= b) el.currentTime = a;
       saveNow(el);
     });
     // An die zuletzt gesehene Stelle springen (wenn sinnvoll).
@@ -267,6 +334,23 @@ export function Player(props: { playback: Playback }): JSX.Element {
         <span class="player-title">{props.playback.title}</span>
 
         <div class="player-tools">
+          <button class="chip" onClick={() => setSpeed(rate() - 0.25)}>−</button>
+          <span class="sleep-label">{rate().toFixed(2)}×</span>
+          <button class="chip" onClick={() => setSpeed(rate() + 0.25)}>+</button>
+          <button
+            class="chip"
+            classList={{ on: loopA() !== null }}
+            onClick={markLoop}
+            title="A-B-Loop (A setzen, B setzen, löschen)"
+          >
+            A-B
+          </button>
+          <button class="chip" onClick={() => void togglePip()} title="Bild-in-Bild">
+            PiP
+          </button>
+          <button class="chip" onClick={screenshot} title="Screenshot">
+            Foto
+          </button>
           <Show when={hasNext()}>
             <button class="chip" disabled={goingNext()} onClick={() => void next()}>
               {goingNext() ? "lädt …" : "Nächste ›"}
@@ -318,8 +402,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
       </Show>
 
       <div class="player-hint">
-        Space Play · ←/→ 5s · J/L 10s · ↑/↓ Lautstärke · M stumm · F Vollbild · S skip · N nächste
-        · 0–9 springen · Esc schließen
+        Space Play · ←/→ 5s · J/L 10s · ↑/↓ Lautstärke · M stumm · F Vollbild · P PiP · S skip ·
+        N nächste · [ ] Tempo · , . Frame · A A-B-Loop · 0–9 springen · Esc schließen
       </div>
     </div>
   );
