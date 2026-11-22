@@ -217,20 +217,21 @@ fn parse_provider_links_serienstream(doc: &Html, base: &str) -> ProviderLinks {
 
 /// Mappt die serienstream.to-Sprachkennung auf [`Language`].
 ///
-/// serienstream.to führt westliche Serien, keine Anime: `data-language-id="1"`
-/// („Deutsch") ist die deutsche Synchro → [`Language::GermanDub`], `="2"`
-/// („Englisch") die englische Originaltonspur → [`Language::EnglishDub`] (die
-/// `…Sub`-Varianten tragen anime-spezifische Anzeigenamen und passen hier nicht).
+/// Gegen die Live-Seite verifiziert: `data-language-id="1"` („Deutsch") → deutsche
+/// Synchro [`Language::GermanDub`], `="2"` („Englisch") → [`Language::EnglishDub`],
+/// `="3"` („Ger-Sub") → deutscher Untertitel [`Language::GermanSub`].
 /// `data-language-id` hat Vorrang; fehlt sie, entscheidet das `data-language-label`.
 fn language_from_serienstream(id: Option<&str>, label: Option<&str>) -> Option<Language> {
     match id.map(str::trim) {
         Some("1") => return Some(Language::GermanDub),
         Some("2") => return Some(Language::EnglishDub),
+        Some("3") => return Some(Language::GermanSub),
         _ => {}
     }
     match label.map(|l| l.trim().to_ascii_lowercase()).as_deref() {
         Some("deutsch") => Some(Language::GermanDub),
         Some("englisch") => Some(Language::EnglishDub),
+        Some("ger-sub") | Some("gersub") => Some(Language::GermanSub),
         _ => None,
     }
 }
@@ -351,6 +352,29 @@ mod tests {
             </div>
         </div>
     </div>"#;
+
+    #[test]
+    fn serienstream_sprache_id_und_label() {
+        // Gegen die Live-Seite verifiziert (black-clover s2e8): 1=Deutsch, 2=Englisch, 3=Ger-Sub.
+        assert_eq!(
+            language_from_serienstream(Some("1"), Some("Deutsch")),
+            Some(Language::GermanDub)
+        );
+        assert_eq!(
+            language_from_serienstream(Some("2"), Some("Englisch")),
+            Some(Language::EnglishDub)
+        );
+        assert_eq!(
+            language_from_serienstream(Some("3"), Some("Ger-Sub")),
+            Some(Language::GermanSub)
+        );
+        // Ohne id entscheidet das Label.
+        assert_eq!(
+            language_from_serienstream(None, Some("Ger-Sub")),
+            Some(Language::GermanSub)
+        );
+        assert_eq!(language_from_serienstream(Some("9"), Some("Klingon")), None);
+    }
 
     #[test]
     fn serienstream_hoster_links_nach_sprache_gruppiert() {
