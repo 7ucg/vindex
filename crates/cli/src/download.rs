@@ -221,7 +221,7 @@ async fn download_one(
 
 /// Baut einen Fortschritts-Sink, der eine einzeilige Statuszeile ausgibt
 /// (Segment-Zähler überschreibt sich per `\r`; Phasen stehen in eigenen Zeilen).
-fn cli_progress_sink() -> vindex_core::download::ProgressSink {
+pub(crate) fn cli_progress_sink() -> vindex_core::download::ProgressSink {
     use std::io::Write as _;
     use vindex_core::download::Progress;
     std::sync::Arc::new(|event: Progress| {
