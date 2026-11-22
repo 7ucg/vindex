@@ -150,21 +150,57 @@ pub fn save(path: &Path, state: &WatchState) -> std::io::Result<()> {
             }
         }
     }
-    // Atomar schreiben: erst in eine temporäre Datei (0600), dann umbenennen.
-    let tmp = path.with_extension("tmp");
-    {
+    // Atomar und ohne Symlink-Falle: in eine frisch & exklusiv angelegte Temp-Datei
+    // schreiben (`create_new`/O_EXCL folgt keinem vorhandenen Symlink), Rechte am
+    // Handle erzwingen, syncen, dann umbenennen. Temp-Name ist nicht vorhersagbar.
+    let data = state.to_json();
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let base = path.file_name().and_then(|n| n.to_str()).unwrap_or("watch");
+    for attempt in 0..8u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(attempt as u128);
+        let name = format!("{base}.{}.{nanos}.tmp", std::process::id());
+        let tmp = match dir {
+            Some(d) => d.join(&name),
+            None => PathBuf::from(&name),
+        };
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(state.to_json().as_bytes())?;
-        f.flush()?;
+        let mut f = match opts.open(&tmp) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
+        if let Err(e) = f.write_all(data.as_bytes()).and_then(|_| f.sync_all()) {
+            drop(f);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        drop(f);
+        return match std::fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        };
     }
-    std::fs::rename(&tmp, path)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "Temp-Datei für Watch-State konnte nicht angelegt werden",
+    ))
 }
 
 #[cfg(test)]

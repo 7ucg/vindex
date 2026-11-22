@@ -30,7 +30,20 @@ pub fn next_user_agent() -> &'static str {
 
 static PROXY_CURSOR: AtomicUsize = AtomicUsize::new(0);
 
-/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Leer/ungesetzt → kein Proxy.
+/// True, wenn *entry* eine brauchbare Proxy-URL ist: bekanntes Schema und der Host
+/// (falls IP-Literal) nicht aus einem gesperrten Bereich.
+fn proxy_entry_ok(entry: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(entry) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
+        return false;
+    }
+    !host_is_forbidden_ip_literal(entry)
+}
+
+/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge (falsches
+/// Schema oder gesperrtes IP-Literal) werden verworfen; leer/ungesetzt → kein Proxy.
 fn proxy_pool() -> &'static [String] {
     static POOL: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -39,7 +52,7 @@ fn proxy_pool() -> &'static [String] {
             .map(|v| {
                 v.split(',')
                     .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.is_empty() && proxy_entry_ok(s))
                     .collect()
             })
             .unwrap_or_default()
@@ -484,6 +497,15 @@ pub async fn get_text_impersonate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_entry_validierung() {
+        assert!(proxy_entry_ok("http://proxy.example:8080"));
+        assert!(proxy_entry_ok("socks5://1.1.1.1:1080"));
+        assert!(!proxy_entry_ok("ftp://proxy:21")); // falsches Schema
+        assert!(!proxy_entry_ok("http://127.0.0.1:8080")); // gesperrtes IP-Literal
+        assert!(!proxy_entry_ok("kein url"));
+    }
 
     #[test]
     fn proxy_rotation_round_robin() {
