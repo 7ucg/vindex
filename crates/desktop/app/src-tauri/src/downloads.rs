@@ -165,6 +165,7 @@ pub fn start(
             Ok(_path) => {
                 if let Some(u) = downloads.update(id, |v| v.status = "done".into()) {
                     emit(&app, &u);
+                    notify_done(&app, &u.title);
                 }
             }
             Err(e) => {
@@ -213,4 +214,15 @@ fn finish_err(d: &Arc<Downloads>, app: &AppHandle, id: u64, msg: String) {
 
 fn emit(app: &AppHandle, v: &JobView) {
     let _ = app.emit("download:update", v);
+}
+
+/// System-Benachrichtigung bei fertigem Download.
+fn notify_done(app: &AppHandle, title: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title("Download fertig")
+        .body(title)
+        .show();
 }
