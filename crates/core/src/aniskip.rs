@@ -91,10 +91,9 @@ pub async fn skip_times(
 //
 // Die Portal-URLs tragen nur einen Slug (z. B. `one-piece`), AniSkip braucht aber
 // eine MyAnimeList-ID. Jikan (inoffizielle MAL-API) liefert sie über eine Titelsuche.
-// Höhere Staffeln sind auf MAL eigene Einträge; sie werden über die Relations-Kette
-// (Sequel/Prequel/Side story) eingesammelt und — wie in der Referenz — nach ID
-// sortiert über den Staffel-Index angesteuert. Das ist eine Heuristik: die ID-
-// Reihenfolge entspricht meist, aber nicht immer der Staffel-Reihenfolge.
+// Höhere Staffeln sind auf MAL eigene Einträge; ihnen wird ab Staffel 1 der echten
+// **Sequel-Kette** gefolgt (Staffel 1 →Sequel→ Staffel 2 →Sequel→ …), was die
+// tatsächliche Staffel-Reihenfolge abbildet statt sie über IDs zu raten.
 
 /// Ein Treffer aus der Jikan-Suche bzw. den Relations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,32 +148,29 @@ pub fn pick_season1(entries: &[JikanEntry]) -> Option<u64> {
 
 /// Parst die Relations-Antwort und gibt die MAL-IDs verwandter Anime-Einträge
 /// zurück (nur Fortsetzungs-/Nebengeschichte-Beziehungen). Rein testbar.
-pub fn parse_related_ids(body: &str) -> Vec<u64> {
-    let json: serde_json::Value = match serde_json::from_str(body) {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
-    const WANTED: [&str; 4] = ["Sequel", "Prequel", "Parent story", "Side story"];
-    let mut out = Vec::new();
-    if let Some(groups) = json.get("data").and_then(|v| v.as_array()) {
-        for group in groups {
-            let relation = group.get("relation").and_then(|v| v.as_str());
-            if !relation.is_some_and(|r| WANTED.contains(&r)) {
-                continue;
-            }
-            if let Some(entries) = group.get("entry").and_then(|v| v.as_array()) {
-                for entry in entries {
-                    if entry.get("type").and_then(|v| v.as_str()) != Some("anime") {
-                        continue;
-                    }
+/// Liest aus einer Relations-Antwort die MAL-ID des **direkten Sequels** (nächste
+/// Staffel). Nur die `Sequel`-Beziehung mit `type == "anime"`; die kleinste ID
+/// gewinnt, falls mehrere (deterministisch). `None`, wenn es kein Sequel gibt.
+/// Rein/testbar.
+pub fn parse_sequel_id(body: &str) -> Option<u64> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let groups = json.get("data")?.as_array()?;
+    let mut candidates: Vec<u64> = Vec::new();
+    for group in groups {
+        if group.get("relation").and_then(|v| v.as_str()) != Some("Sequel") {
+            continue;
+        }
+        if let Some(entries) = group.get("entry").and_then(|v| v.as_array()) {
+            for entry in entries {
+                if entry.get("type").and_then(|v| v.as_str()) == Some("anime") {
                     if let Some(id) = entry.get("mal_id").and_then(|v| v.as_u64()) {
-                        out.push(id);
+                        candidates.push(id);
                     }
                 }
             }
         }
     }
-    out
+    candidates.into_iter().min()
 }
 
 /// Percent-kodiert einen Query-Wert (nur unreservierte Zeichen bleiben stehen).
@@ -205,48 +201,42 @@ async fn search_anime(client: &reqwest::Client, query: &str) -> Result<Vec<Jikan
 }
 
 /// Holt die verwandten MAL-IDs für eine ID.
-async fn related_ids(client: &reqwest::Client, mal_id: u64) -> Result<Vec<u64>> {
+/// Holt die MAL-ID des direkten Sequels von *mal_id* (nächste Staffel), falls vorhanden.
+async fn sequel_id(client: &reqwest::Client, mal_id: u64) -> Result<Option<u64>> {
     let url = format!("{JIKAN_RELATIONS}/{mal_id}/relations");
     let resp = client.get(&url).send().await?;
     if !resp.status().is_success() {
-        return Ok(vec![]);
+        return Ok(None);
     }
-    Ok(parse_related_ids(
+    Ok(parse_sequel_id(
         &capped_text(resp, MAX_RESPONSE_BYTES).await?,
     ))
 }
 
-/// Sammelt (begrenzt) die komplette Staffel-Kette ab `start` ein und gibt sie
-/// aufsteigend sortiert zurück (inkl. `start`). Deckelt die Jikan-Abrufe.
+/// Baut die geordnete Staffel-Kette, indem ab `start` iterativ dem **Sequel**
+/// gefolgt wird: `[start, sequel(start), …]`. Das spiegelt die echte Staffel-
+/// Reihenfolge wider (keine ID-Sortier-Heuristik). Längen-gedeckelt, bricht bei
+/// einem Zyklus ab.
 async fn season_chain(client: &reqwest::Client, start: u64) -> Result<Vec<u64>> {
-    use std::collections::BTreeSet;
-    const MAX_NODES: usize = 12;
-    let mut seen: BTreeSet<u64> = BTreeSet::new();
-    seen.insert(start);
-    let mut stack = vec![start];
-    while let Some(id) = stack.pop() {
-        if seen.len() >= MAX_NODES {
-            break;
-        }
+    const MAX_SEASONS: usize = 20;
+    let mut chain = vec![start];
+    let mut current = start;
+    while chain.len() < MAX_SEASONS {
         tokio::time::sleep(std::time::Duration::from_millis(JIKAN_DELAY_MS)).await;
-        // Pro Antwort und insgesamt gedeckelt, damit eine große Relations-Antwort
-        // weder den Set noch die Abruf-Zahl aufbläht.
-        for rel in related_ids(client, id).await?.into_iter().take(MAX_NODES) {
-            if seen.len() >= MAX_NODES {
-                break;
+        match sequel_id(client, current).await? {
+            Some(next) if !chain.contains(&next) => {
+                chain.push(next);
+                current = next;
             }
-            if seen.insert(rel) {
-                stack.push(rel);
-            }
+            _ => break,
         }
     }
-    Ok(seen.into_iter().collect())
+    Ok(chain)
 }
 
 /// Löst die MAL-ID für `slug` + `staffel` auf. Staffel 1 nutzt direkt den
-/// Suchtreffer; höhere Staffeln den nach ID sortierten Staffel-Index der
-/// Relations-Kette (Heuristik, siehe Modul-Kommentar). `None`, wenn Jikan nichts
-/// Passendes liefert.
+/// Suchtreffer; höhere Staffeln folgen ab Staffel 1 der **Sequel-Kette**
+/// (`staffel`-ter Eintrag). `None`, wenn Jikan nichts Passendes liefert.
 pub async fn resolve_mal_id(
     client: &reqwest::Client,
     slug: &str,
@@ -331,19 +321,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_related_nur_passende_beziehungen() {
+    fn parse_sequel_nur_echte_sequel_beziehung() {
+        // Realistische Relations-Antwort: nur „Sequel" (nächste Staffel) zählt,
+        // Adaptation (Manga) und Side story (OVA) nicht.
         let body = r#"{"data":[
+            {"relation":"Prequel","entry":[{"mal_id":1,"type":"anime","name":"S0"}]},
             {"relation":"Sequel","entry":[{"mal_id":100,"type":"anime","name":"S2"}]},
             {"relation":"Adaptation","entry":[{"mal_id":200,"type":"manga","name":"Manga"}]},
             {"relation":"Side story","entry":[{"mal_id":300,"type":"anime","name":"OVA"}]}
         ]}"#;
-        let got = parse_related_ids(body);
-        assert_eq!(got, vec![100, 300]);
+        assert_eq!(parse_sequel_id(body), Some(100));
+        // Kein Sequel → None.
+        let keins = r#"{"data":[{"relation":"Prequel","entry":[{"mal_id":1,"type":"anime"}]}]}"#;
+        assert_eq!(parse_sequel_id(keins), None);
     }
 
     #[test]
-    fn parse_related_ueberspringt_nicht_anime() {
+    fn parse_sequel_ueberspringt_nicht_anime() {
+        // Sequel, aber type==manga → kein Treffer.
         let body = r#"{"data":[{"relation":"Sequel","entry":[{"mal_id":5,"type":"manga"}]}]}"#;
-        assert!(parse_related_ids(body).is_empty());
+        assert_eq!(parse_sequel_id(body), None);
+    }
+
+    #[test]
+    fn parse_sequel_kleinste_id_deterministisch() {
+        // Mehrere Sequel-Einträge (z. B. TV + Film) → kleinste (meist die TV-Staffel).
+        let body = r#"{"data":[{"relation":"Sequel","entry":[
+            {"mal_id":900,"type":"anime"},{"mal_id":100,"type":"anime"}]}]}"#;
+        assert_eq!(parse_sequel_id(body), Some(100));
     }
 }
