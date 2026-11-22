@@ -62,6 +62,7 @@ pub fn client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(20))
         .redirect(safe_redirect_policy())
+        .dns_resolver(std::sync::Arc::new(GuardedResolver))
         .build()
 }
 
@@ -73,7 +74,34 @@ pub fn browser_client() -> reqwest::Result<reqwest::Client> {
         .gzip(true)
         .timeout(Duration::from_secs(30))
         .redirect(safe_redirect_policy())
+        .dns_resolver(std::sync::Arc::new(GuardedResolver))
         .build()
+}
+
+/// DNS-Resolver, der jede aufgelöste Adresse gegen [`is_forbidden_ip`] prüft.
+///
+/// Schließt die Lücke, die die Redirect-Policy offenlässt: ein Hostname, der erst
+/// per DNS auf eine private/interne IP zeigt (DNS-Rebinding). Löst nur auf
+/// gesperrte Adressen auf, schlägt die Verbindung fehl. IP-Literale umgehen den
+/// Resolver (reqwest verbindet direkt) — die deckt die Redirect-Policy ab.
+struct GuardedResolver;
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_string();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let allowed: Vec<std::net::SocketAddr> =
+                resolved.filter(|sa| !is_forbidden_ip(sa.ip())).collect();
+            if allowed.is_empty() {
+                let err: Box<dyn std::error::Error + Send + Sync> =
+                    "Ziel löst nur auf gesperrte Adressen auf".into();
+                return Err(err);
+            }
+            let iter: reqwest::dns::Addrs = Box::new(allowed.into_iter());
+            Ok(iter)
+        })
+    }
 }
 
 /// Redirect-Policy, die jeden Hop prüft, bevor ihm gefolgt wird: nur `http`/
@@ -120,6 +148,8 @@ fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
                 || o[0] == 0 // "aktuelles Netz" 0.0.0.0/8
                 || (o[0] == 100 && (o[1] & 0xc0) == 64) // CGNAT 100.64.0.0/10
                 || (o[0] == 192 && o[1] == 0 && o[2] == 0) // IETF-Protokoll 192.0.0.0/24
+                || (o[0] == 192 && o[1] == 88 && o[2] == 99) // 6to4-Relay-Anycast 192.88.99.0/24
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // Benchmark 198.18.0.0/15
         }
         IpAddr::V6(v6) => {
             if let Some(mapped) = v6.to_ipv4_mapped() {
@@ -154,9 +184,72 @@ fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// Maximale Zusatzversuche bei transienten Fehlern.
+const RETRY_ATTEMPTS: u32 = 3;
+
+/// Entscheidet, ob ein Status einen erneuten Versuch rechtfertigt (429/5xx —
+/// „dieser Host bedient uns gerade nicht", nicht „Seite fehlt").
+fn status_is_transient(status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 429 || status.is_server_error()
+}
+
+/// `GET` mit begrenzten Wiederholungen bei transienten Fehlern: Verbindungs-/
+/// Timeout-Fehler sowie Status 429/5xx werden mit wachsendem Backoff erneut
+/// versucht. Permanente Antworten (2xx, 3xx, 4xx außer 429) kommen sofort zurück.
+pub async fn get_retry(
+    client: &reqwest::Client,
+    url: &str,
+    referer: Option<&str>,
+) -> reqwest::Result<reqwest::Response> {
+    let mut last_err: Option<reqwest::Error> = None;
+    for attempt in 0..=RETRY_ATTEMPTS {
+        if attempt > 0 {
+            let backoff = std::time::Duration::from_millis(400 * (1 << (attempt - 1)));
+            tokio::time::sleep(backoff).await;
+        }
+        let mut req = client.get(url);
+        if let Some(r) = referer {
+            req = req.header("Referer", r);
+        }
+        match req.send().await {
+            Ok(resp) if status_is_transient(resp.status()) && attempt < RETRY_ATTEMPTS => continue,
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let retryable = e.is_timeout() || e.is_connect() || e.is_request();
+                if retryable && attempt < RETRY_ATTEMPTS {
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    // Nur erreichbar, wenn alle Versuche transient scheiterten.
+    Err(last_err.expect("retry loop endete ohne Ergebnis"))
+}
+
+/// Wie [`get_retry`], gibt aber direkt den Body-Text zurück.
+pub async fn get_text_retry(
+    client: &reqwest::Client,
+    url: &str,
+    referer: Option<&str>,
+) -> reqwest::Result<String> {
+    get_retry(client, url, referer).await?.text().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_status_classification() {
+        use reqwest::StatusCode;
+        assert!(status_is_transient(StatusCode::TOO_MANY_REQUESTS));
+        assert!(status_is_transient(StatusCode::BAD_GATEWAY));
+        assert!(status_is_transient(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(!status_is_transient(StatusCode::NOT_FOUND));
+        assert!(!status_is_transient(StatusCode::OK));
+    }
 
     #[test]
     fn challenge_by_status() {

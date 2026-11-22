@@ -25,7 +25,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `vindex-desktop`.
 - `core::model` — Typen für Sprache, Qualität (Tier-Logik), Hoster, Episode und
   Hoster-Links; Fehlertyp (thiserror).
-- `core::http` — rotierender User-Agent-Pool und Cloudflare-/Captcha-Erkennung.
+- `core::http` — rotierender User-Agent-Pool, Cloudflare-/Captcha-Erkennung und ein
+  Retry-Helper, der bei transienten Fehlern (Verbindung/Timeout, Status 429/5xx) mit
+  wachsendem Backoff wiederholt. Alle Portal- und Hoster-Fetches laufen darüber.
 - `core::site` — Scraper für aniworld.to und s.to/serienstream.to (Staffeln, Episoden
   inkl. `[Episode N]`-Marker, Hoster-Links je Sprache), Scraper für filmo.to (Filme mit
   CSRF-/Redirect-Auflösung), sowie der `census`-Katalogzähler.
@@ -66,11 +68,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Auth bricht den Start ab. Dazu ein Queue-Limit gegen Flutung, eine Obergrenze der
   gesamten Job-Liste und knappe Queue-Ausgaben ohne lokale Pfade oder interne Fehlertexte.
 - Redirect-Policy für den HTTP-Client: jeder Hop muss `http`/`https` sein und darf nicht
-  auf private, loopback, link-local oder CGNAT-IP-Ziele zeigen (inkl. IPv4-mapped IPv6),
-  höchstens zehn Hops. Schließt SSRF über eine Umleitung von einem erlaubten Portal.
+  auf nicht-öffentliche IP-Ziele zeigen (loopback, privat, link-local, CGNAT, 0.0.0.0/8,
+  192.0.0.0/24, 192.88.99.0/24, 198.18.0.0/15, unique-local sowie in IPv6 eingebettete
+  IPv4 als mapped/6to4/NAT64), höchstens zehn Hops.
+- DNS-Resolver mit Adress-Filter: jede per DNS aufgelöste Zieladresse wird gegen dieselbe
+  Sperrliste geprüft, bevor verbunden wird. Schließt DNS-Rebinding (ein Hostname, der auf
+  eine interne IP zeigt) zusätzlich zur Redirect-Prüfung der IP-Literale.
 - Noch offen: persistenter Key-Store mit Scopes, Login-Throttle und SSO (bisher nur
-  statische Keys aus der Umgebung); DNS-Rebinding auf eine private IP (bräuchte einen
-  eigenen Resolver).
+  statische Keys aus der Umgebung).
 
 [Unreleased]: https://github.com/baron/vindex/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/baron/vindex/releases/tag/v0.1.0

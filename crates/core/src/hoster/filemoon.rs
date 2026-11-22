@@ -59,7 +59,9 @@ pub fn extract_url_from_html(html: &str) -> Option<String> {
 
 /// Löst eine Filemoon-Embed-URL auf (Legacy-HTML-Pfad).
 pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolved> {
-    let resp = client.get(embed_url).send().await?;
+    // Filemoon prüft beim Segment-Abruf den Referer; die Embed-Origin reicht.
+    let referer = origin_of(embed_url);
+    let resp = crate::http::get_retry(client, embed_url, referer.as_deref()).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await?;
     if crate::http::looks_like_challenge(&text, status) {
@@ -74,8 +76,15 @@ pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolv
     Ok(Resolved {
         is_hls: url.contains(".m3u8"),
         url,
-        referer: None,
+        referer,
     })
+}
+
+/// `scheme://host` einer URL, als Referer-Wert.
+fn origin_of(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    Some(format!("{}://{}", parsed.scheme(), host))
 }
 
 #[cfg(test)]

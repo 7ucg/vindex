@@ -13,11 +13,6 @@ Offene Arbeit an vindex, grob nach Priorität. Hintergrund und Entwurfsgründe s
 
 ## Netzwerk & Anti-Bot
 
-- **DNS-Rebinding.** Die Redirect-Policy sperrt IP-Literale in privaten Ranges, aber
-  kein Hostname, der erst per DNS auf eine private IP zeigt. Dafür bräuchte es einen
-  eigenen Resolver/Connector, der die aufgelöste IP vor dem Connect prüft.
-- **Transient-Retry.** Der Referenz-Client wiederholt bei 429/5xx mit Backoff; vindex
-  hat `with_backoff`, nutzt es für die Scrape-/Resolve-Fetches aber noch nicht.
 - **TLS-Impersonate (Stufe 2).** Bei Cloudflare-Verdacht den Abruf über `wreq` mit
   Chrome-Fingerprint wiederholen. Erkennung steht schon in `core::http`.
 - **Headless-Browser-Fallback (Stufe 3).** Letzter Ausweg, wenn Fingerprinting nicht

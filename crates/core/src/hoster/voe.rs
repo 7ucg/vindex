@@ -95,7 +95,7 @@ pub fn extract_source_from_html(html: &str) -> Option<String> {
 
 /// Löst eine VOE-Embed-URL zu einem direkten Stream auf.
 pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolved> {
-    let resp = client.get(embed_url).send().await?;
+    let resp = crate::http::get_retry(client, embed_url, None).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await?;
     if crate::http::looks_like_challenge(&text, status) {

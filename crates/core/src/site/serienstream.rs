@@ -13,7 +13,7 @@ use crate::naming::{episode_number_from_title, strip_episode_marker};
 /// Liefert die Staffel-Nummern eines Titels (`0` = Filme-Tab).
 pub async fn list_seasons(client: &reqwest::Client, base: &str, slug: &str) -> Result<Vec<u32>> {
     let url = format!("{base}/anime/stream/{slug}");
-    let body = client.get(&url).send().await?.text().await?;
+    let body = crate::http::get_text_retry(client, &url, None).await?;
     let seasons = {
         let doc = Html::parse_document(&body);
         let nav_sel =
@@ -45,7 +45,7 @@ pub async fn list_episodes(
     } else {
         format!("{base}/anime/stream/{slug}/staffel-{season}")
     };
-    let body = client.get(&url).send().await?.text().await?;
+    let body = crate::http::get_text_retry(client, &url, None).await?;
 
     let episodes = {
         let doc = Html::parse_document(&body);
@@ -92,7 +92,7 @@ pub async fn provider_links(
     base: &str,
     episode_url: &str,
 ) -> Result<ProviderLinks> {
-    let resp = client.get(episode_url).send().await?;
+    let resp = crate::http::get_retry(client, episode_url, None).await?;
     let status = resp.status().as_u16();
     let body = resp.text().await?;
     if crate::http::looks_like_challenge(&body, status) {
