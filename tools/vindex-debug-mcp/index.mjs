@@ -24,6 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 
 // DNS fest über 1.1.1.1 (nie System-DNS) — Barons „1.1.1.1 überall"-Regel.
 const dns1111 = new Resolver();
@@ -101,22 +102,36 @@ function isPrivateIp(ip) {
   );
 }
 
-async function hostAllowed(host) {
+// Löst über 1.1.1.1 auf und gibt die erste ÖFFENTLICHE IP zurück (fail-closed:
+// null, wenn gar nichts auflöst oder irgendeine IP privat/lokal ist).
+async function vettedAddress(host) {
   const bare = host.replace(/^\[|\]$/g, "");
   if (["localhost", "metadata", "metadata.google.internal"].includes(bare.toLowerCase())) {
-    return false;
+    return null;
   }
-  if (isIP(bare)) return !isPrivateIp(bare);
-  try {
-    const [a4, a6] = await Promise.all([
-      dns1111.resolve4(bare).catch(() => []),
-      dns1111.resolve6(bare).catch(() => []),
-    ]);
-    const addrs = [...a4, ...a6];
-    return addrs.length > 0 && addrs.every((ip) => !isPrivateIp(ip));
-  } catch {
-    return false;
-  }
+  if (isIP(bare)) return isPrivateIp(bare) ? null : { address: bare, family: isIP(bare) };
+  const [a4, a6] = await Promise.all([
+    dns1111.resolve4(bare).then((v) => ({ ok: true, v })).catch(() => ({ ok: false, v: [] })),
+    dns1111.resolve6(bare).then((v) => ({ ok: true, v })).catch(() => ({ ok: false, v: [] })),
+  ]);
+  if (!a4.ok && !a6.ok) return null; // gar keine Auflösung → hart ablehnen
+  const all = [
+    ...a4.v.map((address) => ({ address, family: 4 })),
+    ...a6.v.map((address) => ({ address, family: 6 })),
+  ];
+  if (all.length === 0 || all.some((a) => isPrivateIp(a.address))) return null;
+  return all[0];
+}
+
+// undici-Agent, der die Verbindung auf genau die geprüfte IP pinnt (kein
+// Re-Resolve über System-DNS durch fetch → kein TOCTOU/Rebinding).
+function pinnedAgent(addr) {
+  const lookup = (_h, opts, cb) => {
+    // undici ruft mit { all: true } auf → dann ein Array zurückgeben.
+    if (opts && opts.all) cb(null, [{ address: addr.address, family: addr.family }]);
+    else cb(null, addr.address, addr.family);
+  };
+  return new Agent({ connect: { lookup } });
 }
 
 async function toolProbe({ url, referer }) {
@@ -124,16 +139,22 @@ async function toolProbe({ url, referer }) {
   if (referer) headers["Referer"] = referer;
   const started = Date.now();
   try {
-    // SSRF-Bremse: wie der App-Proxy. http/https, keine privaten/lokalen Ziele,
-    // Redirects manuell und pro Hop neu geprüft (max. 5).
+    // SSRF-Bremse: http/https, 1.1.1.1-Auflösung, nur öffentliche Ziele, und die
+    // Verbindung auf die geprüfte IP gepinnt; Redirects manuell und pro Hop neu.
     let current = new URL(url);
     let res;
     for (let hop = 0; hop <= 5; hop++) {
       if (!/^https?:$/.test(current.protocol)) return { error: "nur http/https erlaubt" };
-      if (!(await hostAllowed(current.hostname))) return { error: `Ziel blockiert: ${current.hostname}` };
+      const addr = await vettedAddress(current.hostname);
+      if (!addr) return { error: `Ziel blockiert: ${current.hostname}` };
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 30000);
-      res = await fetch(current, { headers, redirect: "manual", signal: ctrl.signal });
+      res = await fetch(current, {
+        headers,
+        redirect: "manual",
+        signal: ctrl.signal,
+        dispatcher: pinnedAgent(addr),
+      });
       clearTimeout(t);
       if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
         current = new URL(res.headers.get("location"), current);
