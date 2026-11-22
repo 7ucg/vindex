@@ -190,12 +190,22 @@ fn write_csv(path: &str, results: &[Classified]) -> anyhow::Result<()> {
 }
 
 fn csv_escape(s: &str) -> String {
-    // RFC 4180: Felder mit Komma, Quote oder Zeilenumbruch werden gequotet,
-    // enthaltene Quotes verdoppelt.
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    // Die Feldwerte stammen aus gescrapten Seiten (nicht vertrauenswürdig).
+    // Formel-Injection vermeiden: beginnt ein Feld mit einem Trigger-Zeichen,
+    // ein führendes Apostroph voranstellen, damit Tabellenprogramme es als Text
+    // behandeln. Danach nach RFC 4180 quoten (Komma/Quote/Zeilenumbruch).
+    let mut field = String::with_capacity(s.len() + 1);
+    // Auf das erste Nicht-Whitespace/Steuerzeichen prüfen: Tabellenprogramme
+    // entfernen führende Leerzeichen, sodass " =x" trotzdem als Formel zählt.
+    let first_real = s.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
+    if first_real.starts_with(['=', '+', '-', '@', '|']) {
+        field.push('\'');
+    }
+    field.push_str(s);
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
     } else {
-        s.to_string()
+        field
     }
 }
 
@@ -221,6 +231,22 @@ mod tests {
     #[test]
     fn csv_escape_anfuehrungszeichen_werden_verdoppelt() {
         assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_escape_formel_trigger_bekommt_apostroph() {
+        assert_eq!(
+            csv_escape("=HYPERLINK(\"x\")"),
+            "\"'=HYPERLINK(\"\"x\"\")\""
+        );
+        assert_eq!(csv_escape("+1"), "'+1");
+        assert_eq!(csv_escape("-5"), "'-5");
+        assert_eq!(csv_escape("@cmd"), "'@cmd");
+        assert_eq!(csv_escape("|cmd"), "'|cmd");
+        // Führende Leerzeichen werden ignoriert — trotzdem Formel.
+        assert_eq!(csv_escape("   =x"), "'   =x");
+        // Normaler Titel bleibt unberührt.
+        assert_eq!(csv_escape("One Piece"), "One Piece");
     }
 
     #[test]
