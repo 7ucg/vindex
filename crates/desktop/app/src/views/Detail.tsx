@@ -72,6 +72,7 @@ export function Detail(): JSX.Element {
         url: src.url,
         isHls: src.is_hls,
         queue: { showTitle: sel.title, episodes: list, index: idx },
+        skipRef: { url: e.url, season: e.season, episode: e.index_in_season },
       });
     } catch (err) {
       setPlayErr(String(err));

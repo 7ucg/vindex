@@ -1,6 +1,12 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
-import { resolvePlayback } from "../lib/api";
-import { closePlayer, openPlayer, type Playback } from "../lib/store";
+import { resolvePlayback, aniskip, type SkipInterval } from "../lib/api";
+import {
+  closePlayer,
+  openPlayer,
+  sleepTimer,
+  setSleepTimer,
+  type Playback,
+} from "../lib/store";
 
 function epLabel(show: string, season: number, idx: number): string {
   const s = season === 0 ? "Filme" : `Staffel ${season}`;
@@ -16,10 +22,19 @@ export function Player(props: { playback: Playback }): JSX.Element {
   let hls: import("hls.js").default | undefined;
   const [err, setErr] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
-  const [sleepMin, setSleepMin] = createSignal<number | null>(null);
   const [stopAfter, setStopAfter] = createSignal(false);
   const [goingNext, setGoingNext] = createSignal(false);
-  let sleepTimer: number | undefined;
+  const [skips, setSkips] = createSignal<SkipInterval[]>([]);
+  const [skipTarget, setSkipTarget] = createSignal<{ end: number; label: string } | null>(null);
+  let sleepHandle: number | undefined;
+
+  const doSkip = () => {
+    const t = skipTarget();
+    if (t && video) {
+      video.currentTime = t.end + 0.1;
+      setSkipTarget(null);
+    }
+  };
 
   const q = () => props.playback.queue;
   const hasNext = () => {
@@ -54,13 +69,35 @@ export function Player(props: { playback: Playback }): JSX.Element {
     if (hasNext()) void next();
   };
 
-  const setSleep = (min: number | null) => {
-    setSleepMin(min);
-    setStopAfter(false);
-    if (sleepTimer) clearTimeout(sleepTimer);
-    if (min !== null) {
-      sleepTimer = window.setTimeout(() => closePlayer(), min * 60 * 1000);
+  // Lokalen Timer am gespeicherten Deadline neu bewaffnen (übersteht Remount).
+  const armSleep = () => {
+    if (sleepHandle) clearTimeout(sleepHandle);
+    const s = sleepTimer();
+    if (!s) return;
+    const rem = s.until - Date.now();
+    if (rem <= 0) {
+      closePlayer();
+      return;
     }
+    sleepHandle = window.setTimeout(() => closePlayer(), rem);
+  };
+
+  const chooseSleep = (min: number) => {
+    setStopAfter(false);
+    if (sleepTimer()?.min === min) {
+      setSleepTimer(null);
+    } else {
+      setSleepTimer({ min, until: Date.now() + min * 60 * 1000 });
+    }
+    armSleep();
+  };
+
+  // „Nach dieser Folge": Toggle gewinnt, Sleep-Minuten werden verworfen.
+  const toggleStopAfter = () => {
+    const on = !stopAfter();
+    setSleepTimer(null);
+    if (sleepHandle) clearTimeout(sleepHandle);
+    setStopAfter(on);
   };
 
   const keys = (e: KeyboardEvent) => {
@@ -102,6 +139,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
       case "n":
         if (hasNext()) void next();
         break;
+      case "s":
+        doSkip();
+        break;
       case "Escape":
         closePlayer();
         break;
@@ -120,7 +160,23 @@ export function Player(props: { playback: Playback }): JSX.Element {
     el.addEventListener("playing", () => setLoading(false));
     el.addEventListener("waiting", () => setLoading(true));
     el.addEventListener("ended", onEnded);
+    el.addEventListener("timeupdate", () => {
+      const t = el.currentTime;
+      const hit = skips().find((s) => t >= s.start && t < s.end - 0.3);
+      setSkipTarget(hit ? { end: hit.end, label: hit.kind === "ed" ? "Outro" : "Intro" } : null);
+    });
     window.addEventListener("keydown", keys);
+
+    // AniSkip-Zeiten holen (still, falls Jikan nicht erreichbar ist).
+    const ref = props.playback.skipRef;
+    if (ref) {
+      aniskip(ref.url, ref.season, ref.episode)
+        .then(setSkips)
+        .catch(() => setSkips([]));
+    }
+
+    // Sleep-Timer nach einem Remount (Auto-Next) mit Restzeit neu bewaffnen.
+    armSleep();
 
     void (async () => {
       if (props.playback.isHls) {
@@ -147,7 +203,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
 
   onCleanup(() => {
     window.removeEventListener("keydown", keys);
-    if (sleepTimer) clearTimeout(sleepTimer);
+    // Nur den lokalen Timer löschen — das Deadline im Store bleibt und wird nach
+    // dem Remount (nächste Folge) neu bewaffnet.
+    if (sleepHandle) clearTimeout(sleepHandle);
     if (hls) hls.destroy();
   });
 
@@ -171,8 +229,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
               {(m) => (
                 <button
                   class="chip"
-                  classList={{ on: sleepMin() === m }}
-                  onClick={() => setSleep(sleepMin() === m ? null : m)}
+                  classList={{ on: sleepTimer()?.min === m }}
+                  onClick={() => chooseSleep(m)}
                 >
                   {m}m
                 </button>
@@ -182,10 +240,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
               <button
                 class="chip"
                 classList={{ on: stopAfter() }}
-                onClick={() => {
-                  setStopAfter(!stopAfter());
-                  setSleep(null);
-                }}
+                onClick={toggleStopAfter}
                 title="Nach dieser Folge stoppen"
               >
                 Ende Folge
@@ -205,9 +260,17 @@ export function Player(props: { playback: Playback }): JSX.Element {
 
       <video ref={video} class="player-video" controls autoplay playsinline />
 
+      <Show when={skipTarget()}>
+        {(t) => (
+          <button class="skip-btn" onClick={doSkip}>
+            {t().label} überspringen <span class="skip-key">S</span>
+          </button>
+        )}
+      </Show>
+
       <div class="player-hint">
-        Space Play · ←/→ 5s · J/L 10s · ↑/↓ Lautstärke · M stumm · F Vollbild · N nächste · 0–9
-        springen · Esc schließen
+        Space Play · ←/→ 5s · J/L 10s · ↑/↓ Lautstärke · M stumm · F Vollbild · S skip · N nächste
+        · 0–9 springen · Esc schließen
       </div>
     </div>
   );

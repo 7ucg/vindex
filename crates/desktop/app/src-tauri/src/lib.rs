@@ -56,6 +56,14 @@ struct PlaybackDto {
     is_hls: bool,
 }
 
+/// Ein AniSkip-Intervall fürs Frontend.
+#[derive(Serialize)]
+struct SkipDto {
+    start: f64,
+    end: f64,
+    kind: String,
+}
+
 /// App-Metadaten fürs „Über"-Panel und den Health-Check beim Start.
 #[derive(Serialize)]
 struct AppInfo {
@@ -153,6 +161,28 @@ async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<Pla
 }
 
 #[tauri::command]
+async fn aniskip(
+    url: String,
+    season: u32,
+    episode: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<SkipDto>, String> {
+    let skips = state
+        .backend
+        .aniskip(&url, season, episode)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(skips
+        .into_iter()
+        .map(|s| SkipDto {
+            start: s.start,
+            end: s.end,
+            kind: s.kind,
+        })
+        .collect())
+}
+
+#[tauri::command]
 fn start_download(
     app: tauri::AppHandle,
     url: String,
@@ -230,6 +260,7 @@ pub fn run() {
             seasons,
             episodes,
             resolve_playback,
+            aniskip,
             start_download,
             cancel_download,
             list_downloads,

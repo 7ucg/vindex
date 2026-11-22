@@ -34,23 +34,40 @@ export interface PlayQueue {
   index: number;
 }
 
+/** Bezug zur Original-Episode, um AniSkip-Zeiten zu holen. */
+export interface SkipRef {
+  url: string;
+  season: number;
+  episode: number;
+}
+
 /** Ein laufender Player-Stream (proxied URL + HLS-Flag + Anzeigetitel + Queue). */
 export interface Playback {
   title: string;
   url: string;
   isHls: boolean;
   queue?: PlayQueue;
+  skipRef?: SkipRef;
+}
+
+/** Sleep-Timer: gewählte Minuten + absoluter Stopp-Zeitpunkt (ms). Liegt im Store,
+ *  damit er den Player-Remount beim automatischen Weiterspielen übersteht. */
+export interface SleepTimer {
+  min: number;
+  until: number;
 }
 
 const [view, setView] = createSignal<View>("home");
 const [selected, setSelected] = createSignal<Selected | null>(null);
 const [playback, setPlayback] = createSignal<Playback | null>(null);
+const [sleepTimer, setSleepTimer] = createSignal<SleepTimer | null>(null);
 
 export function openPlayer(p: Playback): void {
   setPlayback(p);
 }
 export function closePlayer(): void {
   setPlayback(null);
+  setSleepTimer(null);
 }
 
 /** Öffnet die Detailansicht für einen Titel und merkt sich, woher man kam. */
@@ -59,4 +76,4 @@ export function openTitle(title: string, url: string): void {
   setView("detail");
 }
 
-export { view, setView, selected, setSelected, playback };
+export { view, setView, selected, setSelected, playback, sleepTimer, setSleepTimer };

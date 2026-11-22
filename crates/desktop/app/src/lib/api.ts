@@ -52,6 +52,16 @@ export function resolvePlayback(url: string): Promise<PlaybackSource> {
   return invoke<PlaybackSource>("resolve_playback", { url });
 }
 
+export interface SkipInterval {
+  start: number;
+  end: number;
+  kind: string; // "op" (Intro) | "ed" (Outro)
+}
+
+export function aniskip(url: string, season: number, episode: number): Promise<SkipInterval[]> {
+  return invoke<SkipInterval[]>("aniskip", { url, season, episode });
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

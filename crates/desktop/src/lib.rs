@@ -32,6 +32,15 @@ pub struct SearchHit {
     pub url: String,
 }
 
+/// Ein AniSkip-Intervall (Intro/Outro) in Sekunden fürs Frontend.
+#[derive(Debug, Clone)]
+pub struct Skip {
+    pub start: f64,
+    pub end: f64,
+    /// "op" (Intro) oder "ed" (Outro).
+    pub kind: String,
+}
+
 /// Optionale Overrides, die beim Bau eines [`DownloadPrefs`] aus [`Settings`]
 /// Vorrang vor den gespeicherten Einstellungen haben. Ein `None`-Feld erbt den
 /// jeweiligen Wert aus den `Settings`.
@@ -159,6 +168,32 @@ impl Backend {
         let slug = site::slug_from_url(url)
             .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
         site::serienstream::list_episodes(&self.client, base, &slug, season).await
+    }
+
+    /// AniSkip-Intervalle (Intro/Outro) für eine Episode. Braucht die MAL-ID
+    /// (über Jikan aufgelöst) und die Episodennummer der Staffel. Leere Liste,
+    /// wenn nichts gefunden wird (oder Jikan nicht erreichbar ist).
+    pub async fn aniskip(&self, url: &str, season: u32, episode: u32) -> Result<Vec<Skip>> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        let Some(slug) = site::slug_from_url(url) else {
+            return Ok(vec![]);
+        };
+        let Some(mal_id) = core::aniskip::resolve_mal_id(&self.client, &slug, season).await? else {
+            return Ok(vec![]);
+        };
+        let intervals = core::aniskip::skip_times(&self.client, mal_id, episode).await?;
+        Ok(intervals
+            .into_iter()
+            .map(|i| Skip {
+                start: i.start,
+                end: i.end,
+                kind: match i.skip_type {
+                    core::aniskip::SkipType::Op => "op",
+                    core::aniskip::SkipType::Ed => "ed",
+                }
+                .into(),
+            })
+            .collect())
     }
 
     /// Hoster-Links einer Episode (für die Download-Auswahl im Frontend).
