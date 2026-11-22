@@ -2,11 +2,11 @@ import { Switch, Match, type JSX } from "solid-js";
 import { Sidebar } from "./views/Sidebar";
 import { Home } from "./views/Home";
 import { Settings } from "./views/Settings";
-import { Placeholder } from "./views/Placeholder";
 import { Show } from "solid-js";
 import { PortalView } from "./views/PortalView";
 import { Detail } from "./views/Detail";
 import { Downloads } from "./views/Downloads";
+import { Library } from "./views/Library";
 import { Player } from "./views/Player";
 import { view, playback } from "./lib/store";
 
@@ -23,11 +23,7 @@ export default function App(): JSX.Element {
             <Settings />
           </Match>
           <Match when={view() === "library"}>
-            <Placeholder
-              title="Bibliothek"
-              badge="bald"
-              desc="Hier erscheinen alle heruntergeladenen Titel — offline abspielbar, mit Fortschritt und Speicherverwaltung."
-            />
+            <Library />
           </Match>
           <Match when={view() === "downloads"}>
             <Downloads />

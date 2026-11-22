@@ -56,6 +56,16 @@ struct PlaybackDto {
     is_hls: bool,
 }
 
+/// Ein heruntergeladener Titel in der Bibliothek.
+#[derive(Serialize)]
+struct LibraryEntryDto {
+    name: String,
+    size_bytes: u64,
+    modified: u64,
+    /// Absoluter Pfad (fürs lokale Abspielen über das Asset-Protokoll).
+    path: String,
+}
+
 /// Ein AniSkip-Intervall fürs Frontend.
 #[derive(Serialize)]
 struct SkipDto {
@@ -212,6 +222,39 @@ fn list_downloads(state: State<'_, AppState>) -> Vec<downloads::JobView> {
 }
 
 #[tauri::command]
+fn library(state: State<'_, AppState>) -> Vec<LibraryEntryDto> {
+    let dir = state.backend.settings().download_path;
+    core::library::list(&dir)
+        .into_iter()
+        .map(|e| {
+            let path = dir.join(&e.name);
+            LibraryEntryDto {
+                name: e.name,
+                size_bytes: e.size_bytes,
+                modified: e.modified,
+                path: path.to_string_lossy().into_owned(),
+            }
+        })
+        .collect()
+}
+
+/// Löscht eine Datei aus der Bibliothek. `name` ist ein reiner Dateiname — jeder
+/// Pfadtrenner oder `..` wird abgewiesen (kein Ausbruch aus dem Download-Ordner).
+#[tauri::command]
+fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." || name == "." {
+        return Err("ungültiger Dateiname".into());
+    }
+    let dir = state.backend.settings().download_path;
+    let path = dir.join(&name);
+    // Doppelt absichern: der aufgelöste Pfad muss direkt im Download-Ordner liegen.
+    if path.parent() != Some(dir.as_path()) {
+        return Err("Pfad außerhalb des Download-Ordners".into());
+    }
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn app_settings(state: State<'_, AppState>) -> SettingsDto {
     let s = state.backend.settings();
     SettingsDto {
@@ -245,6 +288,16 @@ pub fn run() {
                     "Stream-Proxy-Start fehlgeschlagen: {e}"
                 ))
             })?;
+            // Lokale Wiedergabe: den konfigurierten Download-Ordner fürs
+            // Asset-Protokoll freigeben (ergänzt den statischen $DOWNLOAD-Scope).
+            let download_dir = backend.settings().download_path;
+            if let Err(e) = app
+                .asset_protocol_scope()
+                .allow_directory(&download_dir, true)
+            {
+                eprintln!("Asset-Scope für {download_dir:?} nicht erweiterbar: {e}");
+            }
+
             let downloads = Arc::new(downloads::Downloads::default());
             app.manage(AppState {
                 backend,
@@ -264,6 +317,8 @@ pub fn run() {
             start_download,
             cancel_download,
             list_downloads,
+            library,
+            delete_library_item,
             app_settings
         ])
         .run(tauri::generate_context!())

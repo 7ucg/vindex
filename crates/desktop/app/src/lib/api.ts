@@ -1,7 +1,7 @@
 // Typisierte Brücke zu den Tauri-Commands (crates/desktop/app/src-tauri/src/lib.rs).
 // Jede Funktion mappt 1:1 auf ein #[tauri::command]; das Frontend ruft nie direkt
 // ins Netz, sondern immer über diese Schicht in den Rust-Kern.
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface AppInfo {
@@ -98,4 +98,24 @@ export function listDownloads(): Promise<JobView[]> {
 
 export function onDownloadUpdate(cb: (job: JobView) => void): Promise<UnlistenFn> {
   return listen<JobView>("download:update", (e) => cb(e.payload));
+}
+
+export interface LibraryEntry {
+  name: string;
+  size_bytes: number;
+  modified: number;
+  path: string;
+}
+
+export function library(): Promise<LibraryEntry[]> {
+  return invoke<LibraryEntry[]>("library");
+}
+
+export function deleteLibraryItem(name: string): Promise<void> {
+  return invoke("delete_library_item", { name });
+}
+
+/** Lokale Datei → asset://-URL fürs <video>-Element. */
+export function localFileUrl(path: string): string {
+  return convertFileSrc(path);
 }
