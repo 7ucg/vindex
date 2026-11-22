@@ -78,21 +78,49 @@ pub fn browser_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-/// DNS-Resolver, der jede aufgelöste Adresse gegen [`is_forbidden_ip`] prüft.
+/// Fester Upstream-DNS. Cloudflare 1.1.1.1 umgeht DNS-Sperren des System-Resolvers,
+/// über die einzelne Portale sonst nicht auflösbar sind. Überschreibbar via
+/// `VINDEX_DNS` (eine oder mehrere IPs, komma-getrennt).
+fn upstream_resolver() -> &'static hickory_resolver::TokioAsyncResolver {
+    use std::sync::OnceLock;
+    static R: OnceLock<hickory_resolver::TokioAsyncResolver> = OnceLock::new();
+    R.get_or_init(|| {
+        use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+        let group = match std::env::var("VINDEX_DNS") {
+            Ok(v) => {
+                let ips: Vec<std::net::IpAddr> =
+                    v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if ips.is_empty() {
+                    NameServerConfigGroup::cloudflare()
+                } else {
+                    NameServerConfigGroup::from_ips_clear(&ips, 53, true)
+                }
+            }
+            Err(_) => NameServerConfigGroup::cloudflare(),
+        };
+        let config = ResolverConfig::from_parts(None, vec![], group);
+        hickory_resolver::TokioAsyncResolver::tokio(config, ResolverOpts::default())
+    })
+}
+
+/// DNS-Resolver über einen festen Upstream (1.1.1.1), der jede aufgelöste Adresse
+/// gegen [`is_forbidden_ip`] prüft.
 ///
-/// Schließt die Lücke, die die Redirect-Policy offenlässt: ein Hostname, der erst
-/// per DNS auf eine private/interne IP zeigt (DNS-Rebinding). Löst nur auf
-/// gesperrte Adressen auf, schlägt die Verbindung fehl. IP-Literale umgehen den
-/// Resolver (reqwest verbindet direkt) — die deckt die Redirect-Policy ab.
+/// 1.1.1.1 umgeht DNS-basierte Portal-Sperren; der Adressfilter schließt zugleich
+/// DNS-Rebinding (ein Hostname, der auf eine interne IP zeigt). Löst ein Name nur
+/// auf gesperrte Adressen auf, schlägt die Verbindung fehl. IP-Literale umgehen
+/// den Resolver (reqwest verbindet direkt) — die deckt die Redirect-Policy ab.
 struct GuardedResolver;
 
 impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
-            let host = name.as_str().to_string();
-            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
-            let allowed: Vec<std::net::SocketAddr> =
-                resolved.filter(|sa| !is_forbidden_ip(sa.ip())).collect();
+            let lookup = upstream_resolver().lookup_ip(name.as_str()).await?;
+            let allowed: Vec<std::net::SocketAddr> = lookup
+                .iter()
+                .filter(|ip| !is_forbidden_ip(*ip))
+                .map(|ip| std::net::SocketAddr::new(ip, 0))
+                .collect();
             if allowed.is_empty() {
                 let err: Box<dyn std::error::Error + Send + Sync> =
                     "Ziel löst nur auf gesperrte Adressen auf".into();
