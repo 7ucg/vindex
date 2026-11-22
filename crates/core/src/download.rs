@@ -643,6 +643,7 @@ fn media_segment_urls(text: &str, base_url: &str) -> Vec<String> {
 }
 
 /// Entschlüsselungs-Kontext für AES-128-CBC-Segmente.
+#[derive(Clone)]
 struct Aes128Ctx {
     /// 16-Byte-Schlüssel (über die `URI` geladen).
     key: [u8; 16],
@@ -870,78 +871,44 @@ async fn fetch_segments_to(
     }
 
     let mut file = tokio::fs::File::create(part).await?;
-    let mut total: u64 = 0;
     let total_segments = segments.len();
 
-    for (index, seg) in segments.iter().enumerate() {
+    // Segmente parallel holen (volle Leitung), aber in Reihenfolge schreiben:
+    // `buffered(N)` liefert die Ergebnisse geordnet, die Fetches laufen aber
+    // gleichzeitig. Jedes Segment wird vollständig gepuffert (Cap pro Segment).
+    // Geklonte, besitzende Daten je Future → die Fetches sind `Send` (sonst klagt
+    // `buffered` über zu enge Lebensdauern geliehener Referenzen).
+    let client_c = client.clone();
+    let referer_c = referer.map(str::to_string);
+    let cipher_c = cipher.cloned();
+    let mut stream = futures::stream::iter(segments.iter().cloned().enumerate())
+        .map(move |(index, seg)| {
+            let client = client_c.clone();
+            let referer = referer_c.clone();
+            let cipher = cipher_c.clone();
+            async move {
+                fetch_one_segment(&client, &seg, referer.as_deref(), cipher.as_ref(), index).await
+            }
+        })
+        .buffered(SEGMENT_CONCURRENCY);
+
+    let mut total: u64 = 0;
+    let mut done = 0usize;
+    while let Some(res) = stream.next().await {
         if is_cancelled(cancel) {
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
-        // Jedes Segment unterliegt denselben Ziel-Regeln wie jeder andere Fetch.
-        if !is_http_url(seg) || crate::http::host_is_forbidden_ip_literal(seg) {
-            return Err(Error::extract("HLS", "Segment-URL nicht erlaubt"));
+        let bytes = res?;
+        total += bytes.len() as u64;
+        if total > MAX_TOTAL_BYTES {
+            return Err(Error::extract("HLS", "Download überschreitet Größenlimit"));
         }
-
-        let resp = crate::http::get_retry(client, seg, referer)
-            .await?
-            .error_for_status()?;
-        let mut stream = resp.bytes_stream();
-        let mut seg_bytes: u64 = 0;
-
-        if let Some(ctx) = cipher {
-            // Verschlüsseltes Segment vollständig puffern — der Sync-Byte-Check und
-            // das Schreiben greifen erst auf dem entschlüsselten Klartext.
-            let mut enc: Vec<u8> = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                seg_bytes += chunk.len() as u64;
-                total += chunk.len() as u64;
-                // Der Krypto-Pfad puffert das ganze Segment im Speicher → engerer
-                // Cap als beim streamenden Klartext-Pfad.
-                if seg_bytes > MAX_ENCRYPTED_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
-                    return Err(Error::extract(
-                        "HLS",
-                        "verschlüsseltes Segment überschreitet Größenlimit",
-                    ));
-                }
-                enc.extend_from_slice(&chunk);
-            }
-            let plain = aes128_cbc_decrypt(&ctx.key, &ctx.iv_for(index), &enc)?;
-            if plain.first() != Some(&0x47) {
-                return Err(Error::extract(
-                    "HLS",
-                    "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
-                ));
-            }
-            file.write_all(&plain).await?;
-        } else {
-            let mut first = true;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                if first {
-                    if chunk.first() != Some(&0x47) {
-                        return Err(Error::extract(
-                            "HLS",
-                            "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
-                        ));
-                    }
-                    first = false;
-                }
-                seg_bytes += chunk.len() as u64;
-                total += chunk.len() as u64;
-                if seg_bytes > MAX_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
-                    return Err(Error::extract(
-                        "HLS",
-                        "Segment-Download überschreitet Größenlimit",
-                    ));
-                }
-                file.write_all(&chunk).await?;
-            }
-        }
+        file.write_all(&bytes).await?;
+        done += 1;
         report(
             progress,
             Progress::Segment {
-                done: index + 1,
+                done,
                 total: total_segments,
                 bytes: total,
             },
@@ -949,6 +916,51 @@ async fn fetch_segments_to(
     }
     file.flush().await?;
     Ok(())
+}
+
+/// Wie viele HLS-Segmente gleichzeitig geladen werden (volle Leitung ausnutzen).
+const SEGMENT_CONCURRENCY: usize = 6;
+
+/// Holt ein einzelnes Segment vollständig in den Speicher: SSRF-Prüfung,
+/// Größen-Cap, optionale AES-128-CBC-Entschlüsselung, Sync-Byte-Check (MPEG-TS).
+async fn fetch_one_segment(
+    client: &reqwest::Client,
+    seg: &str,
+    referer: Option<&str>,
+    cipher: Option<&Aes128Ctx>,
+    index: usize,
+) -> Result<Vec<u8>> {
+    if !is_http_url(seg) || crate::http::host_is_forbidden_ip_literal(seg) {
+        return Err(Error::extract("HLS", "Segment-URL nicht erlaubt"));
+    }
+    let resp = crate::http::get_retry(client, seg, referer)
+        .await?
+        .error_for_status()?;
+    let mut stream = resp.bytes_stream();
+    let cap = if cipher.is_some() {
+        MAX_ENCRYPTED_SEGMENT_BYTES
+    } else {
+        MAX_SEGMENT_BYTES
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if buf.len() as u64 + chunk.len() as u64 > cap {
+            return Err(Error::extract("HLS", "Segment überschreitet Größenlimit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let out = match cipher {
+        Some(ctx) => aes128_cbc_decrypt(&ctx.key, &ctx.iv_for(index), &buf)?,
+        None => buf,
+    };
+    if out.first() != Some(&0x47) {
+        return Err(Error::extract(
+            "HLS",
+            "Segment ist kein MPEG-TS (nativer Pfad nicht anwendbar)",
+        ));
+    }
+    Ok(out)
 }
 
 /// Remuxt eine lokale Mediendatei mit ffmpeg (`-c copy`) nach *out_path*.
