@@ -88,8 +88,13 @@ fn upstream_resolver() -> &'static hickory_resolver::TokioAsyncResolver {
         use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
         let group = match std::env::var("VINDEX_DNS") {
             Ok(v) => {
-                let ips: Vec<std::net::IpAddr> =
-                    v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                // Nur öffentliche Resolver-IPs zulassen: ein privater/loopback DNS
+                // könnte alle Lookups umbiegen und den Adressfilter aushebeln.
+                let ips: Vec<std::net::IpAddr> = v
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<std::net::IpAddr>().ok())
+                    .filter(|ip| !is_forbidden_ip(*ip))
+                    .collect();
                 if ips.is_empty() {
                     NameServerConfigGroup::cloudflare()
                 } else {
