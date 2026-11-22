@@ -346,12 +346,18 @@ fn parse_ext_x_key(attrs: &str) -> HlsKey {
 /// oder ungültigen Hex-Zeichen.
 fn parse_hex_iv(s: &str) -> Option<[u8; 16]> {
     let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
-    if hex.len() != 32 {
+    // Erst auf genau 32 ASCII-Hexziffern prüfen, dann über Bytes gehen — so kann
+    // kein Nicht-Char-Boundary-Slice panicken und kein `+`/`-` durchrutschen.
+    if hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
+    let bytes = hex.as_bytes();
     let mut out = [0u8; 16];
     for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        // bytes[2i]/[2i+1] sind gültig (len == 32) und ASCII-Hex (oben geprüft).
+        let hi = (bytes[2 * i] as char).to_digit(16)?;
+        let lo = (bytes[2 * i + 1] as char).to_digit(16)?;
+        *b = (hi * 16 + lo) as u8;
     }
     Some(out)
 }
@@ -409,6 +415,14 @@ fn parse_media_sequence(text: &str) -> u64 {
     0
 }
 
+/// True, wenn beide URLs denselben (vorhandenen) Host haben.
+fn same_host(a: &str, b: &str) -> bool {
+    match (reqwest::Url::parse(a).ok(), reqwest::Url::parse(b).ok()) {
+        (Some(ua), Some(ub)) => ua.host_str().is_some() && ua.host_str() == ub.host_str(),
+        _ => false,
+    }
+}
+
 /// Löst eine (ggf. relative) URL absolut gegen *base_url* auf. Absolute
 /// http(s)-URLs bleiben unverändert.
 fn resolve_url(target: &str, base_url: &str) -> Option<String> {
@@ -447,7 +461,7 @@ impl Aes128Ctx {
     /// (inkrementierte) Mediensequenz-Nummer als 16-Byte-Big-Endian.
     fn iv_for(&self, index: usize) -> [u8; 16] {
         self.declared_iv
-            .unwrap_or_else(|| iv_from_sequence(self.media_sequence + index as u64))
+            .unwrap_or_else(|| iv_from_sequence(self.media_sequence.saturating_add(index as u64)))
     }
 }
 
@@ -481,6 +495,11 @@ async fn load_aes128_ctx(
         .ok_or_else(|| Error::extract("HLS", "Schlüssel-URL unauflösbar"))?;
     if !is_http_url(&key_url) || crate::http::host_is_forbidden_ip_literal(&key_url) {
         return Err(Error::extract("HLS", "Schlüssel-URL nicht erlaubt"));
+    }
+    // Schlüssel nur vom selben Host wie die Playlist laden — sonst könnte ein
+    // manipuliertes EXT-X-KEY den Request (samt Referer) auf einen fremden Host lenken.
+    if !same_host(&key_url, media_url) {
+        return Err(Error::extract("HLS", "Schlüssel-URL auf fremdem Host"));
     }
 
     // Schlüsselantwort streamen und hart deckeln — ein Schlüssel ist 16 Byte.
@@ -573,6 +592,8 @@ async fn download_hls_native(
 const MAX_SEGMENTS: usize = 50_000;
 /// Obergrenze pro Segment.
 const MAX_SEGMENT_BYTES: u64 = 256 * 1024 * 1024;
+/// Engere Grenze für verschlüsselte Segmente (der Krypto-Pfad puffert komplett).
+const MAX_ENCRYPTED_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 /// Obergrenze über alle Segmente zusammen.
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
@@ -625,10 +646,12 @@ async fn fetch_segments_to(
                 let chunk = chunk?;
                 seg_bytes += chunk.len() as u64;
                 total += chunk.len() as u64;
-                if seg_bytes > MAX_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
+                // Der Krypto-Pfad puffert das ganze Segment im Speicher → engerer
+                // Cap als beim streamenden Klartext-Pfad.
+                if seg_bytes > MAX_ENCRYPTED_SEGMENT_BYTES || total > MAX_TOTAL_BYTES {
                     return Err(Error::extract(
                         "HLS",
-                        "Segment-Download überschreitet Größenlimit",
+                        "verschlüsseltes Segment überschreitet Größenlimit",
                     ));
                 }
                 enc.extend_from_slice(&chunk);
