@@ -119,18 +119,25 @@ pub async fn resolve(client: &reqwest::Client, embed_url: &str) -> Result<Resolv
             // voe.sx liefert oft nur einen JS-Stub, der per `window.location` auf eine
             // rotierende CDN-Domain (`…/e/<code>`) weiterleitet. Diesen einen Schritt
             // folgen und dort erneut extrahieren.
-            let target = redirect_target(&text)
+            let raw = redirect_target(&text)
                 .ok_or_else(|| Error::extract("VOE", "keine Stream-URL in der Seite"))?;
-            if !(target.starts_with("http://") || target.starts_with("https://"))
-                || crate::http::host_is_forbidden_ip_literal(&target)
-            {
-                return Err(Error::extract("VOE", "unerlaubtes Redirect-Ziel"));
-            }
-            let resp2 = crate::http::get_retry(client, &target, Some(embed_url)).await?;
+            // Fail-closed validieren: parsebar, http(s), keine Userinfo, keine gesperrte
+            // IP. (Die VOE-CDN-Domains rotieren, daher keine feste Host-Allowlist.)
+            let target = reqwest::Url::parse(&raw)
+                .ok()
+                .filter(|u| matches!(u.scheme(), "http" | "https"))
+                .filter(|u| u.username().is_empty() && u.password().is_none())
+                .filter(|u| !crate::http::host_is_forbidden_ip_literal(u.as_str()))
+                .ok_or_else(|| Error::extract("VOE", "unerlaubtes Redirect-Ziel"))?;
+            // Referer nur als Origin des Embeds (kein Pfad/Query-Leak an die Fremddomain).
+            let referer = reqwest::Url::parse(embed_url)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| format!("{}://{}", u.scheme(), h)));
+            let resp2 = crate::http::get_retry(client, target.as_str(), referer.as_deref()).await?;
             let status2 = resp2.status().as_u16();
             let text2 = resp2.text().await?;
             if crate::http::looks_like_challenge(&text2, status2) {
-                return Err(Error::Challenge(target));
+                return Err(Error::extract("VOE", "Challenge nach Redirect"));
             }
             extract_source_from_html(&text2)
                 .ok_or_else(|| Error::extract("VOE", "keine Stream-URL (nach Redirect)"))?
