@@ -754,7 +754,13 @@ async fn resolve_portal(
                             |r| r.get(0),
                         )
                         .unwrap_or(0);
-                    if fc >= RESOLVE_FAIL_THRESHOLD {
+                    // Genau an der Schwelle **einmal** auslösen (nicht `>=`): danach
+                    // steigt fail_count darüber und matcht nicht mehr, ein unveränderter
+                    // (dauerhaft toter) Link kann so nicht jeden Lauf einen Titel-Neu-
+                    // Crawl erzwingen. Erst ein geänderter portal_url setzt fail_count
+                    // beim nächsten `build` auf 0 und gibt einem frischen Token erneut
+                    // 3 faire Versuche (Verstärkung ausgeschlossen).
+                    if fc == RESOLVE_FAIL_THRESHOLD {
                         conn.execute(
                             "UPDATE title SET crawled_at = NULL WHERE id = (
                                  SELECT episode.title_id FROM episode
