@@ -258,21 +258,38 @@ async fn resolve_playback(
 struct TitleMetaDto {
     poster: Option<String>,
     description: Option<String>,
+    year: Option<String>,
+    fsk: Option<u32>,
+    country: Option<String>,
+    imdb: Option<String>,
+    genres: Vec<String>,
+    directors: Vec<String>,
+    actors: Vec<String>,
+    producers: Vec<String>,
 }
 
 #[tauri::command]
 async fn title_meta(url: String, state: State<'_, AppState>) -> Result<TitleMetaDto, String> {
-    let (poster, description) = state
+    let m = state
         .backend
         .title_meta(&url)
         .await
         .map_err(|e| e.to_string())?;
     // Poster durch den lokalen Proxy laden (SSRF-geprüft; die CSP erlaubt Bilder
-    // nur von 127.0.0.1, nicht von beliebigen https-Hosts).
-    let poster = poster.map(|u| state.proxy.stream_url(&u, None));
+    // nur von 127.0.0.1, nicht von beliebigen https-Hosts). IMDB bleibt eine externe
+    // Link-URL (wird extern geöffnet, nicht ins WebView geladen).
+    let poster = m.poster.map(|u| state.proxy.stream_url(&u, None));
     Ok(TitleMetaDto {
         poster,
-        description,
+        description: m.description,
+        year: m.year,
+        fsk: m.fsk,
+        country: m.country,
+        imdb: m.imdb,
+        genres: m.genres,
+        directors: m.directors,
+        actors: m.actors,
+        producers: m.producers,
     })
 }
 
@@ -616,6 +633,24 @@ fn reveal_library_item(
         .map_err(|e| e.to_string())
 }
 
+/// Öffnet einen externen Link im System-Browser. Nur `https` und eine kleine
+/// Allowlist (IMDB) — die URL stammt aus gescraptem Inhalt.
+#[tauri::command]
+fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "ungültige URL".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("nur https erlaubt".into());
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if host != "imdb.com" && !host.ends_with(".imdb.com") {
+        return Err("Host nicht erlaubt".into());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Ist der Autostart (Login) aktiviert?
 #[tauri::command]
 fn autostart_enabled(app: tauri::AppHandle) -> bool {
@@ -781,6 +816,7 @@ pub fn run() {
             set_impersonate,
             set_obscura,
             set_proxy,
+            open_external,
             retry_download,
             list_downloads,
             library,

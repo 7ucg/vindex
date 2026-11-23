@@ -190,10 +190,11 @@ impl Backend {
         site::serienstream::list_episodes(&self.client, base, &slug, season).await
     }
 
-    /// Poster und Kurzbeschreibung eines Titels (Open-Graph-Meta der Detailseite).
-    pub async fn title_meta(&self, url: &str) -> Result<(Option<String>, Option<String>)> {
+    /// Reiche Titel-Metadaten der Detailseite (Poster, Beschreibung, Jahr, FSK,
+    /// Land, IMDB, Genres, Regie/Besetzung/Produktion).
+    pub async fn title_meta(&self, url: &str) -> Result<core::site::TitleMeta> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
-        site::og_meta(&self.client, url).await
+        site::title_meta(&self.client, url).await
     }
 
     /// Nur das Poster-Cover eines Titels (für das Grid, lazy pro Karte).

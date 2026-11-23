@@ -14,6 +14,7 @@ import {
   titleMeta,
   library,
   localMediaUrl,
+  openExternal,
   type Episode,
 } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
@@ -250,15 +251,68 @@ export function Detail(): JSX.Element {
         </button>
       </div>
 
-      <Show when={meta()?.poster || meta()?.description}>
-        <div class="detail-head">
-          <Show when={meta()?.poster}>
-            <img class="detail-poster" src={meta()!.poster!} alt={sel.title} loading="lazy" />
+      <Show when={meta()} keyed>
+        {(m) => (
+          <Show
+            when={
+              m.poster ||
+              m.description ||
+              m.year ||
+              m.genres.length ||
+              m.directors.length ||
+              m.actors.length
+            }
+          >
+            <div class="detail-head">
+              <Show when={m.poster}>
+                <img class="detail-poster" src={m.poster!} alt={sel.title} loading="lazy" />
+              </Show>
+              <div class="detail-info">
+                <Show when={m.year || m.fsk != null || m.country || m.imdb}>
+                  <div class="meta-row">
+                    <Show when={m.year}>
+                      <span class="meta-badge">{m.year}</span>
+                    </Show>
+                    <Show when={m.fsk != null}>
+                      <span class="meta-badge fsk">Ab {m.fsk}</span>
+                    </Show>
+                    <Show when={m.country}>
+                      <span class="meta-dim">{m.country}</span>
+                    </Show>
+                    <Show when={m.imdb}>
+                      <button class="meta-badge imdb" onClick={() => void openExternal(m.imdb!)}>
+                        IMDB ↗
+                      </button>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={m.description}>
+                  <p class="detail-desc">{m.description}</p>
+                </Show>
+                <Show when={m.genres.length > 0}>
+                  <div class="meta-chips">
+                    <For each={m.genres}>{(g) => <span class="meta-chip">{g}</span>}</For>
+                  </div>
+                </Show>
+                <Show when={m.directors.length > 0}>
+                  <p class="meta-people">
+                    <b>Regie:</b> {m.directors.join(", ")}
+                  </p>
+                </Show>
+                <Show when={m.actors.length > 0}>
+                  <p class="meta-people">
+                    <b>Besetzung:</b> {m.actors.join(", ")}
+                  </p>
+                </Show>
+                <Show when={m.producers.length > 0}>
+                  <p class="meta-people">
+                    <b>Produktion:</b> {m.producers.join(", ")}
+                  </p>
+                </Show>
+              </div>
+            </div>
           </Show>
-          <Show when={meta()?.description}>
-            <p class="detail-desc">{meta()!.description}</p>
-          </Show>
-        </div>
+        )}
       </Show>
 
       <div class="controls" style={{ "margin-bottom": "16px" }}>

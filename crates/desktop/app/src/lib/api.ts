@@ -65,10 +65,23 @@ export function aniskip(url: string, season: number, episode: number): Promise<S
 export interface TitleMeta {
   poster: string | null;
   description: string | null;
+  year: string | null;
+  fsk: number | null;
+  country: string | null;
+  imdb: string | null;
+  genres: string[];
+  directors: string[];
+  actors: string[];
+  producers: string[];
 }
 
 export function titleMeta(url: string): Promise<TitleMeta> {
   return invoke<TitleMeta>("title_meta", { url });
+}
+
+/** Öffnet einen externen Link (nur https, geprüfte Hosts) im System-Browser. */
+export function openExternal(url: string): Promise<void> {
+  return invoke("open_external", { url });
 }
 
 export function cover(url: string): Promise<string | null> {

@@ -74,6 +74,151 @@ pub async fn og_meta(
     Ok(parse_og(&body, base.as_ref()))
 }
 
+/// Reiche Titel-Metadaten der Detailseite (aniworld/serienstream nutzen Schema.org-
+/// Microdata). Felder, die fehlen, bleiben leer — nie ein Fehler deswegen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TitleMeta {
+    pub poster: Option<String>,
+    pub description: Option<String>,
+    /// Jahr oder Jahres-Spanne, z. B. „2006 – 2008".
+    pub year: Option<String>,
+    pub fsk: Option<u32>,
+    pub country: Option<String>,
+    pub imdb: Option<String>,
+    pub genres: Vec<String>,
+    pub directors: Vec<String>,
+    pub actors: Vec<String>,
+    pub producers: Vec<String>,
+}
+
+/// Liest [`TitleMeta`] von einer Titel-Detailseite.
+pub async fn title_meta(client: &reqwest::Client, url: &str) -> crate::error::Result<TitleMeta> {
+    let body = fetch_text(client, url).await?;
+    let base = reqwest::Url::parse(url).ok();
+    Ok(parse_title_meta(&body, base.as_ref()))
+}
+
+/// Reine HTML→Metadaten-Logik (ohne Netz, testbar).
+fn parse_title_meta(body: &str, base: Option<&reqwest::Url>) -> TitleMeta {
+    use scraper::{Html, Selector};
+    let (poster, description) = parse_og(body, base);
+    let doc = Html::parse_document(body);
+
+    // Personen-Listen aus Microdata (itemprop=director/actor/creator): bevorzugt der
+    // innere `itemprop=name`, sonst der Elementtext. Dedupliziert und gedeckelt.
+    let name_sel = Selector::parse(r#"[itemprop="name"]"#).ok();
+    let people = |prop: &str| -> Vec<String> {
+        let Ok(sel) = Selector::parse(&format!(r#"[itemprop="{prop}"]"#)) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for el in doc.select(&sel) {
+            let name = name_sel
+                .as_ref()
+                .and_then(|ns| el.select(ns).next().map(|n| n.text().collect::<String>()))
+                .unwrap_or_else(|| el.text().collect::<String>());
+            let name = name.trim().trim_end_matches(',').trim().to_string();
+            if !name.is_empty() && name.len() <= 80 && seen.insert(name.clone()) {
+                out.push(name);
+                if out.len() >= 12 {
+                    break;
+                }
+            }
+        }
+        out
+    };
+
+    // Genres: a[itemprop=genre]; Sprach-Tags (Ger/Sub/Dub) rausfiltern.
+    let genres = Selector::parse(r#"[itemprop="genre"]"#)
+        .map(|sel| {
+            let mut seen = std::collections::HashSet::new();
+            doc.select(&sel)
+                .map(|el| el.text().collect::<String>().trim().to_string())
+                .filter(|g| {
+                    !g.is_empty()
+                        && !matches!(
+                            g.to_ascii_lowercase().as_str(),
+                            "ger" | "gersub" | "gerdub" | "engsub" | "engdub" | "dub" | "sub"
+                        )
+                })
+                .filter(|g| seen.insert(g.clone()))
+                .take(12)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Land: erster countryOfOrigin-Eintrag.
+    let country = Selector::parse(r#"[itemprop="countryOfOrigin"]"#)
+        .ok()
+        .and_then(|sel| {
+            doc.select(&sel)
+                .next()
+                .map(|el| {
+                    el.text()
+                        .collect::<String>()
+                        .trim()
+                        .trim_end_matches(',')
+                        .trim()
+                        .to_string()
+                })
+                .filter(|s| !s.is_empty())
+        });
+
+    // FSK aus data-fsk.
+    let fsk = Selector::parse("[data-fsk]").ok().and_then(|sel| {
+        doc.select(&sel)
+            .next()
+            .and_then(|el| el.value().attr("data-fsk"))
+            .and_then(|v| v.trim().parse::<u32>().ok())
+    });
+
+    // IMDB-Link.
+    let imdb = Selector::parse(r#"a[href*="imdb.com/title/"]"#)
+        .ok()
+        .and_then(|sel| {
+            doc.select(&sel)
+                .next()
+                .and_then(|el| el.value().attr("href"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+
+    // Jahr(e) aus den „…/jahr/<jahr>"-Links: Min–Max-Spanne.
+    let year = Selector::parse(r#"a[href*="/jahr/"]"#)
+        .ok()
+        .and_then(|sel| {
+            let years: Vec<u32> = doc
+                .select(&sel)
+                .filter_map(|el| el.value().attr("href"))
+                .filter_map(|h| h.rsplit("/jahr/").next())
+                .filter_map(|s| s.split(['/', '?', '#']).next())
+                .filter_map(|s| s.trim().parse::<u32>().ok())
+                .filter(|y| (1900..=2100).contains(y))
+                .collect();
+            let min = years.iter().min()?;
+            let max = years.iter().max()?;
+            Some(if min == max {
+                min.to_string()
+            } else {
+                format!("{min} – {max}")
+            })
+        });
+
+    TitleMeta {
+        poster,
+        description,
+        year,
+        fsk,
+        country,
+        imdb,
+        genres,
+        directors: people("director"),
+        actors: people("actor"),
+        producers: people("creator"),
+    }
+}
+
 /// Reine HTML→Meta-Logik von [`og_meta`] (ohne Netz, testbar): echtes Poster +
 /// Kurzbeschreibung. Poster-Reihenfolge: `img[itemprop=image]` (aniworld-Cover) →
 /// serienstream-„channel"-Bild → `og:image` (Fallback). Alles absolut aufgelöst
@@ -202,6 +347,42 @@ pub fn slug_from_url(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_meta_aus_microdata() {
+        let html = r#"
+            <html><body>
+            <meta property="og:description" content="Eine Beschreibung.">
+            <img itemprop="image" src="https://cdn.example/poster.jpg">
+            <a href="/animes/jahr/2006">2006</a>
+            <a href="/animes/jahr/2008">2008</a>
+            <div class="fsk" data-fsk="16"></div>
+            <a href="https://www.imdb.com/title/tt0388629">IMDB</a>
+            <span itemprop="genre">Actiondrama</span>
+            <span itemprop="genre">Action</span>
+            <span itemprop="genre">Ger</span>
+            <span itemprop="genre">GerSub</span>
+            <li itemprop="director"><span itemprop="name">Gorō Taniguchi</span></li>
+            <li itemprop="actor"><span itemprop="name">Jun Fukuyama</span></li>
+            <li itemprop="actor"><span itemprop="name">Yukana</span></li>
+            <li itemprop="creator"><span itemprop="name">SUNRISE</span></li>
+            <span itemprop="countryOfOrigin">Japan</span>
+            </body></html>
+        "#;
+        let m = parse_title_meta(html, None);
+        assert_eq!(m.year.as_deref(), Some("2006 – 2008"));
+        assert_eq!(m.fsk, Some(16));
+        assert_eq!(m.country.as_deref(), Some("Japan"));
+        assert_eq!(
+            m.imdb.as_deref(),
+            Some("https://www.imdb.com/title/tt0388629")
+        );
+        assert_eq!(m.genres, vec!["Actiondrama", "Action"]); // Ger/GerSub gefiltert
+        assert_eq!(m.directors, vec!["Gorō Taniguchi"]);
+        assert_eq!(m.actors, vec!["Jun Fukuyama", "Yukana"]);
+        assert_eq!(m.producers, vec!["SUNRISE"]);
+        assert!(m.description.as_deref() == Some("Eine Beschreibung."));
+    }
 
     #[test]
     fn og_meta_liest_image_und_description() {
