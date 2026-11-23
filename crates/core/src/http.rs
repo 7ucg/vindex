@@ -95,7 +95,11 @@ fn proxy_pool() -> &'static [String] {
 /// True, wenn ein Proxy-Pool (`VINDEX_PROXY`) konfiguriert ist. Dient Stufe 3
 /// (obscura) als Fail-closed-Signal: ihr lokaler 1.1.1.1-Proxy würde einen
 /// konfigurierten Egress-Proxy umgehen, also wird Stufe 3 dann abgelehnt.
-pub(crate) fn proxy_configured() -> bool {
+///
+/// Liest den prozessweiten `OnceLock`-Pool (thread-sicher) — Konsumenten können so
+/// den **effektiven** Proxy-Zustand abfragen, ohne direkt ins (nicht thread-sichere)
+/// Environment zu greifen.
+pub fn proxy_configured() -> bool {
     !proxy_pool().is_empty()
 }
 
