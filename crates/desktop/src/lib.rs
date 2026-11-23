@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use core::config::Settings;
 use core::download::DownloadPrefs;
-pub use core::download::{Progress, ProgressSink};
+pub use core::download::{DownloadControl, PauseGate, Progress, ProgressSink, RateLimiter};
 use core::error::Result;
 use core::hoster::Resolved;
 use core::model::{Hoster, Language, ProviderLinks, Quality};
@@ -285,6 +285,18 @@ impl Backend {
         progress: Option<&ProgressSink>,
     ) -> Result<PathBuf> {
         core::download::download_url(&self.client, url, prefs, cancel, progress).await
+    }
+
+    /// Wie [`Backend::download_with_progress`], aber mit voller Live-Steuerung
+    /// (Abbruch, Pause, Bandbreite) über ein [`DownloadControl`].
+    pub async fn download_controlled(
+        &self,
+        url: &str,
+        prefs: &DownloadPrefs,
+        ctl: DownloadControl,
+        progress: Option<&ProgressSink>,
+    ) -> Result<PathBuf> {
+        core::download::download_url_ctl(&self.client, url, prefs, ctl, progress).await
     }
 
     /// Bequemlichkeits-Variante: baut aus [`Settings`] + [`DownloadOverrides`]

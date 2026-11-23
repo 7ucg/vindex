@@ -6,6 +6,7 @@ import {
   setAutostart,
   getConfig,
   setConfig,
+  setBandwidthLimit,
   recentLogs,
   type DesktopConfig,
 } from "../lib/api";
@@ -77,6 +78,7 @@ export function Settings(): JSX.Element {
     language: null,
     max_quality: null,
     min_quality: null,
+    bandwidth_kib: null,
   });
   getConfig()
     .then(setCfg)
@@ -87,6 +89,12 @@ export function Settings(): JSX.Element {
     void setConfig(next).catch(() => {});
   };
   const empty = (v: string) => (v.trim() === "" ? null : v);
+  // Tempolimit getrennt: eigener Command, der den Laufzeit-Limiter setzt und persistiert.
+  const updateBandwidth = (v: string) => {
+    const kib = Math.max(0, Math.floor(Number(v) || 0));
+    setCfg({ ...cfg(), bandwidth_kib: kib === 0 ? null : kib });
+    void setBandwidthLimit(kib).catch(() => {});
+  };
 
   let fileInput: HTMLInputElement | undefined;
   const onImport = async (e: Event) => {
@@ -289,6 +297,18 @@ export function Settings(): JSX.Element {
             <option value="">Standard</option>
             <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
           </select>
+        </div>
+        <div class="field">
+          <label>Tempolimit (KiB/s, 0 = unbegrenzt)</label>
+          <input
+            class="cfg-input"
+            type="number"
+            min="0"
+            step="256"
+            placeholder="0"
+            value={cfg().bandwidth_kib ?? ""}
+            onChange={(e) => updateBandwidth(e.currentTarget.value)}
+          />
         </div>
       </div>
 

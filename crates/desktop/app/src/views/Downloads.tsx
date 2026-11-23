@@ -2,6 +2,8 @@ import { createSignal, onCleanup, onMount, For, Show, type JSX } from "solid-js"
 import {
   listDownloads,
   cancelDownload,
+  pauseDownload,
+  resumeDownload,
   retryDownload,
   onDownloadUpdate,
   type JobView,
@@ -12,6 +14,7 @@ const STATUS: Record<string, string> = {
   queued: "in Warteschlange",
   resolving: "löst auf …",
   running: "lädt",
+  paused: "pausiert",
   muxing: "muxt",
   done: "fertig",
   error: "Fehler",
@@ -33,7 +36,7 @@ function pct(j: JobView): number {
 function barColor(status: string): string {
   if (status === "done") return "var(--ok)";
   if (status === "error") return "var(--err)";
-  if (status === "cancelled") return "var(--muted)";
+  if (status === "cancelled" || status === "paused") return "var(--muted)";
   return "var(--grad)";
 }
 
@@ -174,6 +177,16 @@ export function Downloads(): JSX.Element {
                   </div>
                 </div>
                 <div class="act">
+                  <Show when={["running", "resolving", "queued"].includes(j.status)}>
+                    <button class="chip" onClick={() => pauseDownload(j.id)}>
+                      Pause
+                    </button>
+                  </Show>
+                  <Show when={j.status === "paused"}>
+                    <button class="chip" onClick={() => resumeDownload(j.id)}>
+                      Fortsetzen
+                    </button>
+                  </Show>
                   <Show when={!["done", "error", "cancelled"].includes(j.status)}>
                     <button class="chip" onClick={() => cancelDownload(j.id)}>
                       Abbrechen

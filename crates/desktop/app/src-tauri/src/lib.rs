@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use vindex_desktop::{core, Backend};
 
 /// Gehaltener Zustand: die Facade (HTTP-Client), der lokale Referer-Proxy, der
@@ -345,6 +345,29 @@ fn cancel_download(id: u64, state: State<'_, AppState>) {
     state.downloads.cancel(id);
 }
 
+#[tauri::command]
+fn pause_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) {
+    if let Some(v) = state.downloads.pause(id) {
+        let _ = app.emit("download:update", v);
+    }
+}
+
+#[tauri::command]
+fn resume_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) {
+    if let Some(v) = state.downloads.resume(id) {
+        let _ = app.emit("download:update", v);
+    }
+}
+
+/// Globale Bandbreitenbegrenzung setzen (KiB/s; 0 = unbegrenzt) und persistieren.
+#[tauri::command]
+fn set_bandwidth_limit(kib: u64, state: State<'_, AppState>) -> Result<(), String> {
+    state.downloads.set_bandwidth(kib.saturating_mul(1024));
+    let mut cfg = state.config.lock().unwrap();
+    cfg.bandwidth_kib = if kib == 0 { None } else { Some(kib) };
+    config::save(&cfg)
+}
+
 /// Lädt einen (fehlgeschlagenen/abgebrochenen) Auftrag mit denselben Parametern erneut.
 #[tauri::command]
 fn retry_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) -> Option<u64> {
@@ -619,11 +642,16 @@ pub fn run() {
             // Lokale Wiedergabe wird pro Mediendatei freigegeben (siehe `library`),
             // nicht pauschal für den ganzen Ordner.
             let downloads = Arc::new(downloads::Downloads::default());
+            let cfg = config::load();
+            // Gespeicherte Bandbreitenbegrenzung auf den Laufzeit-Limiter anwenden.
+            if let Some(kib) = cfg.bandwidth_kib {
+                downloads.set_bandwidth(kib.saturating_mul(1024));
+            }
             app.manage(AppState {
                 backend,
                 proxy,
                 downloads,
-                config: Mutex::new(config::load()),
+                config: Mutex::new(cfg),
                 logs: logs_for_state.clone(),
             });
             Ok(())
@@ -643,6 +671,9 @@ pub fn run() {
             aniskip,
             start_download,
             cancel_download,
+            pause_download,
+            resume_download,
+            set_bandwidth_limit,
             retry_download,
             list_downloads,
             library,

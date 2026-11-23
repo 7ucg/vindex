@@ -17,6 +17,9 @@ pub struct DesktopConfig {
     pub max_quality: Option<String>,
     /// Niedrigste Qualität.
     pub min_quality: Option<String>,
+    /// Globale Bandbreitenbegrenzung in KiB/s (0 oder None = unbegrenzt).
+    #[serde(default)]
+    pub bandwidth_kib: Option<u64>,
 }
 
 fn config_path() -> Option<PathBuf> {

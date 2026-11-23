@@ -104,6 +104,7 @@ export interface DesktopConfig {
   language: string | null;
   max_quality: string | null;
   min_quality: string | null;
+  bandwidth_kib: number | null;
 }
 
 export function getConfig(): Promise<DesktopConfig> {
@@ -143,6 +144,19 @@ export function startDownload(
 
 export function cancelDownload(id: number): Promise<void> {
   return invoke("cancel_download", { id });
+}
+
+export function pauseDownload(id: number): Promise<void> {
+  return invoke("pause_download", { id });
+}
+
+export function resumeDownload(id: number): Promise<void> {
+  return invoke("resume_download", { id });
+}
+
+/** Globale Bandbreitenbegrenzung in KiB/s (0 = unbegrenzt). */
+export function setBandwidthLimit(kib: number): Promise<void> {
+  return invoke("set_bandwidth_limit", { kib });
 }
 
 export function retryDownload(id: number): Promise<number | null> {

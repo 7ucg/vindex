@@ -13,7 +13,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use vindex_desktop::core;
-use vindex_desktop::{prefs_from_settings, CancellationToken, DownloadOverrides, Progress};
+use vindex_desktop::{
+    prefs_from_settings, CancellationToken, DownloadControl, DownloadOverrides, PauseGate,
+    Progress, RateLimiter,
+};
 
 /// Wie viele Downloads gleichzeitig laufen dürfen (der Rest bleibt in der Warteschlange).
 const MAX_CONCURRENT: usize = 3;
@@ -23,7 +26,7 @@ const MAX_CONCURRENT: usize = 3;
 pub struct JobView {
     pub id: u64,
     pub title: String,
-    /// queued | resolving | running | muxing | done | error | cancelled
+    /// queued | resolving | running | paused | muxing | done | error | cancelled
     pub status: String,
     pub done: usize,
     pub total: usize,
@@ -34,6 +37,7 @@ pub struct JobView {
 struct Job {
     view: JobView,
     cancel: CancellationToken,
+    pause: Arc<PauseGate>,
     /// Original-Parameter, um den Auftrag erneut zu laden (Retry).
     url: String,
     file_name: String,
@@ -44,6 +48,8 @@ pub struct Downloads {
     jobs: Mutex<HashMap<u64, Job>>,
     next: AtomicU64,
     sem: Arc<Semaphore>,
+    /// Globale Bandbreitenbegrenzung über alle Downloads (0 = unbegrenzt).
+    global_rate: Arc<RateLimiter>,
 }
 
 impl Default for Downloads {
@@ -52,6 +58,7 @@ impl Default for Downloads {
             jobs: Mutex::new(HashMap::new()),
             next: AtomicU64::new(0),
             sem: Arc::new(Semaphore::new(MAX_CONCURRENT)),
+            global_rate: Arc::new(RateLimiter::new(0)),
         }
     }
 }
@@ -68,6 +75,43 @@ impl Downloads {
         if let Some(j) = self.jobs.lock().unwrap().get(&id) {
             j.cancel.cancel();
         }
+    }
+
+    /// Pausiert einen laufenden Download (kooperativ im Segment-Loop).
+    pub fn pause(&self, id: u64) -> Option<JobView> {
+        let gate = self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|j| j.pause.clone())?;
+        gate.pause();
+        self.update(id, |v| {
+            if matches!(v.status.as_str(), "running" | "resolving" | "queued") {
+                v.status = "paused".into();
+            }
+        })
+    }
+
+    /// Setzt einen pausierten Download fort.
+    pub fn resume(&self, id: u64) -> Option<JobView> {
+        let gate = self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|j| j.pause.clone())?;
+        gate.resume();
+        self.update(id, |v| {
+            if v.status == "paused" {
+                v.status = "running".into();
+            }
+        })
+    }
+
+    /// Globale Bandbreitenbegrenzung setzen (Bytes/s, 0 = unbegrenzt).
+    pub fn set_bandwidth(&self, bytes_per_sec: u64) {
+        self.global_rate.set_rate(bytes_per_sec);
     }
 
     /// Original-Parameter eines Jobs (für Retry): (url, file_name, title).
@@ -97,6 +141,7 @@ pub fn start(
 ) -> u64 {
     let id = downloads.next.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = CancellationToken::new();
+    let pause = Arc::new(PauseGate::new());
     let view = JobView {
         id,
         title: title.clone(),
@@ -111,6 +156,7 @@ pub fn start(
         Job {
             view: view.clone(),
             cancel: cancel.clone(),
+            pause: pause.clone(),
             url: url.clone(),
             file_name: file_name.clone(),
             title,
@@ -123,6 +169,7 @@ pub fn start(
     let prefs = prefs_from_settings(&settings, file_name, &overrides);
 
     let sem = downloads.sem.clone();
+    let global_rate = downloads.global_rate.clone();
 
     // Tauris Runtime, nicht tokio::spawn direkt: der Command läuft evtl. im
     // GTK-Thread ohne aktiven Tokio-Reaktor.
@@ -153,9 +200,14 @@ pub fn start(
             }
         };
 
+        let ctl = DownloadControl {
+            cancel: Some(cancel.clone()),
+            pause: Some(pause.clone()),
+            rate: None,
+            global_rate: Some(global_rate.clone()),
+        };
         let result =
-            core::download::download_url(&client, &url, &prefs, Some(cancel.clone()), Some(&sink))
-                .await;
+            core::download::download_url_ctl(&client, &url, &prefs, ctl, Some(&sink)).await;
 
         match result {
             Ok(_path) => {
