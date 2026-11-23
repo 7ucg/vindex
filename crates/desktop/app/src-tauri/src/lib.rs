@@ -40,20 +40,23 @@ impl AppState {
     fn overrides(&self) -> vindex_desktop::DownloadOverrides {
         use std::str::FromStr;
         let cfg = self.config.lock().unwrap();
-        // Egress-/DNS-Invariante: ist ein Proxy oder obscura konfiguriert, MUSS der
-        // native HLS-Pfad genutzt werden. Der ffmpeg-Pfad zöge die Playlist direkt —
-        // am 1.1.1.1-Resolver und am Egress-Proxy vorbei. Die Schalter dürfen das nicht
-        // aushebeln; ohne Proxy/obscura gelten sie.
-        let locked = cfg
-            .proxy
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|s| !s.is_empty())
-            || cfg
-                .obscura
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|s| !s.is_empty());
+        // Egress-/DNS-Invariante: ist ein Proxy oder obscura aktiv, MUSS der native
+        // HLS-Pfad genutzt werden. Der ffmpeg-Pfad zöge die Playlist direkt — am
+        // 1.1.1.1-Resolver und am Egress-Proxy vorbei. Die Schalter dürfen das nicht
+        // aushebeln. Der Gate liest den **effektiven** Zustand (ENV, den auch der Kern
+        // nutzt, + obscura_enabled()), nicht nur die Config-Kopie — ein per ENV
+        // gesetzter Proxy/obscura würde sonst durchrutschen.
+        let env_set = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        };
+        let has = |o: &Option<String>| o.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+        let proxy_set = env_set("VINDEX_PROXY") || has(&cfg.proxy);
+        let obscura_set =
+            core::browser::obscura_enabled() || env_set("VINDEX_OBSCURA") || has(&cfg.obscura);
+        let locked = proxy_set || obscura_set;
         let native_hls = locked || cfg.native_hls.unwrap_or(true);
         let no_ffmpeg = locked || cfg.no_ffmpeg.unwrap_or(true);
         vindex_desktop::DownloadOverrides {
