@@ -97,6 +97,53 @@ export function Player(props: { playback: Playback }): JSX.Element {
     a.href = c.toDataURL("image/png");
     a.click();
   };
+  // Externe Untertitel: .vtt direkt, .srt wird zu VTT gewandelt. Als <track> ans <video>.
+  let extSubUrl: string | undefined;
+  let subInput: HTMLInputElement | undefined;
+  const [extSub, setExtSub] = createSignal<string | null>(null);
+  const srtToVtt = (s: string): string => {
+    const body = s
+      .replace(/\r+/g, "")
+      .replace(/^\d+\s*$/gm, "") // Nummern-Zeilen entfernen
+      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2"); // Komma → Punkt
+    return `WEBVTT\n\n${body.trim()}\n`;
+  };
+  const loadSub = async (file: File) => {
+    if (!video) return;
+    let text = await file.text();
+    if (file.name.toLowerCase().endsWith(".srt") || !text.trimStart().startsWith("WEBVTT")) {
+      text = srtToVtt(text);
+    }
+    const blob = new Blob([text], { type: "text/vtt" });
+    if (extSubUrl) URL.revokeObjectURL(extSubUrl);
+    extSubUrl = URL.createObjectURL(blob);
+    video.querySelectorAll("track[data-ext]").forEach((t) => t.remove());
+    const tr = document.createElement("track");
+    tr.kind = "subtitles";
+    tr.label = file.name.replace(/\.[^.]+$/, "");
+    tr.default = true;
+    tr.src = extSubUrl;
+    tr.setAttribute("data-ext", "1");
+    video.appendChild(tr);
+    setExtSub(tr.label);
+    queueMicrotask(() => {
+      const tt = video!.textTracks;
+      for (let i = 0; i < tt.length; i++) tt[i].mode = i === tt.length - 1 ? "showing" : "disabled";
+    });
+  };
+  const clearSub = () => {
+    if (!video) return;
+    video.querySelectorAll("track[data-ext]").forEach((t) => t.remove());
+    if (extSubUrl) URL.revokeObjectURL(extSubUrl);
+    extSubUrl = undefined;
+    setExtSub(null);
+  };
+  const onSubFile = (e: Event) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (f) void loadSub(f);
+    (e.target as HTMLInputElement).value = "";
+  };
+
   const togglePip = async () => {
     const v = video as (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> }) | undefined;
     if (!v) return;
@@ -379,6 +426,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
     // Nur den lokalen Timer löschen — das Deadline im Store bleibt und wird nach
     // dem Remount (nächste Folge) neu bewaffnet.
     if (sleepHandle) clearTimeout(sleepHandle);
+    if (extSubUrl) URL.revokeObjectURL(extSubUrl);
     if (hls) hls.destroy();
   });
 
@@ -408,6 +456,22 @@ export function Player(props: { playback: Playback }): JSX.Element {
           <button class="chip" onClick={screenshot} title="Screenshot" aria-label="Screenshot">
             Foto
           </button>
+          <button
+            class="chip"
+            classList={{ on: !!extSub() }}
+            onClick={() => (extSub() ? clearSub() : subInput?.click())}
+            title={extSub() ? `Untertitel: ${extSub()} (entfernen)` : "Untertitel laden (.srt/.vtt)"}
+            aria-label="Externe Untertitel"
+          >
+            UT
+          </button>
+          <input
+            ref={subInput}
+            type="file"
+            accept=".srt,.vtt,text/vtt"
+            style={{ display: "none" }}
+            onChange={onSubFile}
+          />
           <Show when={levels().length > 1 || audios().length > 1 || subs().length > 0}>
             <button
               class="chip"
