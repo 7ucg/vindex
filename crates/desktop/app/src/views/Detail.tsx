@@ -17,6 +17,8 @@ import {
 import { selected, setView, openPlayer } from "../lib/store";
 import { inWatchlist, toggleWatchlist } from "../lib/watchlist";
 
+const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
+
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
@@ -57,13 +59,15 @@ export function Detail(): JSX.Element {
 
   const [busy, setBusy] = createSignal<string | null>(null);
   const [playErr, setPlayErr] = createSignal<string | null>(null);
+  // Sprach-Vorwahl für die Wiedergabe ("" = Standard aus den Einstellungen).
+  const [lang, setLang] = createSignal("");
 
   // Film-Modus: direkt die Film-URL abspielen bzw. laden.
   const watchMovie = async () => {
     setBusy(sel.url);
     setPlayErr(null);
     try {
-      const src = await resolvePlayback(sel.url);
+      const src = await resolvePlayback(sel.url, lang());
       openPlayer({ title: sel.title, url: src.url, isHls: src.is_hls });
     } catch (e) {
       setPlayErr(String(e));
@@ -136,14 +140,14 @@ export function Detail(): JSX.Element {
     setBusy(e.url);
     setPlayErr(null);
     try {
-      const src = await resolvePlayback(e.url);
+      const src = await resolvePlayback(e.url, lang());
       const list = eps() ?? [];
       const idx = list.findIndex((x) => x.url === e.url);
       openPlayer({
         title: `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`,
         url: src.url,
         isHls: src.is_hls,
-        queue: { showTitle: sel.title, episodes: list, index: idx },
+        queue: { showTitle: sel.title, episodes: list, index: idx, lang: lang() || undefined },
         skipRef: { url: e.url, season: e.season, episode: e.index_in_season },
       });
     } catch (err) {
@@ -180,6 +184,19 @@ export function Detail(): JSX.Element {
           </Show>
         </div>
       </Show>
+
+      <div class="controls" style={{ "margin-bottom": "16px" }}>
+        <span class="sleep-label">Sprache</span>
+        <select
+          class="cfg-input"
+          style={{ "max-width": "180px" }}
+          value={lang()}
+          onChange={(e) => setLang(e.currentTarget.value)}
+        >
+          <option value="">Standard</option>
+          <For each={LANGUAGES}>{(l) => <option value={l}>{l}</option>}</For>
+        </select>
+      </div>
 
       <Show when={isMovie}>
         <div class="controls" style={{ "margin-bottom": "16px" }}>

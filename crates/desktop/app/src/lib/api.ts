@@ -48,8 +48,8 @@ export interface PlaybackSource {
   is_hls: boolean;
 }
 
-export function resolvePlayback(url: string): Promise<PlaybackSource> {
-  return invoke<PlaybackSource>("resolve_playback", { url });
+export function resolvePlayback(url: string, lang?: string): Promise<PlaybackSource> {
+  return invoke<PlaybackSource>("resolve_playback", { url, lang: lang ?? null });
 }
 
 export interface SkipInterval {

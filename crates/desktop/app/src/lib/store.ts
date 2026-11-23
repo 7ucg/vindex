@@ -32,6 +32,8 @@ export interface PlayQueue {
   showTitle: string;
   episodes: Episode[];
   index: number;
+  /** Gewählte Sprache (leer = Standard) — bleibt über Auto-Next erhalten. */
+  lang?: string;
 }
 
 /** Bezug zur Original-Episode, um AniSkip-Zeiten zu holen. */

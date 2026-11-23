@@ -177,7 +177,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
     const ne = c.episodes[c.index + 1];
     setGoingNext(true);
     try {
-      const src = await resolvePlayback(ne.url);
+      const src = await resolvePlayback(ne.url, c.lang);
       openPlayer({
         title: epLabel(c.showTitle, ne.season, ne.index_in_season),
         url: src.url,

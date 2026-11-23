@@ -191,10 +191,24 @@ async fn episodes(
 }
 
 #[tauri::command]
-async fn resolve_playback(url: String, state: State<'_, AppState>) -> Result<PlaybackDto, String> {
+async fn resolve_playback(
+    url: String,
+    lang: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<PlaybackDto, String> {
+    use std::str::FromStr;
     // Sprache/Qualität wie beim Downloader (Settings + Desktop-Config-Overrides).
     let s = state.backend.settings();
-    let prefs = vindex_desktop::prefs_from_settings(&s, "stream", &state.overrides());
+    let mut ov = state.overrides();
+    // Optionale Sprach-Vorwahl aus dem Frontend gewinnt für diese Wiedergabe.
+    if let Some(l) = lang
+        .as_deref()
+        .filter(|l| !l.is_empty())
+        .and_then(|l| core::model::Language::from_str(l).ok())
+    {
+        ov.language = Some(l);
+    }
+    let prefs = vindex_desktop::prefs_from_settings(&s, "stream", &ov);
 
     let resolved = state
         .backend
