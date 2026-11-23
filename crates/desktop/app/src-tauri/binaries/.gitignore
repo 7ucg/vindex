@@ -1,0 +1,4 @@
+# Binärdateien bleiben lokal, nicht im Repo.
+*
+!.gitignore
+!README.md

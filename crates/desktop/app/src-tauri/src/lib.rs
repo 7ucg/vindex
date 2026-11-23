@@ -692,6 +692,50 @@ fn platform_info() -> PlatformInfo {
     }
 }
 
+/// Sucht ein mitgeliefertes Binary (`ffmpeg`/`ffprobe`/`obscura`) neben der App bzw.
+/// im `binaries/`-Ordner — in Dev relativ zum Crate, im Bundle neben der Exe/Resources.
+/// Gibt den ersten existierenden absoluten Pfad zurück.
+fn bundled_tool(name: &str) -> Option<String> {
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_ref().and_then(|e| e.parent());
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fname = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let mut cands: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(d) = exe_dir {
+        cands.push(d.join(&fname));
+        cands.push(d.join("binaries").join(&fname));
+        cands.push(d.join("resources").join("binaries").join(&fname));
+    }
+    cands.push(manifest.join("binaries").join(&fname));
+    cands
+        .into_iter()
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Setzt `VINDEX_FFMPEG`/`VINDEX_FFPROBE`/`VINDEX_OBSCURA` auf mitgelieferte Binaries,
+/// falls vorhanden und nicht bereits per ENV vorgegeben. So nutzt der Kern automatisch
+/// die gebündelten Programme (Dev wie Bundle); fehlen sie, bleibt der PATH-Fallback.
+fn wire_bundled_binaries() {
+    for (tool, var) in [
+        ("ffmpeg", "VINDEX_FFMPEG"),
+        ("ffprobe", "VINDEX_FFPROBE"),
+        ("obscura", "VINDEX_OBSCURA"),
+    ] {
+        let already = std::env::var(var).ok().filter(|s| !s.trim().is_empty());
+        if already.is_none() {
+            if let Some(path) = bundled_tool(tool) {
+                tracing::info!("gebündeltes {tool} erkannt");
+                std::env::set_var(var, path);
+            }
+        }
+    }
+}
+
 /// Ist der Autostart (Login) aktiviert?
 #[tauri::command]
 fn autostart_enabled(app: tauri::AppHandle) -> bool {
@@ -794,6 +838,9 @@ pub fn run() {
         .try_init();
     let logs_for_state = logs.clone();
 
+    // Mitgelieferte Binaries (ffmpeg/ffprobe/obscura) erkennen und als ENV setzen —
+    // vor dem Laden der Kern-Settings, damit u. a. obscura (Stufe 3) greift.
+    wire_bundled_binaries();
     // Desktop-Netzwerk-Einstellungen VOR dem Laden der Kern-Settings (und vor dem
     // Client-Bau) in die ENV spiegeln, damit der Kern sie konsistent anwendet.
     apply_network_env(&config::load());
