@@ -401,23 +401,46 @@ fn set_impersonate(on: bool, state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Anti-Bot Stufe 3 (obscura-Pfad) live setzen/löschen + persistieren.
+/// Mit gesetztem Egress-Proxy wird Stufe 3 abgelehnt (sie würde den Proxy umgehen —
+/// genau das lehnt auch der Kern beim Abruf ab; so stimmt die Zusage mit der Durchsetzung).
 #[tauri::command]
 fn set_obscura(path: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
     let p = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let mut cfg = state.config.lock().unwrap();
+    if p.is_some()
+        && cfg
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+    {
+        return Err("Mit gesetztem Egress-Proxy ist Stufe 3 (obscura) nicht möglich.".into());
+    }
     core::browser::set_obscura_path(p.clone());
     std::env::set_var("VINDEX_OBSCURA", p.as_deref().unwrap_or(""));
-    let mut cfg = state.config.lock().unwrap();
     cfg.obscura = p;
     config::save(&cfg)
 }
 
 /// Egress-Proxy setzen/löschen. Der HTTP-Client ist bereits gebaut → wirkt nach Neustart.
+/// Ein gesetzter Proxy schaltet Stufe 3 (obscura) ab, damit sie nicht umgangen wird.
 #[tauri::command]
 fn set_proxy(url: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
     let p = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(ref value) = p {
+        if !core::http::proxy_string_ok(value) {
+            return Err("Ungültige Proxy-URL (erwartet z. B. http://host:port).".into());
+        }
+    }
     std::env::set_var("VINDEX_PROXY", p.as_deref().unwrap_or(""));
     let mut cfg = state.config.lock().unwrap();
-    cfg.proxy = p;
+    cfg.proxy = p.clone();
+    // Proxy und obscura schließen sich aus: beim Setzen eines Proxys Stufe 3 abschalten.
+    if p.is_some() && cfg.obscura.is_some() {
+        core::browser::set_obscura_path(None);
+        std::env::set_var("VINDEX_OBSCURA", "");
+        cfg.obscura = None;
+    }
     config::save(&cfg)
 }
 

@@ -54,6 +54,15 @@ fn proxy_entry_ok(entry: &str) -> bool {
     reqwest::Proxy::all(entry).is_ok()
 }
 
+/// True, wenn jede komma-getrennte Proxy-Angabe in *s* brauchbar ist (gleicher
+/// Parser wie der Consumer). Leer/whitespace = gültig (bedeutet: kein Proxy).
+pub fn proxy_string_ok(s: &str) -> bool {
+    s.split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .all(proxy_entry_ok)
+}
+
 /// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge werden
 /// verworfen; leer/ungesetzt → kein Proxy. Werden Einträge verworfen, wird das
 /// geloggt — so sieht der Operator, dass Traffic ggf. ungeproxt läuft.
@@ -579,6 +588,19 @@ mod tests {
         assert!(!proxy_entry_ok("169.254.169.254:3128")); // schemalos + Metadata
         assert!(!proxy_entry_ok("ftp://proxy:21")); // Schema nicht erlaubt
         assert!(!proxy_entry_ok("kein url")); // nicht parsebar
+    }
+
+    #[test]
+    fn proxy_string_validierung() {
+        assert!(proxy_string_ok("")); // leer = kein Proxy = ok
+        assert!(proxy_string_ok("   ")); // nur whitespace = ok
+        assert!(proxy_string_ok(
+            "http://a.example:8080 , socks5://b.example:1080"
+        ));
+        assert!(!proxy_string_ok(
+            "http://a.example:8080, http://127.0.0.1:1"
+        )); // ein Eintrag gesperrt
+        assert!(!proxy_string_ok("kein url"));
     }
 
     #[test]
