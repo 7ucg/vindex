@@ -13,7 +13,7 @@
 
 use std::net::IpAddr;
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
@@ -25,20 +25,25 @@ use tokio::process::Command;
 use crate::error::{Error, Result};
 
 /// Prozessweiter Pfad zum obscura-Binary (aus `VINDEX_OBSCURA`). `None`/leer ⇒ aus.
-static OBSCURA_PATH: OnceLock<Option<String>> = OnceLock::new();
+/// Zur Laufzeit änderbar (Desktop-Netzwerk-Einstellungen), daher `RwLock` statt `OnceLock`.
+static OBSCURA_PATH: RwLock<Option<String>> = RwLock::new(None);
 
-/// Setzt den obscura-Pfad (idempotent; aus [`crate::config::Settings::load`]).
+/// Setzt (oder löscht) den obscura-Pfad. Aus [`crate::config::Settings::load`] beim
+/// Start und aus den Desktop-Einstellungen zur Laufzeit.
 pub fn set_obscura_path(path: Option<String>) {
-    let _ = OBSCURA_PATH.set(path.filter(|p| !p.trim().is_empty()));
+    let v = path.filter(|p| !p.trim().is_empty());
+    if let Ok(mut g) = OBSCURA_PATH.write() {
+        *g = v;
+    }
 }
 
-fn obscura_path() -> Option<&'static str> {
-    OBSCURA_PATH.get().and_then(|o| o.as_deref())
+fn obscura_path() -> Option<String> {
+    OBSCURA_PATH.read().ok().and_then(|g| g.clone())
 }
 
 /// True, wenn Stufe 3 aktiv ist (obscura-Pfad gesetzt).
 pub fn obscura_enabled() -> bool {
-    obscura_path().is_some()
+    OBSCURA_PATH.read().map(|g| g.is_some()).unwrap_or(false)
 }
 
 /// Obergrenze für die von obscura gelieferte Seite.
@@ -430,13 +435,17 @@ mod tests {
     }
 
     #[test]
-    fn obscura_aus_wenn_leer() {
-        // set ist idempotent (OnceLock); prüfe nur die Pfad-Filter-Logik indirekt:
-        // eine leere Angabe darf Stufe 3 nicht aktivieren.
+    fn obscura_set_und_leer() {
+        // Laufzeit-Setter: leere/whitespace-Angabe lässt Stufe 3 aus, ein echter
+        // Pfad schaltet sie an; danach wieder zurücksetzen (globaler Zustand).
+        set_obscura_path(Some("   ".to_string()));
+        assert!(!obscura_enabled());
+        set_obscura_path(Some("/usr/bin/obscura".to_string()));
+        assert!(obscura_enabled());
+        set_obscura_path(None);
+        assert!(!obscura_enabled());
+        // Filter-Logik direkt:
         assert!(Some(String::new())
-            .filter(|p| !p.trim().is_empty())
-            .is_none());
-        assert!(Some("  ".to_string())
             .filter(|p| !p.trim().is_empty())
             .is_none());
         assert_eq!(
