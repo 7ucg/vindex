@@ -248,20 +248,27 @@ async fn build_portal(
     eprintln!("[{portal}] {} Titel im Katalog", entries.len());
 
     // Katalog-Stand eintragen (Name/URL aktualisieren, Crawl-Stand bleibt). In einer
-    // Transaktion — schnell und kurzer Schreib-Lock (die parallelen Portale warten nur
-    // ganz kurz), der `crawled_at`-Stempel wird nie angefasst.
+    // `BEGIN IMMEDIATE`-Transaktion — schnell, kurzer Schreib-Lock (parallele Portale
+    // warten nur ganz kurz via busy_timeout), der `crawled_at`-Stempel bleibt unberührt.
     {
-        let tx = conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare(
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let insert = (|| -> anyhow::Result<()> {
+            let mut stmt = conn.prepare(
                 "INSERT INTO title (portal, slug, url, name) VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(portal, slug) DO UPDATE SET name = excluded.name, url = excluded.url",
             )?;
             for e in &entries {
                 stmt.execute(params![portal, e.slug, title_url(portal, &e.slug), e.title])?;
             }
+            Ok(())
+        })();
+        match insert {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
         }
-        tx.commit()?;
     }
 
     // Zu crawlende Titel bestimmen (fortsetzbar).
@@ -453,7 +460,11 @@ async fn crawl_filmo_title(
 
 /// Schreibt einen gecrawlten Titel in einer Transaktion weg.
 fn store_title(conn: &Connection, title_id: i64, crawled: &CrawledTitle) -> anyhow::Result<()> {
-    conn.execute_batch("BEGIN")?;
+    // `BEGIN IMMEDIATE` (nicht DEFERRED): holt den Schreib-Lock sofort, damit bei
+    // parallelen Portalen `busy_timeout` sauber wartet, statt „database is locked"
+    // (eine DEFERRED-Transaktion, die mitten drin von Lese- auf Schreib-Lock hochstuft,
+    // bekommt sofort BUSY ohne Warteschleife).
+    conn.execute_batch("BEGIN IMMEDIATE")?;
     let result = store_title_inner(conn, title_id, crawled);
     if result.is_ok() {
         conn.execute_batch("COMMIT")?;
