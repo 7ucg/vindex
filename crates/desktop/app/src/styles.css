@@ -818,3 +818,57 @@ a {
 button:focus:not(:focus-visible) {
   outline: none;
 }
+
+/* Portal-Liste (Alternative zum Raster) */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.list-row:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.list-row.picked {
+  background: color-mix(in srgb, var(--v2) 16%, transparent);
+  border-color: var(--v2);
+}
+.list-thumb {
+  position: relative;
+  flex: none;
+  width: 34px;
+  aspect-ratio: 2/3;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.list-thumb .pick-mark {
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+.list-title {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-portal {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}

@@ -15,6 +15,16 @@ import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
 
 type Sort = "az" | "za";
+type Layout = "grid" | "list";
+
+const LAYOUT_KEY = "vindex:portallayout";
+function readLayout(): Layout {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "list" ? "list" : "grid";
+  } catch {
+    return "grid";
+  }
+}
 
 function sanitize(s: string): string {
   return s.replace(/[\\/:*?"<>|]/g, "").trim();
@@ -35,6 +45,15 @@ const BATCH = 60;
 export function PortalView(props: { portal: Portal }): JSX.Element {
   const [items] = createResource(() => props.portal, catalog);
   const [sort, setSort] = createSignal<Sort>("az");
+  const [layout, setLayoutSig] = createSignal<Layout>(readLayout());
+  const setLayout = (l: Layout) => {
+    setLayoutSig(l);
+    try {
+      localStorage.setItem(LAYOUT_KEY, l);
+    } catch {
+      /* egal */
+    }
+  };
   const [filter, setFilter] = createSignal("");
   // Mehrfachauswahl → Massen-Download (url → title).
   const [selectMode, setSelectMode] = createSignal(false);
@@ -138,6 +157,24 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           <button class="chip" classList={{ on: sort() === "za" }} onClick={() => setSort("za")}>
             Z–A
           </button>
+          <button
+            class="chip"
+            classList={{ on: layout() === "grid" }}
+            onClick={() => setLayout("grid")}
+            title="Raster"
+            aria-label="Raster"
+          >
+            ▦
+          </button>
+          <button
+            class="chip"
+            classList={{ on: layout() === "list" }}
+            onClick={() => setLayout("list")}
+            title="Liste"
+            aria-label="Liste"
+          >
+            ☰
+          </button>
           <div class="search" style={{ "margin-left": "auto", "min-width": "200px" }}>
             <IconSearch />
             <input
@@ -180,32 +217,59 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       </Show>
 
       <Show when={visible().length > 0}>
-        <div class="grid">
-          <For each={visible().slice(0, shown())}>
-            {(h) => (
-              <div
-                class="card"
-                classList={{ picked: picked().has(h.url) }}
-                title={h.url}
-                onClick={() => onCard(h)}
-              >
-                <div class="poster">
-                  <Cover url={h.url} title={h.title} />
-                  <Show when={selectMode()}>
-                    <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
-                  </Show>
-                  <div class="play-ov" aria-hidden="true">
-                    <button class="play-btn" tabindex="-1">
-                      <IconPlay />
-                    </button>
+        <Show
+          when={layout() === "grid"}
+          fallback={
+            <div class="list">
+              <For each={visible().slice(0, shown())}>
+                {(h) => (
+                  <div
+                    class="list-row"
+                    classList={{ picked: picked().has(h.url) }}
+                    title={h.url}
+                    onClick={() => onCard(h)}
+                  >
+                    <div class="list-thumb">
+                      <Cover url={h.url} title={h.title} />
+                      <Show when={selectMode()}>
+                        <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
+                      </Show>
+                    </div>
+                    <div class="list-title">{h.title}</div>
+                    <div class="list-portal">{LABEL[props.portal]}</div>
                   </div>
+                )}
+              </For>
+            </div>
+          }
+        >
+          <div class="grid">
+            <For each={visible().slice(0, shown())}>
+              {(h) => (
+                <div
+                  class="card"
+                  classList={{ picked: picked().has(h.url) }}
+                  title={h.url}
+                  onClick={() => onCard(h)}
+                >
+                  <div class="poster">
+                    <Cover url={h.url} title={h.title} />
+                    <Show when={selectMode()}>
+                      <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
+                    </Show>
+                    <div class="play-ov" aria-hidden="true">
+                      <button class="play-btn" tabindex="-1">
+                        <IconPlay />
+                      </button>
+                    </div>
+                  </div>
+                  <div class="t">{h.title}</div>
+                  <div class="s">{LABEL[props.portal]}</div>
                 </div>
-                <div class="t">{h.title}</div>
-                <div class="s">{LABEL[props.portal]}</div>
-              </div>
-            )}
-          </For>
-        </div>
+              )}
+            </For>
+          </div>
+        </Show>
         <div ref={sentinel} style={{ height: "1px" }} />
         <Show when={shown() < visible().length}>
           <p class="note">
