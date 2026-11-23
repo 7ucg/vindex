@@ -16,6 +16,7 @@ import {
 } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
 import { inWatchlist, toggleWatchlist } from "../lib/watchlist";
+import { getProgress, progressVersion } from "../lib/progress";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 
@@ -61,6 +62,15 @@ export function Detail(): JSX.Element {
   const [playErr, setPlayErr] = createSignal<string | null>(null);
   // Sprach-Vorwahl für die Wiedergabe ("" = Standard aus den Einstellungen).
   const [lang, setLang] = createSignal("");
+
+  // Fortschritt pro Folge (reaktiv über progressVersion): Prozent + „gesehen".
+  const epPct = (url: string): number => {
+    progressVersion();
+    const r = getProgress(url);
+    if (!r || !r.dur) return 0;
+    return Math.min(100, Math.round((r.pos / r.dur) * 100));
+  };
+  const epSeen = (url: string): boolean => epPct(url) >= 90;
 
   // Film-Modus: direkt die Film-URL abspielen bzw. laden.
   const watchMovie = async () => {
@@ -271,7 +281,18 @@ export function Detail(): JSX.Element {
                 </div>
                 <div class="info">
                   <div class="n">{e.title || `${seasonLabel(e.season)} · ${e.index_in_season}`}</div>
-                  <div class="sub">{seasonLabel(e.season)}</div>
+                  <div class="sub">
+                    {seasonLabel(e.season)}
+                    <Show when={epSeen(e.url)}> · ✓ gesehen</Show>
+                    <Show when={!epSeen(e.url) && epPct(e.url) > 0}>
+                      {" "}· {epPct(e.url)} % gesehen
+                    </Show>
+                  </div>
+                  <Show when={epPct(e.url) > 0}>
+                    <div class="track" style={{ "margin-top": "6px" }}>
+                      <i style={{ width: `${epPct(e.url)}%`, background: "var(--grad)" }} />
+                    </div>
+                  </Show>
                 </div>
                 <div class="act">
                   <button
@@ -280,7 +301,7 @@ export function Detail(): JSX.Element {
                     disabled={busy() === e.url}
                     onClick={() => watch(e)}
                   >
-                    {busy() === e.url ? "löst auf …" : "Ansehen"}
+                    {busy() === e.url ? "löst auf …" : epPct(e.url) > 0 && !epSeen(e.url) ? "Fortsetzen" : "Ansehen"}
                   </button>
                   <button class="chip" onClick={() => load(e)}>
                     Laden

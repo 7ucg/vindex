@@ -1,6 +1,15 @@
 // Wiedergabe-Fortschritt pro Folge, im WebView-localStorage (persistiert im
 // Tauri-Profil). Rein lokal, pro Gerät — fürs „Weiterschauen" und das Resümieren
 // an der zuletzt gesehenen Stelle. Alle Zugriffe sind try/catch-gekapselt.
+import { createSignal } from "solid-js";
+
+// Reaktiver Zähler: steigt bei jeder Änderung, damit Ansichten (z. B. die
+// Folgenliste) den Fortschritt live nachziehen, obwohl localStorage nicht reaktiv ist.
+const [version, setVersion] = createSignal(0);
+export const progressVersion = version;
+function bump(): void {
+  setVersion((v) => v + 1);
+}
 
 const MAP_KEY = "vindex:resume";
 const RECENT_KEY = "vindex:recent";
@@ -51,6 +60,7 @@ export function saveProgress(url: string, r: Resume): void {
   const rec = readRecent().filter((u) => u !== url);
   rec.unshift(url);
   writeRecent(rec);
+  bump();
 }
 
 export function getProgress(url: string): Resume | null {
@@ -62,6 +72,7 @@ export function clearProgress(url: string): void {
   delete m[url];
   writeMap(m);
   writeRecent(readRecent().filter((u) => u !== url));
+  bump();
 }
 
 /** Zuletzt angesehene Folgen, neueste zuerst — fürs „Weiterschauen" auf Start. */
