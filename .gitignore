@@ -26,3 +26,4 @@ target/
 crates/desktop/DESKTOP-APP.md
 crates/desktop/TODO.md
 .baron-brain-stale
+vindex-index.db*
