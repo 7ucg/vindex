@@ -12,6 +12,8 @@ import {
   resolvePlayback,
   startDownload,
   titleMeta,
+  library,
+  localMediaUrl,
   type Episode,
 } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
@@ -98,13 +100,41 @@ export function Detail(): JSX.Element {
   const [saved, setSaved] = createSignal(inWatchlist(sel.url));
   const toggleSave = () => setSaved(toggleWatchlist({ url: sel.url, title: sel.title }));
 
+  // Dateiname-Basis (ohne Endung) — identisch zur Download-Benennung.
+  const epBase = (e: Episode): string =>
+    e.season === 0
+      ? `${sanitize(sel.title)} - Film ${pad(e.index_in_season)}`
+      : `${sanitize(sel.title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
+
   const enqueue = (e: Episode) => {
-    const base =
-      e.season === 0
-        ? `${sanitize(sel.title)} - Film ${pad(e.index_in_season)}`
-        : `${sanitize(sel.title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
     const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
-    return startDownload(e.url, base, title);
+    return startDownload(e.url, epBase(e), title);
+  };
+
+  // Bereits heruntergeladene Folgen erkennen (Bibliothek) → direktes Offline-Abspielen.
+  const [lib] = createResource(library);
+  const offlineName = (e: Episode): string | null => {
+    const base = epBase(e);
+    return (lib() ?? []).find((f) => f.name.startsWith(base))?.name ?? null;
+  };
+  const playOffline = async (e: Episode, name: string) => {
+    setBusy(e.url);
+    setPlayErr(null);
+    try {
+      const url = await localMediaUrl(name);
+      const list = eps() ?? [];
+      openPlayer({
+        title: `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`,
+        url,
+        isHls: false,
+        queue: { showTitle: sel.title, episodes: list, index: list.findIndex((x) => x.url === e.url) },
+        skipRef: { url: e.url, season: e.season, episode: e.index_in_season },
+      });
+    } catch (err) {
+      setPlayErr(String(err));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const load = async (e: Episode) => {
@@ -283,6 +313,7 @@ export function Detail(): JSX.Element {
                   <div class="n">{e.title || `${seasonLabel(e.season)} · ${e.index_in_season}`}</div>
                   <div class="sub">
                     {seasonLabel(e.season)}
+                    <Show when={offlineName(e)}> · ⤓ offline</Show>
                     <Show when={epSeen(e.url)}> · ✓ gesehen</Show>
                     <Show when={!epSeen(e.url) && epPct(e.url) > 0}>
                       {" "}· {epPct(e.url)} % gesehen
@@ -303,6 +334,13 @@ export function Detail(): JSX.Element {
                   >
                     {busy() === e.url ? "löst auf …" : epPct(e.url) > 0 && !epSeen(e.url) ? "Fortsetzen" : "Ansehen"}
                   </button>
+                  <Show when={offlineName(e)}>
+                    {(name) => (
+                      <button class="chip" onClick={() => void playOffline(e, name())}>
+                        Offline
+                      </button>
+                    )}
+                  </Show>
                   <button class="chip" onClick={() => load(e)}>
                     Laden
                   </button>
