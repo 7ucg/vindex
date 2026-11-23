@@ -8,7 +8,7 @@
 // JSON-wertige Schlüssel (Objekte/Arrays).
 const JSON_KEYS = ["vindex:watchlist", "vindex:resume", "vindex:recent"] as const;
 // Rohstring-Schlüssel (so liest theme.ts sie auch).
-const RAW_KEYS = ["vindex:theme", "vindex:accent", "vindex:density"] as const;
+const RAW_KEYS = ["vindex:theme", "vindex:accent", "vindex:density", "vindex:scale"] as const;
 
 const PORTAL_HOSTS = new Set([
   "aniworld.to",
@@ -23,6 +23,7 @@ const PORTAL_HOSTS = new Set([
 const THEME_OK = ["dark", "light", "amoled"];
 const ACCENT_OK = ["violett", "cyan", "gruen", "pink", "bernstein"];
 const DENSITY_OK = ["normal", "kompakt"];
+const SCALE_OK = ["90", "100", "110", "125"];
 const MAX_FILE = 2 * 1024 * 1024;
 const MAX_ENTRIES = 5000;
 
@@ -106,6 +107,7 @@ function sanitize(key: string, value: unknown): string | null {
   if (key === "vindex:accent") return ACCENT_OK.includes(value as string) ? (value as string) : null;
   if (key === "vindex:density")
     return DENSITY_OK.includes(value as string) ? (value as string) : null;
+  if (key === "vindex:scale") return SCALE_OK.includes(value as string) ? (value as string) : null;
   return null;
 }
 

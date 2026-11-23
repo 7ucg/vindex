@@ -20,9 +20,12 @@ import {
   getAccent,
   applyDensity,
   getDensity,
+  applyScale,
+  getScale,
   type Theme,
   type Accent,
   type Density,
+  type Scale,
 } from "../lib/theme";
 
 const THEMES: { id: Theme; label: string }[] = [
@@ -41,6 +44,12 @@ const DENSITIES: { id: Density; label: string }[] = [
   { id: "normal", label: "Normal" },
   { id: "kompakt", label: "Kompakt" },
 ];
+const SCALES: { id: Scale; label: string }[] = [
+  { id: "90", label: "90 %" },
+  { id: "100", label: "100 %" },
+  { id: "110", label: "110 %" },
+  { id: "125", label: "125 %" },
+];
 
 // Settings: zeigt die effektiven Laufzeit-Einstellungen (VINDEX_* / .env), live aus dem Kern.
 export function Settings(): JSX.Element {
@@ -49,6 +58,7 @@ export function Settings(): JSX.Element {
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
   const [density, setDensity] = createSignal<Density>(getDensity());
+  const [scale, setScale] = createSignal<Scale>(getScale());
   const [autostart, setAutostartSig] = createSignal(false);
   autostartEnabled()
     .then(setAutostartSig)
@@ -94,6 +104,10 @@ export function Settings(): JSX.Element {
     applyDensity(d);
     setDensity(d);
   };
+  const pickScale = (s: Scale) => {
+    applyScale(s);
+    setScale(s);
+  };
 
   return (
     <div class="wrap">
@@ -131,7 +145,7 @@ export function Settings(): JSX.Element {
           )}
         </For>
       </div>
-      <div class="controls" style={{ "margin-bottom": "18px" }}>
+      <div class="controls" style={{ "margin-bottom": "12px" }}>
         <span class="sleep-label">Dichte</span>
         <For each={DENSITIES}>
           {(d) => (
@@ -141,6 +155,20 @@ export function Settings(): JSX.Element {
               onClick={() => pickDensity(d.id)}
             >
               {d.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <span class="sleep-label">Größe</span>
+        <For each={SCALES}>
+          {(s) => (
+            <button
+              class="chip"
+              classList={{ on: scale() === s.id }}
+              onClick={() => pickScale(s.id)}
+            >
+              {s.label}
             </button>
           )}
         </For>
