@@ -83,7 +83,10 @@ impl RateLimiter {
         rate.max(8.0 * 1024.0 * 1024.0)
     }
     pub fn set_rate(&self, bytes_per_sec: u64) {
-        let mut b = self.inner.lock().unwrap();
+        let mut b = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         b.rate = bytes_per_sec as f64;
         b.capacity = Self::capacity_for(b.rate);
         b.tokens = b.tokens.min(b.capacity);
@@ -95,7 +98,10 @@ impl RateLimiter {
         }
         loop {
             let wait = {
-                let mut b = self.inner.lock().unwrap();
+                let mut b = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if b.rate <= 0.0 {
                     return; // unbegrenzt
                 }
@@ -103,11 +109,15 @@ impl RateLimiter {
                 let elapsed = now.duration_since(b.last).as_secs_f64();
                 b.last = now;
                 b.tokens = (b.tokens + elapsed * b.rate).min(b.capacity);
-                if b.tokens >= n as f64 {
-                    b.tokens -= n as f64;
+                // Anforderung auf die Kapazität klemmen: ein einzelner Chunk, der
+                // größer als der Burst wäre, darf die Schleife nicht endlos blockieren
+                // (er wird dann leicht unter-gedrosselt statt nie erfüllt).
+                let need = (n as f64).min(b.capacity);
+                if b.tokens >= need {
+                    b.tokens -= need;
                     None
                 } else {
-                    Some(Duration::from_secs_f64((n as f64 - b.tokens) / b.rate))
+                    Some(Duration::from_secs_f64((need - b.tokens) / b.rate))
                 }
             };
             match wait {
@@ -614,6 +624,11 @@ async fn try_download_resolved(
                 return Ok(false);
             }
         }
+        // Pause gilt auch für den (nicht-nativen) Mux-Pfad: nicht mitten in einer
+        // Pause ffmpeg anwerfen. Eine laufende Drosselung des ffmpeg-eigenen Netz-I/O
+        // leistet dieser Pfad nicht — im Desktop unerheblich, weil dort `native_hls`
+        // und `no_ffmpeg` erzwungen sind und der Mux-Fallback nie erreicht wird.
+        ctl.gate().await;
         report(progress, Progress::Muxing);
         mux(resolved, out_path, &ctl.cancel).await.map(|_| true)
     }
@@ -653,6 +668,8 @@ async fn deliver_hls(
         referer: referer.map(str::to_string),
         is_hls: true,
     };
+    // Pause auch hier vor dem ffmpeg-Mux beachten (s. Hinweis in try_download_resolved).
+    ctl.gate().await;
     report(progress, Progress::Muxing);
     mux(&variant, out_path, &ctl.cancel).await.is_ok()
 }
@@ -1384,6 +1401,18 @@ mod tests {
         let t0 = std::time::Instant::now();
         r.acquire(2 * 1024 * 1024).await; // ~2 s bei 1 MiB/s
         assert!(t0.elapsed() >= std::time::Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_clamps_oversized_request() {
+        // Anforderung größer als die Bucket-Kapazität darf nicht endlos blockieren.
+        let r = RateLimiter::new(100 * 1024 * 1024); // capacity = 100 MiB, Burst voll
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            r.acquire(300 * 1024 * 1024),
+        )
+        .await
+        .expect("acquire darf bei übergroßem n nicht hängen");
     }
 
     #[test]
