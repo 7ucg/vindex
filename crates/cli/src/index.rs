@@ -800,16 +800,25 @@ async fn resolve_portal(
 /// Prüft die finale URL eines Redirects: http(s) und nicht mehr auf einem Portal
 /// (sonst Cloudflare-Challenge statt echtem Hoster-Embed).
 fn check_embed_url(final_url: String) -> anyhow::Result<String> {
+    // Strikt parsen (Fehler statt leerem Host bei Parse-Fehler) und userinfo ablehnen.
+    let u = reqwest::Url::parse(&final_url)
+        .map_err(|_| anyhow::anyhow!("Redirect-Ziel nicht parsebar"))?;
     anyhow::ensure!(
-        final_url.starts_with("http://") || final_url.starts_with("https://"),
+        matches!(u.scheme(), "http" | "https"),
         "Redirect-Ziel ist kein http(s)"
     );
-    let host = reqwest::Url::parse(&final_url)
-        .ok()
-        .and_then(|u| u.host_str().map(|s| s.to_ascii_lowercase()))
-        .unwrap_or_default();
     anyhow::ensure!(
-        !host.contains("aniworld") && !host.contains("serienstream") && !host.contains("filmo"),
+        u.username().is_empty() && u.password().is_none(),
+        "Redirect-Ziel mit Zugangsdaten"
+    );
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    // Portal-Hosts ablehnen (dann blieb der Redirect auf der Challenge-Seite hängen):
+    // per Domain-Gleichheit/Subdomain, nicht per Substring.
+    let on_portal = ["aniworld.to", "serienstream.to", "s.to", "filmo.to"]
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")));
+    anyhow::ensure!(
+        !on_portal,
         "Redirect blieb auf dem Portal (vermutlich Challenge)"
     );
     Ok(final_url)
@@ -826,6 +835,13 @@ async fn follow_to_embed(
     portal_url: &str,
     referer: &str,
 ) -> anyhow::Result<String> {
+    // SSRF-Schutz: das Ziel stammt aus gescraptem Inhalt. http(s) erzwingen und
+    // gesperrte IP-Literale abweisen (Hostnamen deckt der DNS-Guard-Resolver ab).
+    anyhow::ensure!(
+        (portal_url.starts_with("http://") || portal_url.starts_with("https://"))
+            && !http::host_is_forbidden_ip_literal(portal_url),
+        "unerlaubtes Ziel"
+    );
     let resp = client
         .get(portal_url)
         .header("Referer", referer)
@@ -850,11 +866,23 @@ async fn follow_to_embed(
 /// **frisch** geladen wird: die gespeicherten `/r?t=`-Tokens (Laravel-Crypt) laufen
 /// nach Stunden ab (→ HTTP 410), die frischen funktionieren. Wie bei filmo.
 async fn resolve_serienstream_episode(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     episode_url: &str,
     links: Vec<PendingLink>,
 ) -> Vec<(i64, anyhow::Result<String>)> {
-    let pl = match serienstream::provider_links(client, BASE_STO, episode_url).await {
+    // Eigener Cookie-Client pro Folge: der Seitenabruf setzt die Cloudflare-Clearance-
+    // Cookies, die der anschließende `/r?t=`-Follow braucht (sonst Challenge).
+    let client = match http::cookie_client() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Cookie-Client: {e}");
+            return links
+                .into_iter()
+                .map(|l| (l.id, Err(anyhow::anyhow!(msg.clone()))))
+                .collect();
+        }
+    };
+    let pl = match serienstream::provider_links(&client, BASE_STO, episode_url).await {
         Ok(pl) => pl,
         Err(e) => {
             let msg = format!("Episodenseite nicht ladbar: {e}");
@@ -885,7 +913,7 @@ async fn resolve_serienstream_episode(
     for l in links {
         match fresh.get(&(l.language.clone(), l.hoster.clone())) {
             Some(fresh_url) => {
-                let r = follow_to_embed(client, fresh_url, episode_url).await;
+                let r = follow_to_embed(&client, fresh_url, episode_url).await;
                 out.push((l.id, r));
             }
             None => out.push((

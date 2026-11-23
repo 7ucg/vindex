@@ -297,7 +297,7 @@ fn safe_redirect_policy() -> reqwest::redirect::Policy {
 
 /// True, wenn der Host von *url* ein IP-Literal aus einem gesperrten Bereich ist.
 /// Für Hostnamen (die erst aufgelöst werden) greift stattdessen der DNS-Resolver.
-pub(crate) fn host_is_forbidden_ip_literal(url: &str) -> bool {
+pub fn host_is_forbidden_ip_literal(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };
@@ -508,6 +508,13 @@ fn wreq_safe_redirect() -> wreq::redirect::Policy {
         match uri.scheme_str() {
             Some("http") | Some("https") => {}
             _ => return attempt.stop(),
+        }
+        // Kein https→http-Downgrade (analog zu safe_redirect_policy): sonst könnten
+        // token-tragende Request-URLs/Referer über Klartext abfließen.
+        if uri.scheme_str() == Some("http")
+            && attempt.previous.last().and_then(|p| p.scheme_str()) == Some("https")
+        {
+            return attempt.stop();
         }
         if let Some(host) = uri.host() {
             let host = host.trim_start_matches('[').trim_end_matches(']');
