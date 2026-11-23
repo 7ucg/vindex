@@ -377,6 +377,10 @@ export function Settings(): JSX.Element {
               {(cfg().no_ffmpeg ?? true) ? "● Ohne ffmpeg (MKV-Remux)" : "○ ffmpeg zum Muxen"}
             </button>
           </div>
+          <p class="note" style={{ margin: "6px 0 0" }}>
+            Der ffmpeg-Pfad lädt direkt über das System-Netz (kein 1.1.1.1, kein Proxy, keine
+            Drosselung). Bei gesetztem Proxy/obscura bleibt der native Pfad erzwungen.
+          </p>
         </div>
       </div>
 

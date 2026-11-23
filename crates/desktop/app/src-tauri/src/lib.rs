@@ -40,6 +40,22 @@ impl AppState {
     fn overrides(&self) -> vindex_desktop::DownloadOverrides {
         use std::str::FromStr;
         let cfg = self.config.lock().unwrap();
+        // Egress-/DNS-Invariante: ist ein Proxy oder obscura konfiguriert, MUSS der
+        // native HLS-Pfad genutzt werden. Der ffmpeg-Pfad zöge die Playlist direkt —
+        // am 1.1.1.1-Resolver und am Egress-Proxy vorbei. Die Schalter dürfen das nicht
+        // aushebeln; ohne Proxy/obscura gelten sie.
+        let locked = cfg
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+            || cfg
+                .obscura
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty());
+        let native_hls = locked || cfg.native_hls.unwrap_or(true);
+        let no_ffmpeg = locked || cfg.no_ffmpeg.unwrap_or(true);
         vindex_desktop::DownloadOverrides {
             language: cfg
                 .language
@@ -58,8 +74,8 @@ impl AppState {
                 .as_deref()
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
-            native_hls: Some(cfg.native_hls.unwrap_or(true)),
-            no_ffmpeg: Some(cfg.no_ffmpeg.unwrap_or(true)),
+            native_hls: Some(native_hls),
+            no_ffmpeg: Some(no_ffmpeg),
             hosters: None,
         }
     }
@@ -698,7 +714,6 @@ fn platform_info() -> PlatformInfo {
 fn bundled_tool(name: &str) -> Option<String> {
     let exe = std::env::current_exe().ok();
     let exe_dir = exe.as_ref().and_then(|e| e.parent());
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let fname = if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -706,15 +721,51 @@ fn bundled_tool(name: &str) -> Option<String> {
     };
     let mut cands: Vec<std::path::PathBuf> = Vec::new();
     if let Some(d) = exe_dir {
+        // Neben der installierten Exe bzw. in den Bundle-Resources (nicht
+        // fremd-beschreibbar) — der einzige Suchpfad im Release.
         cands.push(d.join(&fname));
         cands.push(d.join("binaries").join(&fname));
         cands.push(d.join("resources").join("binaries").join(&fname));
     }
-    cands.push(manifest.join("binaries").join(&fname));
+    // Compile-Zeit-Quellpfad NUR im Debug-Build (sonst Binary-Planting-Risiko: der
+    // Pfad der Build-Maschine könnte auf dem Zielsystem fremd beschreibbar sein).
+    #[cfg(debug_assertions)]
+    cands.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(&fname),
+    );
     cands
         .into_iter()
-        .find(|p| p.is_file())
+        .find(|p| safe_tool_path(p))
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Ein Kandidat ist nur sicher, wenn er eine **reguläre, nicht-symbolische** Datei ist
+/// und (auf Unix) weder die Datei noch ihr Verzeichnis group-/world-schreibbar sind —
+/// sonst könnte ein anderer Nutzer ein Binary unterschieben (Code-Execution).
+fn safe_tool_path(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // 0o022 = group- oder world-writable.
+        if meta.mode() & 0o022 != 0 {
+            return false;
+        }
+        if let Some(dir) = path.parent() {
+            match std::fs::metadata(dir) {
+                Ok(dm) if dm.mode() & 0o022 == 0 => {}
+                _ => return false,
+            }
+        }
+    }
+    true
 }
 
 /// Setzt `VINDEX_FFMPEG`/`VINDEX_FFPROBE`/`VINDEX_OBSCURA` auf mitgelieferte Binaries,
