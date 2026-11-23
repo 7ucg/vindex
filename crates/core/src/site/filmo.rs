@@ -20,7 +20,13 @@ pub const BASE: &str = "https://filmo.to";
 /// Lädt eine Katalogseite (`/movies?page=N`, serverseitig gerendert, 42 Filme/Seite).
 pub async fn fetch_catalog(client: &reqwest::Client, page: u32) -> Result<Vec<CatalogEntry>> {
     let url = format!("{BASE}/movies?page={page}");
-    let body = super::fetch_text(client, &url).await?;
+    fetch_listing(client, &url).await
+}
+
+/// Lädt eine beliebige Listenseite (Katalogseite oder Genre `/genres/<slug>`) und
+/// parst die Filmkarten — gleiches Markup wie der Katalog.
+pub async fn fetch_listing(client: &reqwest::Client, url: &str) -> Result<Vec<CatalogEntry>> {
+    let body = super::fetch_text(client, url).await?;
     Ok(parse_catalog(&body))
 }
 

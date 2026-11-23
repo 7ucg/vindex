@@ -20,7 +20,13 @@ use crate::naming::{episode_number_from_title, strip_episode_marker};
 /// Lädt den Serien-Katalog von `/serien?by=alpha` (alphabetisch, voller Katalog).
 pub async fn fetch_catalog(client: &reqwest::Client, base: &str) -> Result<Vec<CatalogEntry>> {
     let url = format!("{base}/serien?by=alpha");
-    let body = super::fetch_text(client, &url).await?;
+    fetch_listing(client, &url).await
+}
+
+/// Lädt eine beliebige Listenseite (Katalog, Genre `/genre/<slug>`, Jahr
+/// `/jahr/<jahr>`) und parst die Titel — gleiches Item-Markup wie der Katalog.
+pub async fn fetch_listing(client: &reqwest::Client, url: &str) -> Result<Vec<CatalogEntry>> {
+    let body = super::fetch_text(client, url).await?;
     Ok(parse_catalog(&body))
 }
 

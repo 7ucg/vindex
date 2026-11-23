@@ -177,6 +177,28 @@ async fn catalog(portal: String, state: State<'_, AppState>) -> Result<Vec<Searc
         .collect())
 }
 
+/// Discover: nach Genre oder Jahr gefilterte Titel-Liste (ohne Filter = Katalog).
+#[tauri::command]
+async fn discover(
+    portal: String,
+    genre: Option<String>,
+    year: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchHitDto>, String> {
+    let hits = state
+        .backend
+        .discover(&portal, genre.as_deref(), year)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchHitDto {
+            title: h.title,
+            url: h.url,
+        })
+        .collect())
+}
+
 #[tauri::command]
 async fn seasons(url: String, state: State<'_, AppState>) -> Result<Vec<u32>, String> {
     state.backend.seasons(&url).await.map_err(|e| e.to_string())
@@ -968,6 +990,7 @@ pub fn run() {
             app_info,
             search,
             catalog,
+            discover,
             seasons,
             episodes,
             resolve_playback,

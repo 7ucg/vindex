@@ -194,6 +194,90 @@ impl Backend {
         }
     }
 
+    /// Discover: gefilterte Titel-Liste (Genre oder Jahr). Ohne Filter = voller
+    /// Katalog. Genre/Jahr-Listenseiten nutzen dasselbe Item-Markup wie der Katalog.
+    pub async fn discover(
+        &self,
+        portal: &str,
+        genre: Option<&str>,
+        year: Option<u32>,
+    ) -> Result<Vec<SearchHit>> {
+        if genre.is_none() && year.is_none() {
+            return self.catalog(portal).await;
+        }
+        // Genre-Slug streng validieren — nie roh in eine URL.
+        let genre = match genre {
+            Some(g)
+                if !g.is_empty()
+                    && g.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') =>
+            {
+                Some(g)
+            }
+            Some(_) => return Err(core::error::Error::Parse("ungültiges Genre".into())),
+            None => None,
+        };
+        let year = match year {
+            Some(y) if (1900..=2100).contains(&y) => Some(y),
+            Some(_) => return Err(core::error::Error::Parse("ungültiges Jahr".into())),
+            None => None,
+        };
+        match portal {
+            "aniworld" => {
+                let base = core::model::BASE;
+                let url = match genre {
+                    Some(g) => format!("{base}/genre/{g}"),
+                    None => format!("{base}/animes/jahr/{}", year.unwrap()),
+                };
+                let entries = site::aniworld::fetch_listing(&self.client, &url)
+                    .await
+                    .map_err(|e| core::error::Error::Parse(e.to_string()))?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{base}/anime/stream/{}", e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
+            "serienstream" => {
+                let base = core::model::BASE_STO;
+                let url = match genre {
+                    Some(g) => format!("{base}/genre/{g}"),
+                    None => format!("{base}/jahr/{}", year.unwrap()),
+                };
+                let entries = site::serienstream::fetch_listing(&self.client, &url).await?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{base}/serie/{}", e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
+            "filmo" => {
+                let Some(g) = genre else {
+                    return Err(core::error::Error::Parse(
+                        "filmo: Jahr-Filter nicht verfügbar".into(),
+                    ));
+                };
+                let base = site::filmo::BASE;
+                let url = format!("{base}/genres/{g}");
+                let entries = site::filmo::fetch_listing(&self.client, &url).await?;
+                Ok(entries
+                    .into_iter()
+                    .map(|e| SearchHit {
+                        url: format!("{base}/movies/{}", e.slug),
+                        title: e.title,
+                    })
+                    .collect())
+            }
+            other => Err(core::error::Error::Parse(format!(
+                "unbekanntes Portal: {other}"
+            ))),
+        }
+    }
+
     /// Verfügbare Sprachen für einen Titel (Film-URL oder Episoden-URL). Für filmo
     /// aus den Movie-Quellen, sonst aus den Provider-Links der Episode. In fester
     /// Reihenfolge, nur tatsächlich angebotene Varianten.

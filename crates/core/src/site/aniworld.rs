@@ -42,15 +42,27 @@ pub async fn provider_links(client: &reqwest::Client, episode_url: &str) -> Resu
 /// das nach Genre gruppiert ist und einzelne Titel ohne Genre-Zuordnung auslässt).
 pub async fn fetch_catalog(client: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> {
     let url = format!("{BASE}/animes-alphabet");
-    let body = super::fetch_text(client, &url).await?;
-    let doc = Html::parse_document(&body);
-    let sel = Selector::parse(r#"a[href^="/anime/stream/"]"#).unwrap();
+    fetch_listing(client, &url).await
+}
 
+/// Lädt eine beliebige Listenseite (Katalog, Genre `/genre/<slug>`, Jahr
+/// `/animes/jahr/<jahr>`) und parst die Titel — alle nutzen dasselbe Item-Markup.
+pub async fn fetch_listing(
+    client: &reqwest::Client,
+    url: &str,
+) -> anyhow::Result<Vec<CatalogEntry>> {
+    let body = super::fetch_text(client, url).await?;
+    Ok(parse_listing(&body))
+}
+
+/// Reine HTML→Titel-Logik: `a[href^="/anime/stream/"]`, dedupliziert, nur Basis-Links.
+fn parse_listing(body: &str) -> Vec<CatalogEntry> {
+    let doc = Html::parse_document(body);
+    let sel = Selector::parse(r#"a[href^="/anime/stream/"]"#).unwrap();
     let mut seen = std::collections::HashSet::new();
     let mut entries = Vec::new();
     for el in doc.select(&sel) {
         let href = el.value().attr("href").unwrap_or("");
-        // Nur Basis-Links der Form /anime/stream/<slug>, keine Staffel/Episoden-Unterlinks.
         let slug = href.trim_start_matches("/anime/stream/");
         if slug.is_empty() || slug.contains('/') {
             continue;
@@ -67,7 +79,7 @@ pub async fn fetch_catalog(client: &reqwest::Client) -> anyhow::Result<Vec<Catal
             slug: slug.to_string(),
         });
     }
-    Ok(entries)
+    entries
 }
 
 /// Klassifiziert einen Titel über seine Detailseite.

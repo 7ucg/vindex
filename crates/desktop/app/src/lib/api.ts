@@ -36,6 +36,11 @@ export function catalog(portal: string): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("catalog", { portal });
 }
 
+/** Nach Genre oder Jahr gefiltert; ohne Filter = voller Katalog. */
+export function discover(portal: string, genre?: string, year?: number): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("discover", { portal, genre: genre || null, year: year ?? null });
+}
+
 export interface Episode {
   url: string;
   title: string;

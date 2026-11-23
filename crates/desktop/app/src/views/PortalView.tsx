@@ -9,13 +9,71 @@ import {
   Show,
   type JSX,
 } from "solid-js";
-import { catalog, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
+import { discover, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
 
 type Sort = "az" | "za";
 type Layout = "grid" | "list";
+
+// Kuratiertes Genre-Angebot je Portal (ASCII-Slugs — werden roh in die URL gebaut).
+const GENRES: Record<Portal, { slug: string; label: string }[]> = {
+  aniworld: [
+    ["action", "Action"],
+    ["abenteuer", "Abenteuer"],
+    ["drama", "Drama"],
+    ["fantasy", "Fantasy"],
+    ["horror", "Horror"],
+    ["thriller", "Thriller"],
+    ["mystery", "Mystery"],
+    ["scifi", "Sci-Fi"],
+    ["romanze", "Romanze"],
+    ["sport", "Sport"],
+    ["ecchi", "Ecchi"],
+    ["harem", "Harem"],
+    ["mecha", "Mecha"],
+    ["krimi", "Krimi"],
+  ].map(([slug, label]) => ({ slug, label })),
+  serienstream: [
+    ["action", "Action"],
+    ["drama", "Drama"],
+    ["thriller", "Thriller"],
+    ["horror", "Horror"],
+    ["fantasy", "Fantasy"],
+    ["mystery", "Mystery"],
+    ["animation", "Animation"],
+    ["abenteuer", "Abenteuer"],
+    ["krimi", "Krimi"],
+    ["dokumentation", "Dokumentation"],
+    ["western", "Western"],
+  ].map(([slug, label]) => ({ slug, label })),
+  filmo: [
+    ["action", "Action"],
+    ["adventure", "Adventure"],
+    ["animation", "Animation"],
+    ["comedy", "Comedy"],
+    ["crime", "Crime"],
+    ["documentary", "Documentary"],
+    ["drama", "Drama"],
+    ["family", "Family"],
+    ["fantasy", "Fantasy"],
+    ["history", "History"],
+    ["horror", "Horror"],
+    ["music", "Music"],
+    ["mystery", "Mystery"],
+    ["romance", "Romance"],
+    ["science-fiction", "Science-Fiction"],
+    ["thriller", "Thriller"],
+    ["war", "War"],
+    ["western", "Western"],
+  ].map(([slug, label]) => ({ slug, label })),
+};
+
+// Jahr-Filter (aniworld/serienstream unterstützen „…/jahr/<jahr>"; filmo nicht).
+const YEARS: number[] = Array.from({ length: new Date().getFullYear() - 1969 }, (_, i) =>
+  new Date().getFullYear() - i,
+);
 
 const LAYOUT_KEY = "vindex:portallayout";
 function readLayout(): Layout {
@@ -43,10 +101,21 @@ const LABEL: Record<Portal, string> = {
 const BATCH = 60;
 
 export function PortalView(props: { portal: Portal }): JSX.Element {
-  const [items] = createResource(() => props.portal, catalog);
+  const [genre, setGenre] = createSignal("");
+  const [year, setYear] = createSignal(0);
+  const [items] = createResource(
+    () => ({ portal: props.portal, genre: genre(), year: year() }),
+    (q) => discover(q.portal, q.genre || undefined, q.year || undefined),
+  );
   const [lib] = createResource(library);
   const [onlyLib, setOnlyLib] = createSignal(false);
   const [sort, setSort] = createSignal<Sort>("az");
+  // Beim Portalwechsel die Filter zurücksetzen (filmo hat z. B. kein Jahr).
+  createEffect(() => {
+    void props.portal;
+    setGenre("");
+    setYear(0);
+  });
   const [layout, setLayoutSig] = createSignal<Layout>(readLayout());
   const setLayout = (l: Layout) => {
     setLayoutSig(l);
@@ -69,6 +138,8 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     filter();
     sort();
     onlyLib();
+    genre();
+    year();
     void props.portal;
     setShown(BATCH);
   });
@@ -194,6 +265,35 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           >
             ☰
           </button>
+          <select
+            class="cfg-input"
+            style={{ "max-width": "150px" }}
+            value={genre()}
+            onChange={(e) => {
+              setGenre(e.currentTarget.value);
+              if (e.currentTarget.value) setYear(0);
+            }}
+          >
+            <option value="">Alle Genres</option>
+            <For each={GENRES[props.portal]}>
+              {(g) => <option value={g.slug}>{g.label}</option>}
+            </For>
+          </select>
+          <Show when={props.portal !== "filmo"}>
+            <select
+              class="cfg-input"
+              style={{ "max-width": "110px" }}
+              value={year() || ""}
+              onChange={(e) => {
+                const y = parseInt(e.currentTarget.value, 10) || 0;
+                setYear(y);
+                if (y) setGenre("");
+              }}
+            >
+              <option value="">Alle Jahre</option>
+              <For each={YEARS}>{(y) => <option value={y}>{y}</option>}</For>
+            </select>
+          </Show>
           <Show when={(lib() ?? []).length > 0}>
             <button
               class="chip"
