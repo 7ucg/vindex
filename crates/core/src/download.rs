@@ -253,6 +253,21 @@ fn report(progress: Option<&ProgressSink>, event: Progress) {
     }
 }
 
+/// ffmpeg-/ffprobe-Programmname: aus `VINDEX_FFMPEG`/`VINDEX_FFPROBE` (für ein
+/// mitgeliefertes Binary), sonst der PATH-Name. Leere Angabe = Fallback.
+fn ffmpeg_bin() -> String {
+    std::env::var("VINDEX_FFMPEG")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "ffmpeg".into())
+}
+fn ffprobe_bin() -> String {
+    std::env::var("VINDEX_FFPROBE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "ffprobe".into())
+}
+
 /// Wählt den tatsächlich geschriebenen Pfad. Bei `VINDEX_NO_FFMPEG` finalisiert der
 /// native HLS-Pfad als `.ts` statt unter der ursprünglichen Endung — dann existiert
 /// die `.ts`-Variante statt `out_path`.
@@ -1209,7 +1224,7 @@ async fn remux_local(
     if is_cancelled(cancel) {
         return Err(Error::Ffmpeg("abgebrochen".into()));
     }
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = Command::new(ffmpeg_bin());
     cmd.kill_on_drop(true);
     // Format und Protokoll pinnen: die Datei besteht aus zusammengesetzten
     // Hoster-Segmenten. Ohne `-f mpegts` könnte ffmpeg sie als HLS-/concat-Playlist
@@ -1274,7 +1289,7 @@ pub async fn mux(
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
 
-        let mut cmd = Command::new("ffmpeg");
+        let mut cmd = Command::new(ffmpeg_bin());
         cmd.kill_on_drop(true);
         if let Some(referer) = &stream.referer {
             cmd.arg("-headers")
@@ -1342,7 +1357,7 @@ pub async fn ffprobe_height(url: &str, referer: Option<&str>) -> Option<u32> {
     if !is_http_url(url) {
         return None;
     }
-    let mut cmd = Command::new("ffprobe");
+    let mut cmd = Command::new(ffprobe_bin());
     cmd.kill_on_drop(true);
     cmd.args([
         "-v",
