@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use futures::stream::{FuturesUnordered, StreamExt};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::{params, Connection};
 use tokio::sync::Semaphore;
 use vindex_core::http;
@@ -38,13 +38,14 @@ enum IndexCommand {
     Stats(StatsArgs),
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 struct BuildArgs {
     /// Pfad zur SQLite-Datenbank.
     #[arg(long, default_value = "vindex-index.db")]
     db: String,
 
-    /// Portal: aniworld, serienstream, filmo oder all.
+    /// Portal: aniworld, serienstream, filmo oder all. Bei „all" laufen die drei
+    /// Portale gleichzeitig (je eigene DB-Connection).
     #[arg(long, default_value = "all")]
     portal: String,
 
@@ -52,8 +53,9 @@ struct BuildArgs {
     #[arg(long)]
     limit: Option<usize>,
 
-    /// Parallele Titel-Crawls.
-    #[arg(long, default_value_t = 6)]
+    /// Parallele Titel-Crawls **pro Portal**. Bei „all" ×3 insgesamt, aber je
+    /// Portal auf einen eigenen Host verteilt (nicht ein Host härter gehämmert).
+    #[arg(long, default_value_t = 10)]
     concurrency: usize,
 
     /// Wartezeit zwischen Folgen-Abrufen pro Titel in Millisekunden.
@@ -116,6 +118,8 @@ fn open_db(path: &str) -> anyhow::Result<Connection> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 30000;
+         PRAGMA synchronous = NORMAL;
          CREATE TABLE IF NOT EXISTS title (
            id INTEGER PRIMARY KEY,
            portal TEXT NOT NULL,
@@ -200,12 +204,29 @@ struct CrawledTitle {
 }
 
 async fn build(args: BuildArgs) -> anyhow::Result<()> {
-    let conn = open_db(&args.db)?;
-    let client = http::client()?;
     let portals = portals_from_arg(&args.portal)?;
+    let client = http::client()?;
+    let mp = MultiProgress::new();
 
-    for portal in portals {
-        build_portal(&conn, &client, portal, &args).await?;
+    // Die Portale laufen gleichzeitig: je eigene DB-Connection (SQLite-WAL +
+    // busy_timeout serialisiert die kurzen Schreibzugriffe). `Connection` ist nicht
+    // `Sync`, darum werden die Portal-Treiber nicht per `spawn` (Send nötig) gestartet,
+    // sondern mit `join_all` nebenläufig auf einem Task getrieben — die eigentlichen
+    // Titel-Crawls laufen intern weiterhin über `tokio::spawn` auf dem Threadpool.
+    // Jedes Portal ist fortsetzbar; der Fortschritt steht nach jedem Titel in der DB,
+    // bereits vollständig gecrawlte Titel werden nie erneut angefasst.
+    let conns = portals
+        .iter()
+        .map(|_| open_db(&args.db))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let futs = portals
+        .iter()
+        .zip(conns.iter())
+        .map(|(portal, conn)| build_portal(conn, &client, *portal, &args, &mp));
+    for result in futures::future::join_all(futs).await {
+        if let Err(e) = result {
+            eprintln!("Portal-Fehler: {e}");
+        }
     }
     Ok(())
 }
@@ -215,6 +236,7 @@ async fn build_portal(
     client: &reqwest::Client,
     portal: &'static str,
     args: &BuildArgs,
+    mp: &MultiProgress,
 ) -> anyhow::Result<()> {
     eprintln!("[{portal}] Katalog laden ...");
     let entries = match portal {
@@ -225,15 +247,21 @@ async fn build_portal(
     };
     eprintln!("[{portal}] {} Titel im Katalog", entries.len());
 
-    // Katalog-Stand eintragen (Name/URL aktualisieren, Crawl-Stand bleibt).
+    // Katalog-Stand eintragen (Name/URL aktualisieren, Crawl-Stand bleibt). In einer
+    // Transaktion — schnell und kurzer Schreib-Lock (die parallelen Portale warten nur
+    // ganz kurz), der `crawled_at`-Stempel wird nie angefasst.
     {
-        let mut stmt = conn.prepare(
-            "INSERT INTO title (portal, slug, url, name) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(portal, slug) DO UPDATE SET name = excluded.name, url = excluded.url",
-        )?;
-        for e in &entries {
-            stmt.execute(params![portal, e.slug, title_url(portal, &e.slug), e.title])?;
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO title (portal, slug, url, name) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(portal, slug) DO UPDATE SET name = excluded.name, url = excluded.url",
+            )?;
+            for e in &entries {
+                stmt.execute(params![portal, e.slug, title_url(portal, &e.slug), e.title])?;
+            }
         }
+        tx.commit()?;
     }
 
     // Zu crawlende Titel bestimmen (fortsetzbar).
@@ -262,13 +290,14 @@ async fn build_portal(
     }
     eprintln!("[{portal}] {} Titel zu crawlen", pending.len());
 
-    let pb = ProgressBar::new(pending.len() as u64);
+    let pb = mp.add(ProgressBar::new(pending.len() as u64));
     pb.set_style(
         ProgressStyle::with_template(
-            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+            "{prefix:>13} {spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} ({eta}) {msg}",
         )
         .unwrap(),
     );
+    pb.set_prefix(portal.to_string());
 
     let semaphore = Arc::new(Semaphore::new(args.concurrency.max(1)));
     let mut futs = FuturesUnordered::new();
