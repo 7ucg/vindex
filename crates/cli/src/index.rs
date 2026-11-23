@@ -851,12 +851,45 @@ async fn follow_to_embed(
             && !http::host_is_forbidden_ip_literal(portal_url),
         "unerlaubtes Ziel"
     );
-    let resp = client
-        .get(portal_url)
-        .header("Referer", referer)
-        .send()
-        .await?;
-    let final_url = resp.url().to_string();
+
+    // Rate-Limit-sanft: bei 429/503 (Hoster „Too many requests") oder einem Sende-Fehler
+    // (Verbindungsabbruch unter Last) kurz warten und erneut versuchen. Das Warten hält
+    // den Semaphore-Platz → drosselt sich bei einer Fehlerwelle von selbst.
+    const MAX_RETRIES: u32 = 4;
+    const BACKOFF: Duration = Duration::from_secs(10);
+    let mut attempt = 0u32;
+
+    let final_url = loop {
+        match client
+            .get(portal_url)
+            .header("Referer", referer)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let s = resp.status().as_u16();
+                if (s == 429 || s == 503) && attempt < MAX_RETRIES {
+                    attempt += 1;
+                    tokio::time::sleep(BACKOFF).await;
+                    continue;
+                }
+                anyhow::ensure!(
+                    s != 429 && s != 503,
+                    "Rate-Limit ({s}) nach {MAX_RETRIES} Versuchen"
+                );
+                break resp.url().to_string();
+            }
+            Err(e) => {
+                if attempt < MAX_RETRIES {
+                    attempt += 1;
+                    tokio::time::sleep(BACKOFF).await;
+                    continue;
+                }
+                return Err(e.into());
+            }
+        }
+    };
+
     match check_embed_url(final_url) {
         Ok(u) => Ok(u),
         Err(e) => {
