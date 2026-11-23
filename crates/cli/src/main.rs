@@ -5,6 +5,7 @@
 
 mod census;
 mod download;
+mod index;
 mod interactive;
 mod library;
 mod watch;
@@ -33,6 +34,9 @@ enum Command {
     Watch(watch::WatchArgs),
     /// Interaktives Menü: suchen → Staffel/Episode/Sprache wählen → laden.
     Menu,
+    /// Baut und pflegt den lokalen Katalog-Index (SQLite) mit Titeln, Metadaten
+    /// und Hoster-Links aller Portale.
+    Index(index::IndexArgs),
     /// Listet die fertigen Downloads im Zielverzeichnis (Name + Größe).
     Library(library::LibraryArgs),
     /// Startet den HTTP-API-Daemon.
@@ -61,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Download(args) => download::run_download(args).await,
         Command::Watch(args) => watch::run_watch(args).await,
         Command::Menu => interactive::run().await,
+        Command::Index(args) => index::run(args).await,
         Command::Library(args) => library::run(args).await,
         Command::Serve(args) => vindex_api::serve(&args.addr).await,
     }

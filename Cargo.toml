@@ -50,6 +50,8 @@ dotenvy = "0.15"
 tracing = "0.1"
 anyhow = "1"
 thiserror = "2"
+# Lokaler Katalog-Index (SQLite, gebündelt — keine Systemabhängigkeit)
+rusqlite = { version = "0.32", features = ["bundled"] }
 # CLI
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"

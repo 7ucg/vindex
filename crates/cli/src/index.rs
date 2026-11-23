@@ -1,0 +1,778 @@
+//! `index`-Unterbefehl: lokaler Katalog-Index als SQLite-Datenbank.
+//!
+//! Baut pro Portal (aniworld / serienstream / filmo) einen vollständigen Bestand
+//! aus Titeln, Metadaten, Staffeln, Folgen und den Hoster-Links der Portalseiten
+//! auf. Die Portal-Links (`/redirect/N`, `/r?t=…`, Filmo-Token) sind stabil und
+//! werden beim Crawl gespeichert; die eigentlichen Embed-URLs der Hoster sind
+//! flüchtiger und werden in einem getrennten Durchlauf (`resolve`) aufgelöst.
+//!
+//! Der Aufbau ist fortsetzbar: bereits vollständig gecrawlte Titel (frischer als
+//! `--refresh-days`) werden übersprungen, ein abgebrochener Lauf macht beim
+//! nächsten Start dort weiter, wo er stand.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::{Parser, Subcommand};
+use futures::stream::{FuturesUnordered, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
+use rusqlite::{params, Connection};
+use tokio::sync::Semaphore;
+use vindex_core::http;
+use vindex_core::model::{Episode, Hoster, Language, BASE, BASE_STO};
+use vindex_core::site::{self, filmo, serienstream};
+
+#[derive(Parser, Debug)]
+pub struct IndexArgs {
+    #[command(subcommand)]
+    command: IndexCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum IndexCommand {
+    /// Crawlt Kataloge, Metadaten, Folgen und Portal-Links in die Datenbank.
+    Build(BuildArgs),
+    /// Löst gespeicherte Portal-Links zu Hoster-Embed-URLs auf.
+    Resolve(ResolveArgs),
+    /// Zeigt den Bestand der Datenbank.
+    Stats(StatsArgs),
+}
+
+#[derive(Parser, Debug)]
+struct BuildArgs {
+    /// Pfad zur SQLite-Datenbank.
+    #[arg(long, default_value = "vindex-index.db")]
+    db: String,
+
+    /// Portal: aniworld, serienstream, filmo oder all.
+    #[arg(long, default_value = "all")]
+    portal: String,
+
+    /// Nur die ersten N Titel pro Portal (zum Testen).
+    #[arg(long)]
+    limit: Option<usize>,
+
+    /// Parallele Titel-Crawls.
+    #[arg(long, default_value_t = 6)]
+    concurrency: usize,
+
+    /// Wartezeit zwischen Folgen-Abrufen pro Titel in Millisekunden.
+    #[arg(long, default_value_t = 150)]
+    delay_ms: u64,
+
+    /// Titel neu crawlen, deren Stand älter ist als N Tage (0 = alles neu).
+    #[arg(long, default_value_t = 30)]
+    refresh_days: i64,
+}
+
+#[derive(Parser, Debug)]
+struct ResolveArgs {
+    /// Pfad zur SQLite-Datenbank.
+    #[arg(long, default_value = "vindex-index.db")]
+    db: String,
+
+    /// Portal: aniworld, serienstream, filmo oder all.
+    #[arg(long, default_value = "all")]
+    portal: String,
+
+    /// Höchstens N Links auflösen (0 = alle offenen).
+    #[arg(long, default_value_t = 0)]
+    max: usize,
+
+    /// Parallele Auflösungen.
+    #[arg(long, default_value_t = 6)]
+    concurrency: usize,
+
+    /// Wartezeit zwischen Auflösungen pro Worker in Millisekunden.
+    #[arg(long, default_value_t = 200)]
+    delay_ms: u64,
+
+    /// Auch bereits aufgelöste Links erneuern, die älter sind als N Tage.
+    #[arg(long)]
+    refresh_days: Option<i64>,
+}
+
+#[derive(Parser, Debug)]
+struct StatsArgs {
+    /// Pfad zur SQLite-Datenbank.
+    #[arg(long, default_value = "vindex-index.db")]
+    db: String,
+}
+
+pub async fn run(args: IndexArgs) -> anyhow::Result<()> {
+    match args.command {
+        IndexCommand::Build(a) => build(a).await,
+        IndexCommand::Resolve(a) => resolve(a).await,
+        IndexCommand::Stats(a) => stats(a),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schema
+// ---------------------------------------------------------------------------
+
+fn open_db(path: &str) -> anyhow::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA foreign_keys = ON;
+         CREATE TABLE IF NOT EXISTS title (
+           id INTEGER PRIMARY KEY,
+           portal TEXT NOT NULL,
+           slug TEXT NOT NULL,
+           url TEXT NOT NULL,
+           name TEXT NOT NULL,
+           kind TEXT NOT NULL DEFAULT 'unknown',
+           description TEXT,
+           poster TEXT,
+           year TEXT,
+           fsk INTEGER,
+           country TEXT,
+           imdb TEXT,
+           genres TEXT,
+           directors TEXT,
+           actors TEXT,
+           producers TEXT,
+           crawled_at INTEGER,
+           UNIQUE(portal, slug)
+         );
+         CREATE TABLE IF NOT EXISTS episode (
+           id INTEGER PRIMARY KEY,
+           title_id INTEGER NOT NULL REFERENCES title(id) ON DELETE CASCADE,
+           season INTEGER NOT NULL,
+           number INTEGER NOT NULL,
+           url TEXT NOT NULL,
+           name TEXT,
+           UNIQUE(title_id, season, number)
+         );
+         CREATE TABLE IF NOT EXISTS link (
+           id INTEGER PRIMARY KEY,
+           episode_id INTEGER NOT NULL REFERENCES episode(id) ON DELETE CASCADE,
+           language TEXT NOT NULL,
+           hoster TEXT NOT NULL,
+           portal_url TEXT NOT NULL,
+           embed_url TEXT,
+           resolved_at INTEGER,
+           UNIQUE(episode_id, language, hoster)
+         );
+         CREATE INDEX IF NOT EXISTS idx_title_portal ON title(portal);
+         CREATE INDEX IF NOT EXISTS idx_episode_title ON episode(title_id);
+         CREATE INDEX IF NOT EXISTS idx_link_episode ON link(episode_id);
+         CREATE INDEX IF NOT EXISTS idx_link_open ON link(resolved_at) WHERE embed_url IS NULL;",
+    )?;
+    Ok(conn)
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn portals_from_arg(portal: &str) -> anyhow::Result<Vec<&'static str>> {
+    Ok(match portal {
+        "all" => vec!["aniworld", "serienstream", "filmo"],
+        "aniworld" => vec!["aniworld"],
+        "serienstream" => vec!["serienstream"],
+        "filmo" => vec!["filmo"],
+        other => anyhow::bail!("unbekanntes Portal: {other} (aniworld|serienstream|filmo|all)"),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Build
+// ---------------------------------------------------------------------------
+
+/// Ein Link einer Folge: (Sprache, Hoster, Portal-Link).
+type CrawledLink = (String, String, String);
+/// Eine Folge: (Staffel, Nummer, URL, Name, Links).
+type CrawledEpisode = (u32, u32, String, String, Vec<CrawledLink>);
+
+/// Ergebnis eines Titel-Crawls, bereit zum Wegschreiben.
+struct CrawledTitle {
+    slug: String,
+    kind: &'static str,
+    meta: site::TitleMeta,
+    episodes: Vec<CrawledEpisode>,
+    /// Folgen, deren Hoster-Links nicht abrufbar waren.
+    errors: usize,
+}
+
+async fn build(args: BuildArgs) -> anyhow::Result<()> {
+    let conn = open_db(&args.db)?;
+    let client = http::client()?;
+    let portals = portals_from_arg(&args.portal)?;
+
+    for portal in portals {
+        build_portal(&conn, &client, portal, &args).await?;
+    }
+    Ok(())
+}
+
+async fn build_portal(
+    conn: &Connection,
+    client: &reqwest::Client,
+    portal: &'static str,
+    args: &BuildArgs,
+) -> anyhow::Result<()> {
+    eprintln!("[{portal}] Katalog laden ...");
+    let entries = match portal {
+        "aniworld" => vindex_core::site::aniworld::fetch_catalog(client).await?,
+        "serienstream" => serienstream::fetch_catalog(client, BASE_STO).await?,
+        "filmo" => fetch_filmo_catalog(client).await?,
+        _ => unreachable!(),
+    };
+    eprintln!("[{portal}] {} Titel im Katalog", entries.len());
+
+    // Katalog-Stand eintragen (Name/URL aktualisieren, Crawl-Stand bleibt).
+    {
+        let mut stmt = conn.prepare(
+            "INSERT INTO title (portal, slug, url, name) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(portal, slug) DO UPDATE SET name = excluded.name, url = excluded.url",
+        )?;
+        for e in &entries {
+            stmt.execute(params![portal, e.slug, title_url(portal, &e.slug), e.title])?;
+        }
+    }
+
+    // Zu crawlende Titel bestimmen (fortsetzbar).
+    let cutoff = if args.refresh_days <= 0 {
+        i64::MAX
+    } else {
+        now_unix() - args.refresh_days * 86_400
+    };
+    let mut pending: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, slug FROM title
+             WHERE portal = ?1 AND (crawled_at IS NULL OR crawled_at < ?2)
+             ORDER BY slug",
+        )?;
+        let rows = stmt.query_map(params![portal, cutoff], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    if let Some(limit) = args.limit {
+        pending.truncate(limit);
+    }
+    if pending.is_empty() {
+        eprintln!("[{portal}] alles aktuell, nichts zu tun");
+        return Ok(());
+    }
+    eprintln!("[{portal}] {} Titel zu crawlen", pending.len());
+
+    let pb = ProgressBar::new(pending.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+        )
+        .unwrap(),
+    );
+
+    let semaphore = Arc::new(Semaphore::new(args.concurrency.max(1)));
+    let mut futs = FuturesUnordered::new();
+    for (title_id, slug) in pending {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        let delay = Duration::from_millis(args.delay_ms);
+        futs.push(tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.unwrap();
+            let result = match portal {
+                "filmo" => crawl_filmo_title(&client, &slug, delay).await,
+                _ => crawl_sst_title(&client, portal, &slug, delay).await,
+            };
+            (title_id, slug, result)
+        }));
+    }
+
+    let (mut ok, mut partial, mut failed) = (0usize, 0usize, 0usize);
+    while let Some(joined) = futs.next().await {
+        let Ok((title_id, slug, result)) = joined else {
+            failed += 1;
+            pb.inc(1);
+            continue;
+        };
+        pb.inc(1);
+        match result {
+            Ok(crawled) => {
+                if let Err(e) = store_title(conn, title_id, &crawled) {
+                    pb.suspend(|| eprintln!("[{portal}] {slug}: Schreiben fehlgeschlagen: {e}"));
+                    failed += 1;
+                } else if crawled.errors > 0 {
+                    partial += 1;
+                } else {
+                    ok += 1;
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                pb.suspend(|| eprintln!("[{portal}] {slug}: {e}"));
+            }
+        }
+        pb.set_message(format!("ok {ok} / teils {partial} / fehlge. {failed}"));
+    }
+    pb.finish_and_clear();
+    eprintln!(
+        "[{portal}] fertig: {ok} vollständig, {partial} mit Lücken (werden beim nächsten Lauf \
+         nachgeholt), {failed} fehlgeschlagen"
+    );
+    Ok(())
+}
+
+fn title_url(portal: &str, slug: &str) -> String {
+    match portal {
+        "aniworld" => format!("{BASE}/anime/stream/{slug}"),
+        "serienstream" => format!("{BASE_STO}/serie/{slug}"),
+        _ => format!("{}/movies/{slug}", filmo::BASE),
+    }
+}
+
+fn base_for_portal(portal: &str) -> &'static str {
+    match portal {
+        "aniworld" => BASE,
+        "serienstream" => BASE_STO,
+        _ => filmo::BASE,
+    }
+}
+
+/// Crawlt einen aniworld-/serienstream-Titel: Metadaten, Staffeln, Folgen, Links.
+async fn crawl_sst_title(
+    client: &reqwest::Client,
+    portal: &str,
+    slug: &str,
+    delay: Duration,
+) -> anyhow::Result<CrawledTitle> {
+    let base = base_for_portal(portal);
+    let url = title_url(portal, slug);
+    let meta = site::title_meta(client, &url).await.unwrap_or_default();
+    let seasons = serienstream::list_seasons(client, base, slug).await?;
+    anyhow::ensure!(!seasons.is_empty(), "keine Staffeln gefunden");
+
+    let kind = if seasons == [0] { "movie" } else { "series" };
+    let mut episodes = Vec::new();
+    let mut errors = 0usize;
+    for season in seasons {
+        let eps: Vec<Episode> = serienstream::list_episodes(client, base, slug, season).await?;
+        for ep in eps {
+            tokio::time::sleep(delay).await;
+            let number = ep.explicit_number.unwrap_or(ep.index_in_season);
+            let mut links = Vec::new();
+            match serienstream::provider_links(client, base, &ep.url).await {
+                Ok(pl) => {
+                    for (lang, hosters) in &pl.by_language {
+                        for (hoster, link) in hosters {
+                            let abs = if link.starts_with('/') {
+                                format!("{base}{link}")
+                            } else {
+                                link.clone()
+                            };
+                            links.push((
+                                lang.ui_label().to_string(),
+                                hoster.as_str().to_string(),
+                                abs,
+                            ));
+                        }
+                    }
+                }
+                Err(_) => errors += 1,
+            }
+            episodes.push((ep.season, number, ep.url.clone(), ep.title.clone(), links));
+        }
+    }
+    Ok(CrawledTitle {
+        slug: slug.to_string(),
+        kind,
+        meta,
+        episodes,
+        errors,
+    })
+}
+
+/// Crawlt einen Filmo-Film: Seite, Metadaten und die Hoster-Token je Sprache.
+async fn crawl_filmo_title(
+    client: &reqwest::Client,
+    slug: &str,
+    delay: Duration,
+) -> anyhow::Result<CrawledTitle> {
+    let url = title_url("filmo", slug);
+    let movie = filmo::movie(client, &url).await?;
+    tokio::time::sleep(delay).await;
+    let mut meta = site::title_meta(client, &url).await.unwrap_or_default();
+    if meta.year.is_none() {
+        meta.year = movie.year.map(|y| y.to_string());
+    }
+
+    let mut links = Vec::new();
+    for (lang, hosters) in &movie.sources {
+        for (hoster, token) in hosters {
+            links.push((
+                lang.ui_label().to_string(),
+                hoster.as_str().to_string(),
+                token.clone(),
+            ));
+        }
+    }
+    Ok(CrawledTitle {
+        slug: slug.to_string(),
+        kind: "movie",
+        meta,
+        episodes: vec![(0, 1, url, movie.title, links)],
+        errors: 0,
+    })
+}
+
+/// Schreibt einen gecrawlten Titel in einer Transaktion weg.
+fn store_title(conn: &Connection, title_id: i64, crawled: &CrawledTitle) -> anyhow::Result<()> {
+    conn.execute_batch("BEGIN")?;
+    let result = store_title_inner(conn, title_id, crawled);
+    if result.is_ok() {
+        conn.execute_batch("COMMIT")?;
+    } else {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result
+}
+
+fn store_title_inner(
+    conn: &Connection,
+    title_id: i64,
+    crawled: &CrawledTitle,
+) -> anyhow::Result<()> {
+    let m = &crawled.meta;
+    let json = |v: &Vec<String>| serde_json::to_string(v).unwrap_or_else(|_| "[]".into());
+    // Titel mit Lücken (Folgen ohne abrufbare Links) bleiben ohne Crawl-Stempel,
+    // damit der nächste Lauf sie erneut versucht — die Daten stehen trotzdem drin.
+    let crawled_at: Option<i64> = (crawled.errors == 0).then(now_unix);
+    conn.execute(
+        "UPDATE title SET kind = ?2, description = ?3, poster = ?4, year = ?5, fsk = ?6,
+         country = ?7, imdb = ?8, genres = ?9, directors = ?10, actors = ?11, producers = ?12,
+         crawled_at = COALESCE(?13, crawled_at) WHERE id = ?1",
+        params![
+            title_id,
+            crawled.kind,
+            m.description,
+            m.poster,
+            m.year,
+            m.fsk,
+            m.country,
+            m.imdb,
+            json(&m.genres),
+            json(&m.directors),
+            json(&m.actors),
+            json(&m.producers),
+            crawled_at,
+        ],
+    )?;
+
+    let mut ep_stmt = conn.prepare_cached(
+        "INSERT INTO episode (title_id, season, number, url, name) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(title_id, season, number) DO UPDATE SET url = excluded.url,
+         name = excluded.name
+         RETURNING id",
+    )?;
+    // Bei unverändertem Portal-Link bleibt die aufgelöste Embed-URL stehen; ändert
+    // sich der Link, wird die Auflösung verworfen und beim nächsten `resolve` neu
+    // geholt.
+    let mut link_stmt = conn.prepare_cached(
+        "INSERT INTO link (episode_id, language, hoster, portal_url) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(episode_id, language, hoster) DO UPDATE SET
+           embed_url = CASE WHEN link.portal_url = excluded.portal_url
+                            THEN link.embed_url ELSE NULL END,
+           resolved_at = CASE WHEN link.portal_url = excluded.portal_url
+                              THEN link.resolved_at ELSE NULL END,
+           portal_url = excluded.portal_url",
+    )?;
+    for (season, number, url, name, links) in &crawled.episodes {
+        let episode_id: i64 =
+            ep_stmt.query_row(params![title_id, season, number, url, name], |r| r.get(0))?;
+        for (lang, hoster, portal_url) in links {
+            link_stmt.execute(params![episode_id, lang, hoster, portal_url])?;
+        }
+    }
+    let _ = crawled.slug;
+    Ok(())
+}
+
+/// Lädt den Filmo-Katalog über alle Seiten (42 Filme je Seite), blockweise parallel.
+async fn fetch_filmo_catalog(
+    client: &reqwest::Client,
+) -> anyhow::Result<Vec<vindex_core::model::CatalogEntry>> {
+    let mut all = Vec::new();
+    let mut page: u32 = 1;
+    loop {
+        let batch: Vec<_> = (page..page + 8)
+            .map(|p| filmo::fetch_catalog(client, p))
+            .collect();
+        let results = futures::future::join_all(batch).await;
+        let mut done = false;
+        for r in results {
+            let entries = r?;
+            if entries.is_empty() {
+                done = true;
+                break;
+            }
+            all.extend(entries);
+        }
+        if done || page > 1000 {
+            break;
+        }
+        page += 8;
+    }
+    // Seiten können sich beim Crawlen verschieben — Duplikate entfernen.
+    let mut seen = std::collections::HashSet::new();
+    all.retain(|e| seen.insert(e.slug.clone()));
+    Ok(all)
+}
+
+// ---------------------------------------------------------------------------
+// Resolve
+// ---------------------------------------------------------------------------
+
+struct PendingLink {
+    id: i64,
+    portal: String,
+    language: String,
+    hoster: String,
+    portal_url: String,
+    episode_url: String,
+}
+
+async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
+    let conn = open_db(&args.db)?;
+    let client = http::client()?;
+    let portals = portals_from_arg(&args.portal)?;
+
+    let refresh_cutoff = args.refresh_days.map(|d| now_unix() - d * 86_400);
+    let mut pending: Vec<PendingLink> = {
+        let mut stmt = conn.prepare(
+            "SELECT link.id, title.portal, link.language, link.hoster, link.portal_url,
+                    episode.url
+             FROM link
+             JOIN episode ON episode.id = link.episode_id
+             JOIN title ON title.id = episode.title_id
+             WHERE link.embed_url IS NULL OR link.resolved_at < ?1
+             ORDER BY title.portal, episode.url",
+        )?;
+        let rows = stmt.query_map(params![refresh_cutoff.unwrap_or(0)], |r| {
+            Ok(PendingLink {
+                id: r.get(0)?,
+                portal: r.get(1)?,
+                language: r.get(2)?,
+                hoster: r.get(3)?,
+                portal_url: r.get(4)?,
+                episode_url: r.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    pending.retain(|p| portals.contains(&p.portal.as_str()));
+    if args.max > 0 {
+        pending.truncate(args.max);
+    }
+    if pending.is_empty() {
+        eprintln!("nichts aufzulösen");
+        return Ok(());
+    }
+    eprintln!("{} Links aufzulösen", pending.len());
+
+    let pb = ProgressBar::new(pending.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+        )
+        .unwrap(),
+    );
+
+    // Filmo-Links laufen pro Film gebündelt (eine Seite liefert CSRF + frische
+    // Token für alle Hoster); die Portal-Redirects laufen einzeln.
+    let mut filmo_by_movie: std::collections::HashMap<String, Vec<PendingLink>> =
+        std::collections::HashMap::new();
+    let mut direct = Vec::new();
+    for p in pending {
+        if p.portal == "filmo" {
+            filmo_by_movie
+                .entry(p.episode_url.clone())
+                .or_default()
+                .push(p);
+        } else {
+            direct.push(p);
+        }
+    }
+
+    let semaphore = Arc::new(Semaphore::new(args.concurrency.max(1)));
+    let mut futs = FuturesUnordered::new();
+    for p in direct {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        let delay = Duration::from_millis(args.delay_ms);
+        futs.push(tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.unwrap();
+            tokio::time::sleep(delay).await;
+            let result = follow_to_embed(&client, &p.portal_url, &p.episode_url).await;
+            vec![(p.id, result)]
+        }));
+    }
+    for (movie_url, links) in filmo_by_movie {
+        let semaphore = semaphore.clone();
+        let delay = Duration::from_millis(args.delay_ms);
+        futs.push(tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.unwrap();
+            tokio::time::sleep(delay).await;
+            // filmo.to bindet die Laravel-Session ans CSRF-Token: Film-GET und
+            // `/n`-POST brauchen einen eigenen, kurzlebigen Cookie-Client.
+            let fclient = match http::cookie_client() {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = format!("Cookie-Client: {e}");
+                    return links
+                        .into_iter()
+                        .map(|l| (l.id, Err(anyhow::anyhow!(msg.clone()))))
+                        .collect();
+                }
+            };
+            resolve_filmo_movie(&fclient, &movie_url, links).await
+        }));
+    }
+
+    let (mut ok, mut failed) = (0usize, 0usize);
+    while let Some(joined) = futs.next().await {
+        let Ok(results) = joined else {
+            failed += 1;
+            pb.inc(1);
+            continue;
+        };
+        for (link_id, result) in results {
+            pb.inc(1);
+            match result {
+                Ok(embed) => {
+                    conn.execute(
+                        "UPDATE link SET embed_url = ?2, resolved_at = ?3 WHERE id = ?1",
+                        params![link_id, embed, now_unix()],
+                    )?;
+                    ok += 1;
+                }
+                Err(e) => {
+                    failed += 1;
+                    pb.suspend(|| eprintln!("Link {link_id}: {e}"));
+                }
+            }
+            pb.set_message(format!("ok {ok} / fehlge. {failed}"));
+        }
+    }
+    pb.finish_and_clear();
+    eprintln!("aufgelöst: {ok}, fehlgeschlagen: {failed}");
+    Ok(())
+}
+
+/// Folgt einem Portal-Redirect (`/redirect/N`, `/r?t=…`) zur Hoster-Embed-URL.
+async fn follow_to_embed(
+    client: &reqwest::Client,
+    portal_url: &str,
+    referer: &str,
+) -> anyhow::Result<String> {
+    let resp = client
+        .get(portal_url)
+        .header("Referer", referer)
+        .send()
+        .await?;
+    let final_url = resp.url().to_string();
+    anyhow::ensure!(
+        final_url.starts_with("http://") || final_url.starts_with("https://"),
+        "Redirect-Ziel ist kein http(s)"
+    );
+    let host = resp.url().host_str().unwrap_or("").to_ascii_lowercase();
+    anyhow::ensure!(
+        !host.contains("aniworld") && !host.contains("serienstream") && !host.contains("filmo"),
+        "Redirect blieb auf dem Portal (vermutlich Challenge)"
+    );
+    Ok(final_url)
+}
+
+/// Löst alle offenen Links eines Filmo-Films mit frischem CSRF + Token auf.
+async fn resolve_filmo_movie(
+    client: &reqwest::Client,
+    movie_url: &str,
+    links: Vec<PendingLink>,
+) -> Vec<(i64, anyhow::Result<String>)> {
+    let movie = match filmo::movie(client, movie_url).await {
+        Ok(m) => m,
+        Err(e) => {
+            let msg = format!("Filmseite nicht ladbar: {e}");
+            return links
+                .into_iter()
+                .map(|l| (l.id, Err(anyhow::anyhow!(msg.clone()))))
+                .collect();
+        }
+    };
+    let Some(csrf) = movie.csrf.clone() else {
+        return links
+            .into_iter()
+            .map(|l| {
+                (
+                    l.id,
+                    Err(anyhow::anyhow!("kein CSRF-Token auf der Filmseite")),
+                )
+            })
+            .collect();
+    };
+
+    let mut out = Vec::new();
+    for l in links {
+        let lang = l.language.parse::<Language>().ok();
+        let hoster = l.hoster.parse::<Hoster>().ok();
+        let token = lang
+            .zip(hoster)
+            .and_then(|(lang, hoster)| movie.sources.get(&lang).and_then(|h| h.get(&hoster)))
+            .cloned();
+        let result = match token {
+            Some(token) => filmo::resolve_embed(client, movie_url, &csrf, &token)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            None => Err(anyhow::anyhow!(
+                "Hoster auf der Filmseite nicht mehr gelistet"
+            )),
+        };
+        out.push((l.id, result));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+fn stats(args: StatsArgs) -> anyhow::Result<()> {
+    let conn = open_db(&args.db)?;
+    let mut stmt = conn.prepare(
+        "SELECT title.portal,
+                COUNT(DISTINCT title.id),
+                COUNT(DISTINCT CASE WHEN title.crawled_at IS NOT NULL THEN title.id END),
+                COUNT(DISTINCT episode.id),
+                COUNT(DISTINCT link.id),
+                COUNT(DISTINCT CASE WHEN link.embed_url IS NOT NULL THEN link.id END)
+         FROM title
+         LEFT JOIN episode ON episode.title_id = title.id
+         LEFT JOIN link ON link.episode_id = episode.id
+         GROUP BY title.portal ORDER BY title.portal",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    println!(
+        "{:<14} {:>7} {:>9} {:>8} {:>8} {:>10}",
+        "Portal", "Titel", "gecrawlt", "Folgen", "Links", "aufgelöst"
+    );
+    for row in rows {
+        let (portal, titles, crawled, episodes, links, resolved) = row?;
+        println!("{portal:<14} {titles:>7} {crawled:>9} {episodes:>8} {links:>8} {resolved:>10}");
+    }
+    Ok(())
+}
