@@ -872,3 +872,40 @@ button:focus:not(:focus-visible) {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Download-Verlauf */
+.hist {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.hist:last-child {
+  border-bottom: 0;
+}
+.hist .info {
+  flex: 1;
+  min-width: 0;
+}
+.hist .info .n {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hist .info .sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+.hist-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.hist-dot.err {
+  background: var(--err);
+}

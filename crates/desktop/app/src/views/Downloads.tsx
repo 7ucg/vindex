@@ -6,6 +6,7 @@ import {
   onDownloadUpdate,
   type JobView,
 } from "../lib/api";
+import { getHistory, recordHistory, clearHistory, type HistItem } from "../lib/history";
 
 const STATUS: Record<string, string> = {
   queued: "in Warteschlange",
@@ -40,7 +41,10 @@ export function Downloads(): JSX.Element {
   const [jobs, setJobs] = createSignal<JobView[]>([]);
   // Tempo (Bytes/s) und Rest-Zeit (s) je Job, aus Byte-Deltas zwischen Events.
   const [rate, setRate] = createSignal<Record<number, { speed: number; eta: number }>>({});
+  const [hist, setHist] = createSignal<HistItem[]>(getHistory());
   const prev = new Map<number, { bytes: number; ts: number }>();
+  // Jede Fertig-/Fehler-Meldung nur einmal in den Verlauf schreiben.
+  const logged = new Set<number>();
   let unlisten: (() => void) | undefined;
 
   onMount(async () => {
@@ -62,6 +66,19 @@ export function Downloads(): JSX.Element {
         setRate((r) => ({ ...r, [job.id]: { speed, eta } }));
       }
       prev.set(job.id, { bytes: job.bytes, ts: now });
+
+      // Abschluss (fertig/Fehler) einmalig im Verlauf festhalten.
+      if ((job.status === "done" || job.status === "error") && !logged.has(job.id)) {
+        logged.add(job.id);
+        setHist(
+          recordHistory({
+            title: job.title,
+            bytes: job.bytes,
+            ts: now,
+            ok: job.status === "done",
+          }),
+        );
+      }
 
       setJobs((cur) => {
         const i = cur.findIndex((j) => j.id === job.id);
@@ -90,6 +107,17 @@ export function Downloads(): JSX.Element {
   };
   const retry = (id: number) => {
     void retryDownload(id).catch(() => {});
+  };
+  const when = (ts: number): string => {
+    try {
+      return new Date(ts).toLocaleString();
+    } catch {
+      return "";
+    }
+  };
+  const emptyHist = () => {
+    clearHistory();
+    setHist([]);
   };
 
   const active = () => jobs().filter((j) => !["done", "error", "cancelled"].includes(j.status));
@@ -163,9 +191,34 @@ export function Downloads(): JSX.Element {
         </div>
       </Show>
 
+      <Show when={hist().length > 0}>
+        <div class="row-h" style={{ margin: "22px 2px 10px" }}>
+          <h2 style={{ "font-size": "14px" }}>Verlauf</h2>
+          <button class="chip" onClick={emptyHist}>
+            Leeren
+          </button>
+        </div>
+        <div class="panel">
+          <For each={hist()}>
+            {(h) => (
+              <div class="hist">
+                <span class="hist-dot" classList={{ err: !h.ok }} />
+                <div class="info">
+                  <div class="n">{h.title}</div>
+                  <div class="sub">
+                    {h.ok ? "fertig" : "Fehler"} · {when(h.ts)}
+                    <Show when={h.bytes > 0}> · {mb(h.bytes)}</Show>
+                  </div>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <p class="note">
-        Download-Engine, Remux und Naming laufen im Kern. Bandbreitenlimit, Prioritäten und
-        Verlauf folgen.
+        Download-Engine, Remux und Naming laufen im Kern. Der Verlauf merkt sich abgeschlossene
+        Downloads lokal. Bandbreitenlimit und Prioritäten folgen.
       </p>
     </div>
   );
