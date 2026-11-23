@@ -1,5 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
-import { resolvePlayback, aniskip, type SkipInterval } from "../lib/api";
+import { resolvePlayback, aniskip, setAlwaysOnTop, type SkipInterval } from "../lib/api";
 import {
   closePlayer,
   openPlayer,
@@ -142,6 +142,13 @@ export function Player(props: { playback: Playback }): JSX.Element {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (f) void loadSub(f);
     (e.target as HTMLInputElement).value = "";
+  };
+
+  const [onTop, setOnTop] = createSignal(false);
+  const toggleOnTop = () => {
+    const next = !onTop();
+    setOnTop(next);
+    void setAlwaysOnTop(next).catch(() => {});
   };
 
   const togglePip = async () => {
@@ -427,6 +434,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
     // dem Remount (nächste Folge) neu bewaffnet.
     if (sleepHandle) clearTimeout(sleepHandle);
     if (extSubUrl) URL.revokeObjectURL(extSubUrl);
+    // „Immer oben" gilt dem ganzen Fenster — beim Schließen zurücknehmen.
+    if (onTop()) void setAlwaysOnTop(false).catch(() => {});
     if (hls) hls.destroy();
   });
 
@@ -452,6 +461,15 @@ export function Player(props: { playback: Playback }): JSX.Element {
           </button>
           <button class="chip" onClick={() => void togglePip()} title="Bild-in-Bild" aria-label="Bild-in-Bild">
             PiP
+          </button>
+          <button
+            class="chip"
+            classList={{ on: onTop() }}
+            onClick={toggleOnTop}
+            title="Fenster immer im Vordergrund"
+            aria-label="Immer im Vordergrund"
+          >
+            Oben
           </button>
           <button class="chip" onClick={screenshot} title="Screenshot" aria-label="Screenshot">
             Foto

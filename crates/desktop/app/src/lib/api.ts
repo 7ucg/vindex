@@ -79,6 +79,10 @@ export function proxyPrefix(): Promise<string> {
   return invoke<string>("proxy_prefix");
 }
 
+export function setAlwaysOnTop(on: boolean): Promise<void> {
+  return invoke("set_always_on_top", { on });
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

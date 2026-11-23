@@ -190,6 +190,12 @@ async fn episodes(
         .collect())
 }
 
+/// Fenster dauerhaft im Vordergrund halten (Mini-Player / „immer oben").
+#[tauri::command]
+fn set_always_on_top(on: bool, window: tauri::WebviewWindow) -> Result<(), String> {
+    window.set_always_on_top(on).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn resolve_playback(
     url: String,
@@ -606,6 +612,7 @@ pub fn run() {
             seasons,
             episodes,
             resolve_playback,
+            set_always_on_top,
             title_meta,
             cover,
             proxy_prefix,
