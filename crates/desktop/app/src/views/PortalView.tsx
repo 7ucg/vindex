@@ -9,7 +9,7 @@ import {
   Show,
   type JSX,
 } from "solid-js";
-import { catalog, seasons, episodes, startDownload, type SearchHit } from "../lib/api";
+import { catalog, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
@@ -44,6 +44,8 @@ const BATCH = 60;
 
 export function PortalView(props: { portal: Portal }): JSX.Element {
   const [items] = createResource(() => props.portal, catalog);
+  const [lib] = createResource(library);
+  const [onlyLib, setOnlyLib] = createSignal(false);
   const [sort, setSort] = createSignal<Sort>("az");
   const [layout, setLayoutSig] = createSignal<Layout>(readLayout());
   const setLayout = (l: Layout) => {
@@ -62,13 +64,21 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [shown, setShown] = createSignal(BATCH);
   let sentinel: HTMLDivElement | undefined;
 
-  // Beim Wechsel von Portal, Filter oder Sortierung wieder von vorn.
+  // Beim Wechsel von Portal, Filter, Sortierung oder Bibliotheksfilter wieder von vorn.
   createEffect(() => {
     filter();
     sort();
+    onlyLib();
     void props.portal;
     setShown(BATCH);
   });
+
+  // Ein Titel gilt als „in Bibliothek", wenn eine Datei mit seinem Namen beginnt.
+  const inLibrary = (title: string): boolean => {
+    const base = sanitize(title);
+    if (!base) return false;
+    return (lib() ?? []).some((f) => f.name.startsWith(base));
+  };
 
   onMount(() => {
     const io = new IntersectionObserver(
@@ -134,6 +144,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     const all: SearchHit[] = ready() ?? [];
     const f = filter().trim().toLowerCase();
     let out = f ? all.filter((h) => h.title.toLowerCase().includes(f)) : all.slice();
+    if (onlyLib()) out = out.filter((h) => inLibrary(h.title));
     out.sort((a, b) =>
       sort() === "az" ? a.title.localeCompare(b.title) : b.title.localeCompare(a.title),
     );
@@ -175,6 +186,16 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           >
             ☰
           </button>
+          <Show when={(lib() ?? []).length > 0}>
+            <button
+              class="chip"
+              classList={{ on: onlyLib() }}
+              onClick={() => setOnlyLib(!onlyLib())}
+              title="Nur Titel mit heruntergeladenen Dateien"
+            >
+              In Bibliothek
+            </button>
+          </Show>
           <div class="search" style={{ "margin-left": "auto", "min-width": "200px" }}>
             <IconSearch />
             <input
