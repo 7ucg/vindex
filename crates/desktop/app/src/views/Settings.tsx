@@ -11,6 +11,7 @@ import {
 } from "../lib/api";
 
 import { exportState, importState } from "../lib/backup";
+import { incognito, setIncognito } from "../lib/private";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
@@ -216,6 +217,23 @@ export function Settings(): JSX.Element {
           onChange={(e) => void onImport(e)}
         />
       </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Privatsphäre</h2>
+      </div>
+      <div class="controls" style={{ "margin-bottom": "6px" }}>
+        <button
+          class="chip"
+          classList={{ on: incognito() }}
+          onClick={() => setIncognito(!incognito())}
+        >
+          {incognito() ? "● Inkognito an" : "○ Inkognito"}
+        </button>
+      </div>
+      <p class="note" style={{ "margin-bottom": "18px" }}>
+        Inkognito schreibt für diese Sitzung nichts mit (kein Fortschritt/„Weiterschauen", kein
+        Download-Verlauf). Gilt nur bis zum nächsten Start; Merken bleibt möglich.
+      </p>
 
       <div class="row-h" style={{ margin: "6px 2px 10px" }}>
         <h2 style={{ "font-size": "14px" }}>System</h2>

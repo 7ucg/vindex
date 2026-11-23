@@ -1,5 +1,7 @@
 // Persistenter Download-Verlauf (localStorage). Reines Log: was wann geladen wurde —
 // unabhängig davon, ob die Datei später noch in der Bibliothek liegt.
+import { isIncognito } from "./private";
+
 export interface HistItem {
   title: string;
   bytes: number;
@@ -26,6 +28,7 @@ export function getHistory(): HistItem[] {
 }
 
 export function recordHistory(item: HistItem): HistItem[] {
+  if (isIncognito()) return readRaw(); // Inkognito: nicht festhalten
   const list = [item, ...readRaw()].slice(0, MAX);
   try {
     localStorage.setItem(KEY, JSON.stringify(list));

@@ -10,6 +10,7 @@ import {
   IconSearch,
 } from "../lib/icons";
 import { view, setView, setPaletteOpen, type View } from "../lib/store";
+import { incognito } from "../lib/private";
 
 type Item = { id: View; label: string; icon: () => JSX.Element; accent?: string };
 
@@ -71,7 +72,7 @@ export function Sidebar(): JSX.Element {
         Einstellungen
       </button>
 
-      <div class="foot">lokal · keine Telemetrie</div>
+      <div class="foot">{incognito() ? "● Inkognito · nichts wird gemerkt" : "lokal · keine Telemetrie"}</div>
     </aside>
   );
 }

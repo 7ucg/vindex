@@ -2,6 +2,7 @@
 // Tauri-Profil). Rein lokal, pro Gerät — fürs „Weiterschauen" und das Resümieren
 // an der zuletzt gesehenen Stelle. Alle Zugriffe sind try/catch-gekapselt.
 import { createSignal } from "solid-js";
+import { isIncognito } from "./private";
 
 // Reaktiver Zähler: steigt bei jeder Änderung, damit Ansichten (z. B. die
 // Folgenliste) den Fortschritt live nachziehen, obwohl localStorage nicht reaktiv ist.
@@ -54,6 +55,7 @@ function writeRecent(l: string[]): void {
 }
 
 export function saveProgress(url: string, r: Resume): void {
+  if (isIncognito()) return; // Inkognito: nichts mitschreiben
   const m = readMap();
   m[url] = r;
   writeMap(m);
