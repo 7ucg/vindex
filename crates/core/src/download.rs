@@ -254,18 +254,31 @@ fn report(progress: Option<&ProgressSink>, event: Progress) {
 }
 
 /// ffmpeg-/ffprobe-Programmname: aus `VINDEX_FFMPEG`/`VINDEX_FFPROBE` (für ein
-/// mitgeliefertes Binary), sonst der PATH-Name. Leere Angabe = Fallback.
+/// mitgeliefertes Binary), sonst der PATH-Name.
+///
+/// Sicherheit: Die Variable kann aus einer `.env` stammen (potenziell nicht
+/// vertrauenswürdig) und würde sonst beliebige Programmausführung erlauben. Daher
+/// wird ein Override **nur** akzeptiert, wenn es ein **absoluter Pfad auf eine
+/// existierende Datei** ist; andernfalls Fallback auf den PATH-Namen.
+fn resolve_tool(var: &str, default: &str) -> String {
+    match std::env::var(var).ok() {
+        Some(v) if !v.trim().is_empty() => {
+            let p = std::path::Path::new(v.trim());
+            if p.is_absolute() && p.is_file() {
+                v.trim().to_string()
+            } else {
+                tracing::warn!("{var} ignoriert (kein absoluter Pfad auf eine existierende Datei)");
+                default.to_string()
+            }
+        }
+        _ => default.to_string(),
+    }
+}
 fn ffmpeg_bin() -> String {
-    std::env::var("VINDEX_FFMPEG")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "ffmpeg".into())
+    resolve_tool("VINDEX_FFMPEG", "ffmpeg")
 }
 fn ffprobe_bin() -> String {
-    std::env::var("VINDEX_FFPROBE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "ffprobe".into())
+    resolve_tool("VINDEX_FFPROBE", "ffprobe")
 }
 
 /// Wählt den tatsächlich geschriebenen Pfad. Bei `VINDEX_NO_FFMPEG` finalisiert der
