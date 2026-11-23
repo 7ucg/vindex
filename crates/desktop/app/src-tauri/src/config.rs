@@ -29,6 +29,12 @@ pub struct DesktopConfig {
     /// Egress-Proxy (`VINDEX_PROXY`-Syntax). Wirkt erst nach Neustart. None = keiner.
     #[serde(default)]
     pub proxy: Option<String>,
+    /// HLS-Segmente selbst laden (robust gegen 429). None = Standard (an).
+    #[serde(default)]
+    pub native_hls: Option<bool>,
+    /// Ohne ffmpeg muxen (nativer TS→MKV-Remux). None = Standard (an).
+    #[serde(default)]
+    pub no_ffmpeg: Option<bool>,
 }
 
 fn config_path() -> Option<PathBuf> {

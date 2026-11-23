@@ -139,6 +139,22 @@ export interface DesktopConfig {
   max_quality: string | null;
   min_quality: string | null;
   bandwidth_kib: number | null;
+  native_hls: boolean | null;
+  no_ffmpeg: boolean | null;
+}
+
+export interface PlatformInfo {
+  os: string;
+  arch: string;
+}
+
+export function platformInfo(): Promise<PlatformInfo> {
+  return invoke<PlatformInfo>("platform_info");
+}
+
+/** Öffnet den nativen Ordner-Dialog; gibt den gewählten Pfad zurück oder null. */
+export function pickDownloadFolder(): Promise<string | null> {
+  return invoke<string | null>("pick_download_folder");
 }
 
 export function getConfig(): Promise<DesktopConfig> {

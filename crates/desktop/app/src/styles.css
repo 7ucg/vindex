@@ -1034,3 +1034,37 @@ button:focus:not(:focus-visible) {
   color: var(--text);
   font-weight: 600;
 }
+
+/* ---------- Plattform-Anpassungen (data-os aus main.tsx) ---------- */
+:root[data-os="macos"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+}
+:root[data-os="windows"] body {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}
+:root[data-os="linux"] body {
+  font-family: Inter, "Noto Sans", Cantarell, system-ui, sans-serif;
+}
+
+/* Moderne, thematisierte Scrollbalken (dezent, passt sich Light/Dark an). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

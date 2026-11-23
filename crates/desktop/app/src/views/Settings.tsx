@@ -7,6 +7,7 @@ import {
   getConfig,
   setConfig,
   setBandwidthLimit,
+  pickDownloadFolder,
   recentLogs,
   networkStatus,
   setImpersonate,
@@ -84,6 +85,8 @@ export function Settings(): JSX.Element {
     max_quality: null,
     min_quality: null,
     bandwidth_kib: null,
+    native_hls: null,
+    no_ffmpeg: null,
   });
   getConfig()
     .then(setCfg)
@@ -94,6 +97,10 @@ export function Settings(): JSX.Element {
     void setConfig(next).catch(() => {});
   };
   const empty = (v: string) => (v.trim() === "" ? null : v);
+  const browseFolder = async () => {
+    const p = await pickDownloadFolder().catch(() => null);
+    if (p) update({ download_path: p });
+  };
   // Tempolimit getrennt: eigener Command, der den Laufzeit-Limiter setzt und persistiert.
   const updateBandwidth = (v: string) => {
     const kib = Math.max(0, Math.floor(Number(v) || 0));
@@ -295,12 +302,17 @@ export function Settings(): JSX.Element {
       <div class="panel" style={{ padding: "16px", "margin-bottom": "18px" }}>
         <div class="field">
           <label>Ordner</label>
-          <input
-            class="cfg-input"
-            placeholder="Standard (~/Downloads)"
-            value={cfg().download_path ?? ""}
-            onChange={(e) => update({ download_path: empty(e.currentTarget.value) })}
-          />
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              class="cfg-input"
+              placeholder="Standard (~/Downloads)"
+              value={cfg().download_path ?? ""}
+              onChange={(e) => update({ download_path: empty(e.currentTarget.value) })}
+            />
+            <button class="chip" onClick={() => void browseFolder()}>
+              Durchsuchen …
+            </button>
+          </div>
         </div>
         <div class="field">
           <label>Sprache</label>
@@ -346,6 +358,25 @@ export function Settings(): JSX.Element {
             value={cfg().bandwidth_kib ?? ""}
             onChange={(e) => updateBandwidth(e.currentTarget.value)}
           />
+        </div>
+        <div class="field">
+          <label>Lade-Verfahren</label>
+          <div class="controls">
+            <button
+              class="chip"
+              classList={{ on: cfg().native_hls ?? true }}
+              onClick={() => update({ native_hls: !(cfg().native_hls ?? true) })}
+            >
+              {(cfg().native_hls ?? true) ? "● Nativer HLS-Download" : "○ Nativer HLS-Download"}
+            </button>
+            <button
+              class="chip"
+              classList={{ on: cfg().no_ffmpeg ?? true }}
+              onClick={() => update({ no_ffmpeg: !(cfg().no_ffmpeg ?? true) })}
+            >
+              {(cfg().no_ffmpeg ?? true) ? "● Ohne ffmpeg (MKV-Remux)" : "○ ffmpeg zum Muxen"}
+            </button>
+          </div>
         </div>
       </div>
 

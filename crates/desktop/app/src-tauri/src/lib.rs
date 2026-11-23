@@ -58,8 +58,8 @@ impl AppState {
                 .as_deref()
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
-            native_hls: Some(true),
-            no_ffmpeg: Some(true),
+            native_hls: Some(cfg.native_hls.unwrap_or(true)),
+            no_ffmpeg: Some(cfg.no_ffmpeg.unwrap_or(true)),
             hosters: None,
         }
     }
@@ -638,17 +638,58 @@ fn reveal_library_item(
 #[tauri::command]
 fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    if url.chars().any(|c| c.is_control()) {
+        return Err("ungültige URL".into());
+    }
     let parsed = reqwest::Url::parse(&url).map_err(|_| "ungültige URL".to_string())?;
     if parsed.scheme() != "https" {
         return Err("nur https erlaubt".into());
+    }
+    // Keine eingebetteten Zugangsdaten (user:pass@host-Trick).
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URL mit Zugangsdaten nicht erlaubt".into());
     }
     let host = parsed.host_str().unwrap_or("");
     if host != "imdb.com" && !host.ends_with(".imdb.com") {
         return Err("Host nicht erlaubt".into());
     }
+    if !parsed.path().starts_with("/title/") {
+        return Err("Pfad nicht erlaubt".into());
+    }
+    // Die normalisierte URL öffnen, nicht das Rohinput (Parser-Differential vermeiden).
     app.opener()
-        .open_url(url, None::<&str>)
+        .open_url(parsed.to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// Öffnet den nativen Ordner-Dialog und gibt den gewählten Pfad zurück (oder `None`).
+#[tauri::command]
+async fn pick_download_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |p| {
+        let _ = tx.send(p);
+    });
+    rx.await
+        .ok()
+        .flatten()
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Plattform-Info fürs Frontend (zur Anpassung der Oberfläche).
+#[derive(Serialize)]
+struct PlatformInfo {
+    os: String,   // "linux" | "macos" | "windows" | …
+    arch: String, // "x86_64" | "aarch64" | …
+}
+
+#[tauri::command]
+fn platform_info() -> PlatformInfo {
+    PlatformInfo {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+    }
 }
 
 /// Ist der Autostart (Login) aktiviert?
@@ -766,6 +807,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             build_tray(app.handle())?;
 
@@ -817,6 +859,8 @@ pub fn run() {
             set_obscura,
             set_proxy,
             open_external,
+            pick_download_folder,
+            platform_info,
             retry_download,
             list_downloads,
             library,
