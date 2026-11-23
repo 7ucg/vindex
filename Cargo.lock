@@ -3460,6 +3460,7 @@ dependencies = [
 name = "vindex-desktop"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "reqwest",
  "tokio-util",
  "vindex-core",

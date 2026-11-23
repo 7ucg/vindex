@@ -146,14 +146,37 @@ impl Backend {
                     .collect())
             }
             "filmo" => {
-                let entries = site::filmo::fetch_catalog(&self.client, 1).await?;
-                Ok(entries
-                    .into_iter()
-                    .map(|e| SearchHit {
-                        url: format!("{}/movies/{}", site::filmo::BASE, e.slug),
-                        title: e.title,
-                    })
-                    .collect())
+                // filmo paginiert (`/movies?page=N`, 42/Seite) — mehrere Seiten parallel
+                // holen, damit der ganze Katalog erscheint (nicht nur Seite 1).
+                use futures::stream::StreamExt;
+                const MAX_PAGES: u32 = 60;
+                const CONCURRENCY: usize = 6;
+                let batches: Vec<Vec<core::model::CatalogEntry>> =
+                    futures::stream::iter(1..=MAX_PAGES)
+                        .map(|p| {
+                            let client = self.client.clone();
+                            async move {
+                                site::filmo::fetch_catalog(&client, p)
+                                    .await
+                                    .unwrap_or_default()
+                            }
+                        })
+                        .buffered(CONCURRENCY)
+                        .collect()
+                        .await;
+                let mut seen = std::collections::HashSet::new();
+                let mut out = Vec::new();
+                for batch in batches {
+                    for e in batch {
+                        if seen.insert(e.slug.clone()) {
+                            out.push(SearchHit {
+                                url: format!("{}/movies/{}", site::filmo::BASE, e.slug),
+                                title: e.title,
+                            });
+                        }
+                    }
+                }
+                Ok(out)
             }
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"

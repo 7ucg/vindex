@@ -81,12 +81,20 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   };
 
   onMount(() => {
-    const io = new IntersectionObserver(
-      (e) => {
-        if (e[0]?.isIntersecting) setShown((n) => Math.min(n + BATCH, visible().length));
-      },
-      { rootMargin: "600px" },
-    );
+    // Nachladen beim Scrollen. Wichtig: nach jedem Batch den Sentinel neu beobachten,
+    // solange er sichtbar bleibt und noch mehr da ist — sonst feuert der Observer bei
+    // großem rootMargin nur einmal und es „fehlt" der Rest (nur ein Batch sichtbar).
+    let io: IntersectionObserver;
+    const cb: IntersectionObserverCallback = (entries) => {
+      if (!entries[0]?.isIntersecting) return;
+      const total = visible().length;
+      setShown((n) => Math.min(n + BATCH, total));
+      if (sentinel && shown() < total) {
+        io.unobserve(sentinel);
+        io.observe(sentinel);
+      }
+    };
+    io = new IntersectionObserver(cb, { rootMargin: "800px" });
     if (sentinel) io.observe(sentinel);
     onCleanup(() => io.disconnect());
   });
