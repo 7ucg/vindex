@@ -583,6 +583,37 @@ pub async fn get_text_impersonate(
         .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Body (wreq): {e}")))
 }
 
+/// Wie [`get_text_impersonate`], gibt aber die **finale URL** nach den Redirects
+/// zurück statt des Bodys — für Portal-Redirects (`/r?t=…`, `/redirect/N`), die über
+/// den normalen Client an Cloudflare scheitern, aber mit dem TLS-Fingerprint durchgehen.
+pub async fn final_url_impersonate(
+    url: &str,
+    referer: Option<&str>,
+) -> crate::error::Result<String> {
+    use crate::error::Error;
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::Parse(
+            "Impersonate: Ziel-URL muss http/https sein".to_string(),
+        ));
+    }
+    if host_is_forbidden_ip_literal(url) {
+        return Err(Error::Parse(
+            "Impersonate: Ziel-URL zeigt auf eine gesperrte Adresse".to_string(),
+        ));
+    }
+    let client = impersonate_client()
+        .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Client (wreq): {e}")))?;
+    let mut req = client.get(url);
+    if let Some(r) = referer {
+        req = req.header("Referer", r);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| Error::Other(anyhow::anyhow!("TLS-Impersonate-Abruf (wreq): {e}")))?;
+    Ok(resp.uri().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

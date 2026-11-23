@@ -672,15 +672,22 @@ async fn resolve_portal(
     // Token für alle Hoster); die Portal-Redirects laufen einzeln.
     let mut filmo_by_movie: std::collections::HashMap<String, Vec<PendingLink>> =
         std::collections::HashMap::new();
+    // serienstream ebenfalls pro Folge gebündelt: die gespeicherten /r?t=-Tokens laufen
+    // ab (410), daher wird die Episodenseite beim Auflösen frisch geladen.
+    let mut sto_by_episode: std::collections::HashMap<String, Vec<PendingLink>> =
+        std::collections::HashMap::new();
     let mut direct = Vec::new();
     for p in pending {
-        if portal == "filmo" {
-            filmo_by_movie
+        match portal {
+            "filmo" => filmo_by_movie
                 .entry(p.episode_url.clone())
                 .or_default()
-                .push(p);
-        } else {
-            direct.push(p);
+                .push(p),
+            "serienstream" => sto_by_episode
+                .entry(p.episode_url.clone())
+                .or_default()
+                .push(p),
+            _ => direct.push(p),
         }
     }
 
@@ -716,6 +723,16 @@ async fn resolve_portal(
                 }
             };
             resolve_filmo_movie(&fclient, &movie_url, links).await
+        }));
+    }
+    for (episode_url, links) in sto_by_episode {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        let delay = Duration::from_millis(args.delay_ms);
+        futs.push(tokio::spawn(async move {
+            let _permit = semaphore.acquire().await.unwrap();
+            tokio::time::sleep(delay).await;
+            resolve_serienstream_episode(&client, &episode_url, links).await
         }));
     }
 
@@ -780,7 +797,30 @@ async fn resolve_portal(
     Ok(())
 }
 
+/// Prüft die finale URL eines Redirects: http(s) und nicht mehr auf einem Portal
+/// (sonst Cloudflare-Challenge statt echtem Hoster-Embed).
+fn check_embed_url(final_url: String) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        final_url.starts_with("http://") || final_url.starts_with("https://"),
+        "Redirect-Ziel ist kein http(s)"
+    );
+    let host = reqwest::Url::parse(&final_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_ascii_lowercase()))
+        .unwrap_or_default();
+    anyhow::ensure!(
+        !host.contains("aniworld") && !host.contains("serienstream") && !host.contains("filmo"),
+        "Redirect blieb auf dem Portal (vermutlich Challenge)"
+    );
+    Ok(final_url)
+}
+
 /// Folgt einem Portal-Redirect (`/redirect/N`, `/r?t=…`) zur Hoster-Embed-URL.
+///
+/// serienstream steht hinter Cloudflare — dort wird direkt über den TLS-Impersonate-
+/// Client aufgelöst (wie beim `build`), sonst würde der Redirect auf der Challenge-Seite
+/// hängen bleiben. Für die anderen Portale genügt der normale Client; bleibt er
+/// ausnahmsweise auf dem Portal (Challenge), gibt es einen Impersonate-Nachschlag.
 async fn follow_to_embed(
     client: &reqwest::Client,
     portal_url: &str,
@@ -792,16 +832,69 @@ async fn follow_to_embed(
         .send()
         .await?;
     let final_url = resp.url().to_string();
-    anyhow::ensure!(
-        final_url.starts_with("http://") || final_url.starts_with("https://"),
-        "Redirect-Ziel ist kein http(s)"
-    );
-    let host = resp.url().host_str().unwrap_or("").to_ascii_lowercase();
-    anyhow::ensure!(
-        !host.contains("aniworld") && !host.contains("serienstream") && !host.contains("filmo"),
-        "Redirect blieb auf dem Portal (vermutlich Challenge)"
-    );
-    Ok(final_url)
+    match check_embed_url(final_url) {
+        Ok(u) => Ok(u),
+        Err(e) => {
+            // Blieb auf dem Portal (evtl. Cloudflare-Challenge) → ein Nachschlag über
+            // den TLS-Impersonate-Client. (Abgelaufene Tokens liefern dagegen 410 — die
+            // fängt für serienstream der Frisch-Holen-Pfad ab, s. resolve_serienstream_episode.)
+            match http::final_url_impersonate(portal_url, Some(referer)).await {
+                Ok(imp) => check_embed_url(imp).map_err(|_| e),
+                Err(_) => Err(e),
+            }
+        }
+    }
+}
+
+/// Löst die offenen Links einer serienstream-Folge auf, indem die Episodenseite
+/// **frisch** geladen wird: die gespeicherten `/r?t=`-Tokens (Laravel-Crypt) laufen
+/// nach Stunden ab (→ HTTP 410), die frischen funktionieren. Wie bei filmo.
+async fn resolve_serienstream_episode(
+    client: &reqwest::Client,
+    episode_url: &str,
+    links: Vec<PendingLink>,
+) -> Vec<(i64, anyhow::Result<String>)> {
+    let pl = match serienstream::provider_links(client, BASE_STO, episode_url).await {
+        Ok(pl) => pl,
+        Err(e) => {
+            let msg = format!("Episodenseite nicht ladbar: {e}");
+            return links
+                .into_iter()
+                .map(|l| (l.id, Err(anyhow::anyhow!(msg.clone()))))
+                .collect();
+        }
+    };
+    // Frische Play-URLs nach (Sprache-ui_label, Hoster-Name) indexieren — gleiche
+    // Schlüssel, mit denen `build` die Links gespeichert hat.
+    let mut fresh: std::collections::HashMap<(String, String), String> =
+        std::collections::HashMap::new();
+    for (lang, hosters) in &pl.by_language {
+        for (hoster, link) in hosters {
+            let abs = if link.starts_with('/') {
+                format!("{BASE_STO}{link}")
+            } else {
+                link.clone()
+            };
+            fresh.insert(
+                (lang.ui_label().to_string(), hoster.as_str().to_string()),
+                abs,
+            );
+        }
+    }
+    let mut out = Vec::new();
+    for l in links {
+        match fresh.get(&(l.language.clone(), l.hoster.clone())) {
+            Some(fresh_url) => {
+                let r = follow_to_embed(client, fresh_url, episode_url).await;
+                out.push((l.id, r));
+            }
+            None => out.push((
+                l.id,
+                Err(anyhow::anyhow!("Hoster/Sprache nicht mehr angeboten")),
+            )),
+        }
+    }
+    out
 }
 
 /// Löst alle offenen Links eines Filmo-Films mit frischem CSRF + Token auf.
