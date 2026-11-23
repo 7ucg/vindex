@@ -29,6 +29,7 @@ import {
   removeFromCollection,
   inCollection,
 } from "../lib/collections";
+import { rememberTitleUrl } from "../lib/titlemap";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 
@@ -54,6 +55,10 @@ export function Detail(): JSX.Element {
 
   // filmo listet Filme (keine Staffeln/Folgen) — eigener „Film-Modus".
   const isMovie = sel.url.includes("/movies/");
+
+  // Titel→URL merken (bereinigter Schlüssel wie im Dateinamen), damit die Bibliothek
+  // später das Cover zeigen kann. Greift schon beim bloßen Öffnen eines Titels.
+  rememberTitleUrl(sanitize(sel.title), sel.url);
 
   const [seasonList] = createResource(() => (isMovie ? null : sel.url), seasons);
   const [meta] = createResource(() => sel.url, titleMeta);

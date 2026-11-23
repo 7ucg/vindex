@@ -8,6 +8,8 @@ import {
   type LibraryEntry,
 } from "../lib/api";
 import { openPlayer } from "../lib/store";
+import { getTitleUrl } from "../lib/titlemap";
+import { Cover } from "./Cover";
 
 function size(bytes: number): string {
   const m = bytes / (1024 * 1024);
@@ -92,8 +94,15 @@ export function Library(): JSX.Element {
       <For each={groups()}>
         {(g) => (
           <>
-            <div class="row-h">
-              <h2 style={{ "font-size": "15px" }}>{g.key}</h2>
+            <div class="row-h" style={{ "align-items": "center", gap: "10px" }}>
+              <Show when={getTitleUrl(g.key)}>
+                {(u) => (
+                  <div class="lib-group-cover">
+                    <Cover url={u()} title={g.key} />
+                  </div>
+                )}
+              </Show>
+              <h2 style={{ "font-size": "15px", margin: 0 }}>{g.key}</h2>
               <span class="link">{g.items.length}</span>
             </div>
             <div class="panel">

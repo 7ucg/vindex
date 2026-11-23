@@ -1068,3 +1068,15 @@ button:focus:not(:focus-visible) {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Bibliothek: Cover pro Serien-Gruppe */
+.lib-group-cover {
+  position: relative;
+  width: 30px;
+  aspect-ratio: 2/3;
+  flex: none;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
