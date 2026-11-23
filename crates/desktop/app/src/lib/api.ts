@@ -132,8 +132,13 @@ export interface JobView {
   error: string | null;
 }
 
-export function startDownload(url: string, fileName: string, title: string): Promise<number> {
-  return invoke<number>("start_download", { url, fileName, title });
+export function startDownload(
+  url: string,
+  fileName: string,
+  title: string,
+  lang?: string,
+): Promise<number> {
+  return invoke<number>("start_download", { url, fileName, title, lang: lang ?? null });
 }
 
 export function cancelDownload(id: number): Promise<void> {

@@ -315,10 +315,20 @@ fn start_download(
     url: String,
     file_name: String,
     title: String,
+    lang: Option<String>,
     state: State<'_, AppState>,
 ) -> u64 {
+    use std::str::FromStr;
     let settings = state.backend.settings();
-    let overrides = state.overrides();
+    let mut overrides = state.overrides();
+    // Optionale Sprach-Vorwahl aus dem Detail gilt auch für den Download.
+    if let Some(l) = lang
+        .as_deref()
+        .filter(|l| !l.is_empty())
+        .and_then(|l| core::model::Language::from_str(l).ok())
+    {
+        overrides.language = Some(l);
+    }
     downloads::start(
         state.downloads.clone(),
         app,

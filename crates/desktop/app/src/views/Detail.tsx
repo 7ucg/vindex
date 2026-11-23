@@ -96,7 +96,7 @@ export function Detail(): JSX.Element {
   };
   const loadMovie = async () => {
     try {
-      await startDownload(sel.url, sanitize(sel.title), sel.title);
+      await startDownload(sel.url, sanitize(sel.title), sel.title, lang());
       setView("downloads");
     } catch (e) {
       setPlayErr(String(e));
@@ -129,7 +129,7 @@ export function Detail(): JSX.Element {
 
   const enqueue = (e: Episode) => {
     const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
-    return startDownload(e.url, epBase(e), title);
+    return startDownload(e.url, epBase(e), title, lang());
   };
 
   // Bereits heruntergeladene Folgen erkennen (Bibliothek) → direktes Offline-Abspielen.
