@@ -157,6 +157,7 @@ fn open_db(path: &str) -> anyhow::Result<Connection> {
            portal_url TEXT NOT NULL,
            embed_url TEXT,
            resolved_at INTEGER,
+           fail_count INTEGER NOT NULL DEFAULT 0,
            UNIQUE(episode_id, language, hoster)
          );
          CREATE INDEX IF NOT EXISTS idx_title_portal ON title(portal);
@@ -164,8 +165,19 @@ fn open_db(path: &str) -> anyhow::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_link_episode ON link(episode_id);
          CREATE INDEX IF NOT EXISTS idx_link_open ON link(resolved_at) WHERE embed_url IS NULL;",
     )?;
+    // Migration für bestehende DBs: fail_count nachrüsten (Fehler „duplicate column"
+    // bei neuen DBs, die die Spalte schon haben, ignorieren).
+    let _ = conn.execute(
+        "ALTER TABLE link ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(conn)
 }
+
+/// Nach so vielen vergeblichen Auflöse-Versuchen eines Links gilt sein Portal-Link
+/// als abgelaufen → der Titel wird zum Neu-Crawl markiert (holt einen frischen Link).
+/// Schwelle > 1, damit einzelne Cloudflare-/Netz-Aussetzer das nicht auslösen.
+const RESOLVE_FAIL_THRESHOLD: i64 = 3;
 
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -521,6 +533,8 @@ fn store_title_inner(
                             THEN link.embed_url ELSE NULL END,
            resolved_at = CASE WHEN link.portal_url = excluded.portal_url
                               THEN link.resolved_at ELSE NULL END,
+           fail_count = CASE WHEN link.portal_url = excluded.portal_url
+                             THEN link.fail_count ELSE 0 END,
            portal_url = excluded.portal_url",
     )?;
     for (season, number, url, name, links) in &crawled.episodes {
@@ -717,13 +731,38 @@ async fn resolve_portal(
             match result {
                 Ok(embed) => {
                     conn.execute(
-                        "UPDATE link SET embed_url = ?2, resolved_at = ?3 WHERE id = ?1",
+                        "UPDATE link SET embed_url = ?2, resolved_at = ?3, fail_count = 0 \
+                         WHERE id = ?1",
                         params![link_id, embed, now_unix()],
                     )?;
                     ok += 1;
                 }
                 Err(e) => {
                     failed += 1;
+                    // Fehlversuch zählen; ab der Schwelle gilt der Portal-Link als
+                    // abgelaufen → Titel zum Neu-Crawl markieren (frischer Link folgt
+                    // beim nächsten `build`, der dann auch das Embed neu auflösen lässt).
+                    conn.execute(
+                        "UPDATE link SET fail_count = fail_count + 1, resolved_at = ?2 \
+                         WHERE id = ?1",
+                        params![link_id, now_unix()],
+                    )?;
+                    let fc: i64 = conn
+                        .query_row(
+                            "SELECT fail_count FROM link WHERE id = ?1",
+                            [link_id],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    if fc >= RESOLVE_FAIL_THRESHOLD {
+                        conn.execute(
+                            "UPDATE title SET crawled_at = NULL WHERE id = (
+                                 SELECT episode.title_id FROM episode
+                                 JOIN link ON link.episode_id = episode.id
+                                 WHERE link.id = ?1)",
+                            [link_id],
+                        )?;
+                    }
                     pb.suspend(|| eprintln!("[{portal}] Link {link_id}: {e}"));
                 }
             }
