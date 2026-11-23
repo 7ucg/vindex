@@ -571,6 +571,8 @@ async fn fetch_filmo_catalog(
 
 struct PendingLink {
     id: i64,
+    /// Nur zur Dokumentation mitgeladen; gefiltert wird in der Query per `title.portal`.
+    #[allow(dead_code)]
     portal: String,
     language: String,
     hoster: String,
@@ -579,22 +581,49 @@ struct PendingLink {
 }
 
 async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
-    let conn = open_db(&args.db)?;
-    let client = http::client()?;
     let portals = portals_from_arg(&args.portal)?;
+    let client = http::client()?;
+    let mp = MultiProgress::new();
 
+    // Die Portale lösen gleichzeitig auf (3 Hosts parallel, jeder mit eigener
+    // Concurrency — nicht ein Host härter belastet). Je Portal eine eigene
+    // DB-Connection; die Schreibzugriffe sind einzelne UPDATEs und serialisieren
+    // über busy_timeout. Fortsetzbar: nur offene Links (embed_url IS NULL).
+    let conns = portals
+        .iter()
+        .map(|_| open_db(&args.db))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let futs = portals
+        .iter()
+        .zip(conns.iter())
+        .map(|(portal, conn)| resolve_portal(conn, &client, portal, &args, &mp));
+    for result in futures::future::join_all(futs).await {
+        if let Err(e) = result {
+            eprintln!("Resolve-Fehler: {e}");
+        }
+    }
+    Ok(())
+}
+
+async fn resolve_portal(
+    conn: &Connection,
+    client: &reqwest::Client,
+    portal: &str,
+    args: &ResolveArgs,
+    mp: &MultiProgress,
+) -> anyhow::Result<()> {
     let refresh_cutoff = args.refresh_days.map(|d| now_unix() - d * 86_400);
-    let mut pending: Vec<PendingLink> = {
+    let pending: Vec<PendingLink> = {
         let mut stmt = conn.prepare(
             "SELECT link.id, title.portal, link.language, link.hoster, link.portal_url,
                     episode.url
              FROM link
              JOIN episode ON episode.id = link.episode_id
              JOIN title ON title.id = episode.title_id
-             WHERE link.embed_url IS NULL OR link.resolved_at < ?1
-             ORDER BY title.portal, episode.url",
+             WHERE title.portal = ?1 AND (link.embed_url IS NULL OR link.resolved_at < ?2)
+             ORDER BY episode.url",
         )?;
-        let rows = stmt.query_map(params![refresh_cutoff.unwrap_or(0)], |r| {
+        let rows = stmt.query_map(params![portal, refresh_cutoff.unwrap_or(0)], |r| {
             Ok(PendingLink {
                 id: r.get(0)?,
                 portal: r.get(1)?,
@@ -604,25 +633,26 @@ async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
                 episode_url: r.get(5)?,
             })
         })?;
-        rows.collect::<Result<_, _>>()?
+        let mut v: Vec<PendingLink> = rows.collect::<Result<_, _>>()?;
+        if args.max > 0 {
+            v.truncate(args.max);
+        }
+        v
     };
-    pending.retain(|p| portals.contains(&p.portal.as_str()));
-    if args.max > 0 {
-        pending.truncate(args.max);
-    }
     if pending.is_empty() {
-        eprintln!("nichts aufzulösen");
+        eprintln!("[{portal}] nichts aufzulösen");
         return Ok(());
     }
-    eprintln!("{} Links aufzulösen", pending.len());
+    eprintln!("[{portal}] {} Links aufzulösen", pending.len());
 
-    let pb = ProgressBar::new(pending.len() as u64);
+    let pb = mp.add(ProgressBar::new(pending.len() as u64));
     pb.set_style(
         ProgressStyle::with_template(
-            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+            "{prefix:>13} {spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} ({eta}) {msg}",
         )
         .unwrap(),
     );
+    pb.set_prefix(portal.to_string());
 
     // Filmo-Links laufen pro Film gebündelt (eine Seite liefert CSRF + frische
     // Token für alle Hoster); die Portal-Redirects laufen einzeln.
@@ -630,7 +660,7 @@ async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
         std::collections::HashMap::new();
     let mut direct = Vec::new();
     for p in pending {
-        if p.portal == "filmo" {
+        if portal == "filmo" {
             filmo_by_movie
                 .entry(p.episode_url.clone())
                 .or_default()
@@ -694,14 +724,14 @@ async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     failed += 1;
-                    pb.suspend(|| eprintln!("Link {link_id}: {e}"));
+                    pb.suspend(|| eprintln!("[{portal}] Link {link_id}: {e}"));
                 }
             }
             pb.set_message(format!("ok {ok} / fehlge. {failed}"));
         }
     }
     pb.finish_and_clear();
-    eprintln!("aufgelöst: {ok}, fehlgeschlagen: {failed}");
+    eprintln!("[{portal}] aufgelöst: {ok}, fehlgeschlagen: {failed}");
     Ok(())
 }
 
