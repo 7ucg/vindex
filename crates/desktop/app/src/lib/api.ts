@@ -87,6 +87,27 @@ export function recentLogs(): Promise<string[]> {
   return invoke<string[]>("recent_logs");
 }
 
+export interface NetworkStatus {
+  dns: string;
+  impersonate: boolean;
+  obscura: boolean;
+  obscura_path: string | null;
+  proxy: string | null;
+}
+
+export function networkStatus(): Promise<NetworkStatus> {
+  return invoke<NetworkStatus>("network_status");
+}
+export function setImpersonate(on: boolean): Promise<void> {
+  return invoke("set_impersonate", { on });
+}
+export function setObscura(path: string | null): Promise<void> {
+  return invoke("set_obscura", { path });
+}
+export function setProxy(url: string | null): Promise<void> {
+  return invoke("set_proxy", { url });
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

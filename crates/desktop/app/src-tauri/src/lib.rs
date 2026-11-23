@@ -368,6 +368,83 @@ fn set_bandwidth_limit(kib: u64, state: State<'_, AppState>) -> Result<(), Strin
     config::save(&cfg)
 }
 
+/// Netzwerk-Status fürs Frontend. DNS ist fest 1.1.1.1 (nicht konfigurierbar).
+#[derive(Serialize)]
+struct NetworkStatusDto {
+    dns: String,
+    impersonate: bool,
+    obscura: bool,
+    obscura_path: Option<String>,
+    proxy: Option<String>,
+}
+
+#[tauri::command]
+fn network_status(state: State<'_, AppState>) -> NetworkStatusDto {
+    let cfg = state.config.lock().unwrap();
+    NetworkStatusDto {
+        dns: "1.1.1.1".into(),
+        impersonate: core::http::impersonate_enabled(),
+        obscura: core::browser::obscura_enabled(),
+        obscura_path: cfg.obscura.clone(),
+        proxy: cfg.proxy.clone(),
+    }
+}
+
+/// Anti-Bot Stufe 2 (TLS-Impersonate) live umschalten + persistieren.
+#[tauri::command]
+fn set_impersonate(on: bool, state: State<'_, AppState>) -> Result<(), String> {
+    core::http::set_impersonate(on);
+    std::env::set_var("VINDEX_IMPERSONATE", if on { "1" } else { "0" });
+    let mut cfg = state.config.lock().unwrap();
+    cfg.impersonate = Some(on);
+    config::save(&cfg)
+}
+
+/// Anti-Bot Stufe 3 (obscura-Pfad) live setzen/löschen + persistieren.
+#[tauri::command]
+fn set_obscura(path: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let p = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    core::browser::set_obscura_path(p.clone());
+    std::env::set_var("VINDEX_OBSCURA", p.as_deref().unwrap_or(""));
+    let mut cfg = state.config.lock().unwrap();
+    cfg.obscura = p;
+    config::save(&cfg)
+}
+
+/// Egress-Proxy setzen/löschen. Der HTTP-Client ist bereits gebaut → wirkt nach Neustart.
+#[tauri::command]
+fn set_proxy(url: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let p = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    std::env::set_var("VINDEX_PROXY", p.as_deref().unwrap_or(""));
+    let mut cfg = state.config.lock().unwrap();
+    cfg.proxy = p;
+    config::save(&cfg)
+}
+
+/// Spiegelt die Netzwerk-Felder der Desktop-Config in die ENV, damit der Kern
+/// (`Settings::load`) sie konsistent anwendet. Nur gesetzte Felder; DNS bleibt 1.1.1.1.
+fn apply_network_env(cfg: &config::DesktopConfig) {
+    if let Some(on) = cfg.impersonate {
+        std::env::set_var("VINDEX_IMPERSONATE", if on { "1" } else { "0" });
+    }
+    if let Some(p) = cfg
+        .obscura
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        std::env::set_var("VINDEX_OBSCURA", p);
+    }
+    if let Some(p) = cfg
+        .proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        std::env::set_var("VINDEX_PROXY", p);
+    }
+}
+
 /// Lädt einen (fehlgeschlagenen/abgebrochenen) Auftrag mit denselben Parametern erneut.
 #[tauri::command]
 fn retry_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) -> Option<u64> {
@@ -618,7 +695,10 @@ pub fn run() {
         .try_init();
     let logs_for_state = logs.clone();
 
-    // Settings früh laden (setzt u. a. den obscura-Pfad in core::browser).
+    // Desktop-Netzwerk-Einstellungen VOR dem Laden der Kern-Settings (und vor dem
+    // Client-Bau) in die ENV spiegeln, damit der Kern sie konsistent anwendet.
+    apply_network_env(&config::load());
+    // Settings früh laden (setzt u. a. Impersonate/obscura aus den ENV).
     let _ = core::config::Settings::load();
 
     tauri::Builder::default()
@@ -674,6 +754,10 @@ pub fn run() {
             pause_download,
             resume_download,
             set_bandwidth_limit,
+            network_status,
+            set_impersonate,
+            set_obscura,
+            set_proxy,
             retry_download,
             list_downloads,
             library,

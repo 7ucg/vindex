@@ -8,7 +8,12 @@ import {
   setConfig,
   setBandwidthLimit,
   recentLogs,
+  networkStatus,
+  setImpersonate,
+  setObscura,
+  setProxy,
   type DesktopConfig,
+  type NetworkStatus,
 } from "../lib/api";
 
 import { exportState, importState } from "../lib/backup";
@@ -94,6 +99,38 @@ export function Settings(): JSX.Element {
     const kib = Math.max(0, Math.floor(Number(v) || 0));
     setCfg({ ...cfg(), bandwidth_kib: kib === 0 ? null : kib });
     void setBandwidthLimit(kib).catch(() => {});
+  };
+
+  // Netzwerk: DNS fest 1.1.1.1; Impersonate (Stufe 2) + obscura (Stufe 3) live, Proxy nach Neustart.
+  const [net, setNet] = createSignal<NetworkStatus | null>(null);
+  const [obscuraInput, setObscuraInput] = createSignal("");
+  const [proxyInput, setProxyInput] = createSignal("");
+  const reloadNet = () => {
+    networkStatus()
+      .then((n) => {
+        setNet(n);
+        setObscuraInput(n.obscura_path ?? "");
+        setProxyInput(n.proxy ?? "");
+      })
+      .catch(() => {});
+  };
+  reloadNet();
+  const toggleImpersonate = () => {
+    const n = net();
+    if (!n) return;
+    void setImpersonate(!n.impersonate)
+      .then(reloadNet)
+      .catch(() => {});
+  };
+  const saveObscura = () => {
+    void setObscura(obscuraInput().trim() || null)
+      .then(reloadNet)
+      .catch(() => {});
+  };
+  const saveProxy = () => {
+    void setProxy(proxyInput().trim() || null)
+      .then(reloadNet)
+      .catch(() => {});
   };
 
   let fileInput: HTMLInputElement | undefined;
@@ -311,6 +348,58 @@ export function Settings(): JSX.Element {
           />
         </div>
       </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Netzwerk</h2>
+      </div>
+      <div class="panel" style={{ padding: "16px", "margin-bottom": "10px" }}>
+        <div class="field">
+          <label>DNS</label>
+          <input class="cfg-input" value="1.1.1.1 (fest)" disabled />
+        </div>
+        <div class="controls" style={{ margin: "4px 0 12px" }}>
+          <span class="sleep-label">Anti-Bot</span>
+          <button class="chip" classList={{ on: net()?.impersonate }} onClick={toggleImpersonate}>
+            {net()?.impersonate ? "● Stufe 2 (Impersonate) an" : "○ Stufe 2 (Impersonate)"}
+          </button>
+          <span class="sleep-label">
+            {net()?.obscura ? "● Stufe 3 (obscura) aktiv" : "○ Stufe 3 aus"}
+          </span>
+        </div>
+        <div class="field">
+          <label>obscura-Pfad (Stufe 3, leer = aus)</label>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              class="cfg-input"
+              placeholder="/pfad/zu/obscura"
+              value={obscuraInput()}
+              onInput={(e) => setObscuraInput(e.currentTarget.value)}
+            />
+            <button class="chip" onClick={saveObscura}>
+              Speichern
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Egress-Proxy (wirkt nach Neustart, leer = keiner)</label>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              class="cfg-input"
+              placeholder="http://host:port"
+              value={proxyInput()}
+              onInput={(e) => setProxyInput(e.currentTarget.value)}
+            />
+            <button class="chip" onClick={saveProxy}>
+              Speichern
+            </button>
+          </div>
+        </div>
+      </div>
+      <p class="note" style={{ "margin-bottom": "18px" }}>
+        DNS ist fest auf 1.1.1.1 (nicht abschaltbar). Impersonate und obscura wirken sofort; ein
+        Egress-Proxy wird beim nächsten Start übernommen. Mit gesetztem Proxy ist Stufe 3 (obscura)
+        aus Sicherheitsgründen deaktiviert.
+      </p>
 
       <div class="row-h" style={{ margin: "6px 2px 10px" }}>
         <h2 style={{ "font-size": "14px" }}>Diagnose</h2>

@@ -20,6 +20,15 @@ pub struct DesktopConfig {
     /// Globale Bandbreitenbegrenzung in KiB/s (0 oder None = unbegrenzt).
     #[serde(default)]
     pub bandwidth_kib: Option<u64>,
+    /// Anti-Bot Stufe 2 (TLS-Impersonate) einschalten. None = Kern-Default.
+    #[serde(default)]
+    pub impersonate: Option<bool>,
+    /// Anti-Bot Stufe 3: Pfad zum obscura-Binary. None/leer = aus.
+    #[serde(default)]
+    pub obscura: Option<String>,
+    /// Egress-Proxy (`VINDEX_PROXY`-Syntax). Wirkt erst nach Neustart. None = keiner.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {
