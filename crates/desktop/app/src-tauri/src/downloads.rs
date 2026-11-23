@@ -14,8 +14,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use vindex_desktop::core;
 use vindex_desktop::{
-    prefs_from_settings, CancellationToken, DownloadControl, DownloadOverrides, PauseGate,
-    Progress, RateLimiter,
+    prefs_from_settings, with_language_fallback, CancellationToken, DownloadControl,
+    DownloadOverrides, PauseGate, Progress, RateLimiter,
 };
 
 /// Wie viele Downloads gleichzeitig laufen dürfen (der Rest bleibt in der Warteschlange).
@@ -166,7 +166,10 @@ pub fn start(
 
     // Overrides vom Aufrufer (Desktop-Config: Sprache/Qualität/Ordner); nativ +
     // ffmpeg-frei setzt der Aufrufer ohnehin (echte Fortschritte, kein ffmpeg).
-    let prefs = prefs_from_settings(&settings, file_name, &overrides);
+    let mut prefs = prefs_from_settings(&settings, file_name, &overrides);
+    // Fallback über die übrigen Sprachen — sonst scheitert der Download, wenn genau
+    // die Wunschsprache beim Titel fehlt.
+    with_language_fallback(&mut prefs);
 
     let sem = downloads.sem.clone();
     let global_rate = downloads.global_rate.clone();

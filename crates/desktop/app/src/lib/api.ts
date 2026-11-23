@@ -52,6 +52,17 @@ export function resolvePlayback(url: string, lang?: string): Promise<PlaybackSou
   return invoke<PlaybackSource>("resolve_playback", { url, lang: lang ?? null });
 }
 
+export interface LangOption {
+  value: string;
+  label: string;
+  sub_only: boolean;
+}
+
+/** Tatsächlich für diesen Titel verfügbare Sprachen (inkl. „nur Untertitel"). */
+export function availableLanguages(url: string): Promise<LangOption[]> {
+  return invoke<LangOption[]>("available_languages", { url });
+}
+
 export interface SkipInterval {
   start: number;
   end: number;

@@ -88,6 +88,16 @@ pub fn prefs_from_settings(
     }
 }
 
+/// Hängt an die Wunschsprache die übrigen Varianten als Fallback an (Wunsch zuerst),
+/// damit Wiedergabe/Download nicht scheitern, nur weil genau diese eine Sprache fehlt.
+pub fn with_language_fallback(prefs: &mut DownloadPrefs) {
+    for l in Language::ALL {
+        if !prefs.languages.contains(&l) {
+            prefs.languages.push(l);
+        }
+    }
+}
+
 /// Facade-Objekt, das ein GUI-Frontend hält (ein HTTP-Client).
 pub struct Backend {
     client: reqwest::Client,
@@ -181,6 +191,28 @@ impl Backend {
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"
             ))),
+        }
+    }
+
+    /// Verfügbare Sprachen für einen Titel (Film-URL oder Episoden-URL). Für filmo
+    /// aus den Movie-Quellen, sonst aus den Provider-Links der Episode. In fester
+    /// Reihenfolge, nur tatsächlich angebotene Varianten.
+    pub async fn available_languages(&self, url: &str) -> Result<Vec<Language>> {
+        site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if site::is_filmo(url) {
+            let fclient = http::cookie_client()?;
+            let movie = site::filmo::movie(&fclient, url).await?;
+            Ok(Language::ALL
+                .into_iter()
+                .filter(|l| movie.sources.contains_key(l))
+                .collect())
+        } else {
+            let base = site::base_for_url(url);
+            let links = site::serienstream::provider_links(&self.client, base, url).await?;
+            Ok(Language::ALL
+                .into_iter()
+                .filter(|l| links.by_language.contains_key(l))
+                .collect())
         }
     }
 

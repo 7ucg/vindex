@@ -15,7 +15,9 @@ import {
   library,
   localMediaUrl,
   openExternal,
+  availableLanguages,
   type Episode,
+  type LangOption,
 } from "../lib/api";
 import { selected, setView, openPlayer } from "../lib/store";
 import { inWatchlist, toggleWatchlist } from "../lib/watchlist";
@@ -72,6 +74,17 @@ export function Detail(): JSX.Element {
   const [playErr, setPlayErr] = createSignal<string | null>(null);
   // Sprach-Vorwahl für die Wiedergabe ("" = Standard aus den Einstellungen).
   const [lang, setLang] = createSignal("");
+  // Tatsächlich verfügbare Sprachen des Titels (Film-URL bzw. erste Episode).
+  const [langs] = createResource(
+    () => (isMovie ? sel.url : (eps()?.[0]?.url ?? null)),
+    availableLanguages,
+  );
+  const langOptions = (): LangOption[] => {
+    const a = langs();
+    return a && a.length > 0
+      ? a
+      : LANGUAGES.map((l) => ({ value: l, label: l, sub_only: false }));
+  };
 
   // Fortschritt pro Folge (reaktiv über progressVersion): Prozent + „gesehen".
   const epPct = (url: string): number => {
@@ -319,13 +332,28 @@ export function Detail(): JSX.Element {
         <span class="sleep-label">Sprache</span>
         <select
           class="cfg-input"
-          style={{ "max-width": "180px" }}
+          style={{ "max-width": "220px" }}
           value={lang()}
           onChange={(e) => setLang(e.currentTarget.value)}
         >
-          <option value="">Standard</option>
-          <For each={LANGUAGES}>{(l) => <option value={l}>{l}</option>}</For>
+          <option value="">Standard (automatisch)</option>
+          <For each={langOptions()}>
+            {(o) => (
+              <option value={o.value}>
+                {o.label}
+                {o.sub_only ? " · nur UT" : ""}
+              </option>
+            )}
+          </For>
         </select>
+        <Show when={langs.loading}>
+          <span class="sleep-label">prüfe Sprachen …</span>
+        </Show>
+        <Show when={langs() && langs()!.length === 0}>
+          <span class="sleep-label" style={{ color: "var(--err)" }}>
+            keine Sprache gefunden
+          </span>
+        </Show>
       </div>
 
       <Show when={isMovie}>

@@ -93,6 +93,29 @@ impl Language {
             Language::EnglishSub => "Japanese · English Sub",
         }
     }
+
+    /// Kurzer, `FromStr`-kompatibler Name für UI/Config (round-trips über `from_str`).
+    pub fn ui_label(self) -> &'static str {
+        match self {
+            Language::GermanDub => "German Dub",
+            Language::EnglishDub => "English Dub",
+            Language::GermanSub => "German Sub",
+            Language::EnglishSub => "English Sub",
+        }
+    }
+
+    /// True, wenn die Variante nur Untertitel bietet (kein synchronisierter Ton).
+    pub fn is_subtitle_only(self) -> bool {
+        matches!(self, Language::GermanSub | Language::EnglishSub)
+    }
+
+    /// Feste Reihenfolge aller Varianten (für Fallback/Anzeige).
+    pub const ALL: [Language; 4] = [
+        Language::GermanDub,
+        Language::GermanSub,
+        Language::EnglishSub,
+        Language::EnglishDub,
+    ];
 }
 
 impl FromStr for Language {

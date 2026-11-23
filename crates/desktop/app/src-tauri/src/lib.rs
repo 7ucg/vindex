@@ -216,6 +216,36 @@ fn recent_logs(state: State<'_, AppState>) -> Vec<String> {
     logbuf::snapshot(&state.logs)
 }
 
+/// Eine für einen Titel verfügbare Sprache (fürs Frontend).
+#[derive(Serialize)]
+struct LangOption {
+    /// `FromStr`-kompatibler Wert, der an resolve_playback/start_download geht.
+    value: String,
+    label: String,
+    sub_only: bool,
+}
+
+/// Verfügbare Sprachen eines Titels (Film- oder Episoden-URL) — inkl. „nur Untertitel".
+#[tauri::command]
+async fn available_languages(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<LangOption>, String> {
+    let langs = state
+        .backend
+        .available_languages(&url)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(langs
+        .into_iter()
+        .map(|l| LangOption {
+            value: l.ui_label().to_string(),
+            label: l.ui_label().to_string(),
+            sub_only: l.is_subtitle_only(),
+        })
+        .collect())
+}
+
 #[tauri::command]
 async fn resolve_playback(
     url: String,
@@ -234,7 +264,10 @@ async fn resolve_playback(
     {
         ov.language = Some(l);
     }
-    let prefs = vindex_desktop::prefs_from_settings(&s, "stream", &ov);
+    let mut prefs = vindex_desktop::prefs_from_settings(&s, "stream", &ov);
+    // Fallback über die übrigen Sprachen, damit nicht nichts kommt, wenn genau die
+    // Wunschsprache fehlt (Wunsch bleibt zuerst).
+    vindex_desktop::with_language_fallback(&mut prefs);
 
     let resolved = state
         .backend
@@ -940,6 +973,7 @@ pub fn run() {
             resolve_playback,
             set_always_on_top,
             recent_logs,
+            available_languages,
             title_meta,
             cover,
             proxy_prefix,
