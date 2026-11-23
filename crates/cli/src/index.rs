@@ -811,12 +811,21 @@ fn check_embed_url(final_url: String) -> anyhow::Result<String> {
         u.username().is_empty() && u.password().is_none(),
         "Redirect-Ziel mit Zugangsdaten"
     );
-    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
-    // Portal-Hosts ablehnen (dann blieb der Redirect auf der Challenge-Seite hängen):
-    // per Domain-Gleichheit/Subdomain, nicht per Substring.
-    let on_portal = ["aniworld.to", "serienstream.to", "s.to", "filmo.to"]
+    // Schluss-Punkt (FQDN) trimmen, sonst umginge „serienstream.to." den Vergleich.
+    let host = u
+        .host_str()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    // Portal-Hosts ablehnen (dann blieb der Redirect auf der Challenge-Seite hängen).
+    // Label-basiert: jedes Label „aniworld/serienstream/filmo" (auch Mirror-TLDs,
+    // Subdomains) plus das kurze s.to. Über-Ablehnung ist hier die sichere Richtung.
+    let labels: Vec<&str> = host.split('.').collect();
+    let on_portal = labels
         .iter()
-        .any(|d| host == *d || host.ends_with(&format!(".{d}")));
+        .any(|l| matches!(*l, "aniworld" | "serienstream" | "filmo"))
+        || host == "s.to"
+        || host.ends_with(".s.to");
     anyhow::ensure!(
         !on_portal,
         "Redirect blieb auf dem Portal (vermutlich Challenge)"
