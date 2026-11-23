@@ -23,48 +23,64 @@ pub fn snapshot(buf: &LogBuf) -> Vec<String> {
     buf.lock().unwrap().iter().cloned().collect()
 }
 
-/// Reduziert eine http(s)-URL auf `scheme://host/…` (bzw. `scheme://host`).
-/// Pfad und Query — und damit alle signierten Token — fallen weg.
-fn redact_url(url: &str) -> String {
-    let scheme = if url.starts_with("https") {
-        "https"
-    } else {
-        "http"
-    };
-    let after = url.splitn(2, "://").nth(1).unwrap_or("");
-    let host = after.split(['/', '?', '#']).next().unwrap_or("");
-    if after.len() > host.len() {
-        format!("{scheme}://{host}/…")
-    } else {
-        format!("{scheme}://{host}")
-    }
+/// True, wenn das Zeichen zu einem URL-Schema-Token gehört (`[A-Za-z0-9+.-]`).
+fn is_scheme_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')
 }
 
-/// Ersetzt in einer Zeile jede http(s)-URL durch ihre redigierte Form.
+/// True, wenn das Zeichen eine URL beendet (Whitespace oder typische Begrenzer).
+fn is_url_end(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | ',')
+}
+
+/// Ersetzt in einer Zeile jede `<schema>://…`-URL durch `<schema>://host` (plus `/…`,
+/// wenn Pfad/Query folgten). Schema-unabhängig und case-insensitiv; userinfo
+/// (`user:pass@`) wird verworfen, Pfad und Query (signierte Token) fallen weg.
 fn scrub(line: &str) -> String {
+    let b = line.as_bytes();
     let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    loop {
-        // Früheste der beiden URL-Marken wählen (sonst würde eine frühere https-URL
-        // vor einer späteren http-URL unredigiert durchrutschen).
-        let pos = match (rest.find("http://"), rest.find("https://")) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => break,
-        };
-        out.push_str(&rest[..pos]);
-        let url_rest = &rest[pos..];
-        // URL endet an Whitespace oder einem typischen Begrenzer.
-        let end = url_rest
-            .find(|c: char| {
-                c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | ',')
-            })
-            .unwrap_or(url_rest.len());
-        out.push_str(&redact_url(&url_rest[..end]));
-        rest = &url_rest[end..];
+    let mut copied = 0usize; // bis hierhin ist das Original schon in `out`
+    let mut i = 0usize;
+    while let Some(rel) = line[i..].find("://") {
+        let sep = i + rel; // Index des ':' in "://"
+                           // Schema-Token nach links einsammeln.
+        let mut start = sep;
+        while start > 0 && is_scheme_char(b[start - 1]) {
+            start -= 1;
+        }
+        // Gültiges Schema beginnt mit einem Buchstaben und ist nicht leer.
+        let scheme = &line[start..sep];
+        let valid = scheme
+            .bytes()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic());
+        if !valid {
+            i = sep + 1; // kein echtes Schema — hinter dem ':' weitersuchen
+            continue;
+        }
+        let after = sep + 3; // hinter "://"
+        let end_rel = line[after..].find(is_url_end).unwrap_or(line.len() - after);
+        let url_end = after + end_rel;
+
+        let authority_and_rest = &line[after..url_end];
+        let authority = authority_and_rest
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or("");
+        // userinfo verwerfen: nur das, was hinter dem letzten '@' steht (host[:port]).
+        let host = authority.rsplit('@').next().unwrap_or(authority);
+
+        out.push_str(&line[copied..start]);
+        out.push_str(scheme);
+        out.push_str("://");
+        out.push_str(host);
+        if authority_and_rest.len() > authority.len() {
+            out.push_str("/…");
+        }
+        copied = url_end;
+        i = url_end;
     }
-    out.push_str(rest);
+    out.push_str(&line[copied..]);
     out
 }
 
@@ -160,5 +176,27 @@ mod tests {
     #[test]
     fn no_url_is_identity() {
         assert_eq!(scrub("just a plain line"), "just a plain line");
+    }
+
+    #[test]
+    fn drops_userinfo_credentials() {
+        assert_eq!(
+            scrub("auth https://user:s3cr3t@host.tld:8443/path?x=1 end"),
+            "auth https://host.tld:8443/… end"
+        );
+    }
+
+    #[test]
+    fn case_insensitive_and_generic_scheme() {
+        assert_eq!(
+            scrub("x HTTPS://H.TLD/p?tok=1 y rtmp://media.tld/live/KEY z"),
+            "x HTTPS://H.TLD/… y rtmp://media.tld/… z"
+        );
+    }
+
+    #[test]
+    fn bare_colon_slashes_without_scheme_untouched() {
+        // Kein Buchstabe vor "://" → kein Schema, nichts redigieren.
+        assert_eq!(scrub("ratio 3 ://4 done"), "ratio 3 ://4 done");
     }
 }
