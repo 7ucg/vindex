@@ -20,6 +20,145 @@ use crate::site;
 /// die Grenze verhindert, dass eine manipulierte Antwort den Speicher flutet.
 const MAX_PLAYLIST_BYTES: usize = 512 * 1024;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Pausiert einen laufenden Download kooperativ: der Segment-Download fragt das
+/// Gate vor jedem Segment (und vor jedem Schreiben) ab und wartet, solange pausiert.
+/// Bewusst poll-basiert (kleine Latenz) statt Notify — kein Missed-Wakeup-Risiko.
+#[derive(Default)]
+pub struct PauseGate {
+    paused: AtomicBool,
+}
+
+impl PauseGate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+    /// Kehrt sofort zurück, wenn nicht pausiert; sonst, sobald wieder fortgesetzt.
+    pub async fn wait_until_resumed(&self) {
+        while self.paused.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+    }
+}
+
+/// Token-Bucket-Bandbreitenbegrenzer (Bytes/s). `rate = 0` bedeutet unbegrenzt.
+/// Klonbar über `Arc`; pro Download und/oder global einsetzbar.
+pub struct RateLimiter {
+    inner: Mutex<Bucket>,
+}
+
+struct Bucket {
+    rate: f64,     // Bytes/s (0 = unbegrenzt)
+    capacity: f64, // maximaler Burst
+    tokens: f64,
+    last: Instant,
+}
+
+impl RateLimiter {
+    pub fn new(bytes_per_sec: u64) -> Self {
+        let rate = bytes_per_sec as f64;
+        Self {
+            inner: Mutex::new(Bucket {
+                rate,
+                capacity: Self::capacity_for(rate),
+                tokens: Self::capacity_for(rate),
+                last: Instant::now(),
+            }),
+        }
+    }
+    fn capacity_for(rate: f64) -> f64 {
+        // Mind. 8 MiB Burst, damit auch große Chunks sicher durchpassen.
+        rate.max(8.0 * 1024.0 * 1024.0)
+    }
+    pub fn set_rate(&self, bytes_per_sec: u64) {
+        let mut b = self.inner.lock().unwrap();
+        b.rate = bytes_per_sec as f64;
+        b.capacity = Self::capacity_for(b.rate);
+        b.tokens = b.tokens.min(b.capacity);
+    }
+    /// Wartet, bis `n` Bytes im Budget liegen (oder kehrt sofort zurück bei 0/unbegrenzt).
+    pub async fn acquire(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        loop {
+            let wait = {
+                let mut b = self.inner.lock().unwrap();
+                if b.rate <= 0.0 {
+                    return; // unbegrenzt
+                }
+                let now = Instant::now();
+                let elapsed = now.duration_since(b.last).as_secs_f64();
+                b.last = now;
+                b.tokens = (b.tokens + elapsed * b.rate).min(b.capacity);
+                if b.tokens >= n as f64 {
+                    b.tokens -= n as f64;
+                    None
+                } else {
+                    Some(Duration::from_secs_f64((n as f64 - b.tokens) / b.rate))
+                }
+            };
+            match wait {
+                None => return,
+                Some(d) => tokio::time::sleep(d).await,
+            }
+        }
+    }
+}
+
+/// Live-Steuerung eines laufenden Downloads: Abbruch, Pause und Bandbreite.
+/// Alle Felder optional — ein leeres `DownloadControl` verhält sich wie der
+/// bisherige, reine `CancellationToken`-Pfad.
+#[derive(Clone, Default)]
+pub struct DownloadControl {
+    pub cancel: Option<CancellationToken>,
+    pub pause: Option<Arc<PauseGate>>,
+    pub rate: Option<Arc<RateLimiter>>,
+    pub global_rate: Option<Arc<RateLimiter>>,
+}
+
+impl DownloadControl {
+    pub fn from_cancel(cancel: Option<CancellationToken>) -> Self {
+        Self {
+            cancel,
+            ..Default::default()
+        }
+    }
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .map(|c| c.is_cancelled())
+            .unwrap_or(false)
+    }
+    /// Blockiert, solange der Download pausiert ist.
+    pub async fn gate(&self) {
+        if let Some(p) = &self.pause {
+            p.wait_until_resumed().await;
+        }
+    }
+    /// Drosselt auf die erlaubte Bandbreite (pro Download und global).
+    pub async fn throttle(&self, n: u64) {
+        if let Some(r) = &self.rate {
+            r.acquire(n).await;
+        }
+        if let Some(g) = &self.global_rate {
+            g.acquire(n).await;
+        }
+    }
+}
+
 /// Lädt einen Request und gibt den Body als Text zurück, aber höchstens `cap`
 /// Bytes. Wiederverwendet den konfigurierten Client (Timeout/UA) des Aufrufers.
 async fn fetch_text_capped(req: reqwest::RequestBuilder, cap: usize) -> Result<String> {
@@ -126,6 +265,23 @@ pub async fn download_episode(
     cancel: Option<CancellationToken>,
     progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
+    download_episode_ctl(
+        client,
+        episode_url,
+        prefs,
+        &DownloadControl::from_cancel(cancel),
+        progress,
+    )
+    .await
+}
+
+async fn download_episode_ctl(
+    client: &reqwest::Client,
+    episode_url: &str,
+    prefs: &DownloadPrefs,
+    ctl: &DownloadControl,
+    progress: Option<&ProgressSink>,
+) -> Result<PathBuf> {
     // SSRF-Schutz: nur unterstützte Portale als Einstiegs-URL zulassen.
     site::validate_source_url(episode_url).map_err(Error::Parse)?;
     report(progress, Progress::Resolving);
@@ -141,7 +297,7 @@ pub async fn download_episode(
             let Some(embed) = hmap.get(&hoster) else {
                 continue;
             };
-            if is_cancelled(&cancel) {
+            if ctl.cancelled() {
                 return Err(Error::Ffmpeg("abgebrochen".into()));
             }
             let resolved = match hoster::resolve(client, hoster, embed).await {
@@ -152,8 +308,7 @@ pub async fn download_episode(
                 }
             };
 
-            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel, progress).await?
-            {
+            if try_download_resolved(client, &resolved, prefs, &out_path, ctl, progress).await? {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
@@ -176,6 +331,23 @@ pub async fn download_movie(
     cancel: Option<CancellationToken>,
     progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
+    download_movie_ctl(
+        client,
+        movie_url,
+        prefs,
+        &DownloadControl::from_cancel(cancel),
+        progress,
+    )
+    .await
+}
+
+async fn download_movie_ctl(
+    client: &reqwest::Client,
+    movie_url: &str,
+    prefs: &DownloadPrefs,
+    ctl: &DownloadControl,
+    progress: Option<&ProgressSink>,
+) -> Result<PathBuf> {
     site::validate_source_url(movie_url).map_err(Error::Parse)?;
     report(progress, Progress::Resolving);
     // filmo.to bindet eine Laravel-Session ans CSRF-Token: Film-GET und `/n`-POST
@@ -196,7 +368,7 @@ pub async fn download_movie(
             let Some(token) = hmap.get(&hoster) else {
                 continue;
             };
-            if is_cancelled(&cancel) {
+            if ctl.cancelled() {
                 return Err(Error::Ffmpeg("abgebrochen".into()));
             }
             let embed = match site::filmo::resolve_embed(&fclient, movie_url, csrf, token).await {
@@ -213,8 +385,7 @@ pub async fn download_movie(
                     continue;
                 }
             };
-            if try_download_resolved(client, &resolved, prefs, &out_path, &cancel, progress).await?
-            {
+            if try_download_resolved(client, &resolved, prefs, &out_path, ctl, progress).await? {
                 tracing::info!(
                     "Download OK: {} [{}/{}]",
                     prefs.file_name,
@@ -237,13 +408,31 @@ pub async fn download_url(
     cancel: Option<CancellationToken>,
     progress: Option<&ProgressSink>,
 ) -> Result<PathBuf> {
+    download_url_ctl(
+        client,
+        url,
+        prefs,
+        DownloadControl::from_cancel(cancel),
+        progress,
+    )
+    .await
+}
+
+/// Wie [`download_url`], aber mit voller Live-Steuerung (Abbruch, Pause, Bandbreite).
+pub async fn download_url_ctl(
+    client: &reqwest::Client,
+    url: &str,
+    prefs: &DownloadPrefs,
+    ctl: DownloadControl,
+    progress: Option<&ProgressSink>,
+) -> Result<PathBuf> {
     // Von Hand getippte URLs vorab korrigieren (Schema, Host-Tippfehler, Müll).
     let corrected = site::autocorrect::autocorrect(url).map(|c| c.url);
     let url = corrected.as_deref().unwrap_or(url);
     if site::is_filmo(url) {
-        download_movie(client, url, prefs, cancel, progress).await
+        download_movie_ctl(client, url, prefs, &ctl, progress).await
     } else {
-        download_episode(client, url, prefs, cancel, progress).await
+        download_episode_ctl(client, url, prefs, &ctl, progress).await
     }
 }
 
@@ -361,7 +550,7 @@ async fn try_download_resolved(
     resolved: &Resolved,
     prefs: &DownloadPrefs,
     out_path: &Path,
-    cancel: &Option<CancellationToken>,
+    ctl: &DownloadControl,
     progress: Option<&ProgressSink>,
 ) -> Result<bool> {
     if resolved.is_hls {
@@ -383,7 +572,7 @@ async fn try_download_resolved(
                 referer,
                 prefs.native_hls,
                 out_path,
-                cancel,
+                ctl,
                 progress,
                 prefs.no_ffmpeg,
             )
@@ -397,7 +586,7 @@ async fn try_download_resolved(
                     referer,
                     prefs.native_hls,
                     out_path,
-                    cancel,
+                    ctl,
                     progress,
                     prefs.no_ffmpeg,
                 )
@@ -412,7 +601,7 @@ async fn try_download_resolved(
         // Einzel-MP4: Höhe per ffprobe prüfen und unterhalb der Mindestqualität
         // überspringen, damit nicht versehentlich 360p statt des Minimums landet.
         // Ohne ffprobe (None) wird best effort gemuxt.
-        if is_cancelled(cancel) {
+        if ctl.cancelled() {
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
         if let Some(h) = ffprobe_height(&resolved.url, resolved.referer.as_deref()).await {
@@ -426,7 +615,7 @@ async fn try_download_resolved(
             }
         }
         report(progress, Progress::Muxing);
-        mux(resolved, out_path, cancel).await.map(|_| true)
+        mux(resolved, out_path, &ctl.cancel).await.map(|_| true)
     }
 }
 
@@ -443,13 +632,12 @@ async fn deliver_hls(
     referer: Option<&str>,
     native: bool,
     out_path: &Path,
-    cancel: &Option<CancellationToken>,
+    ctl: &DownloadControl,
     progress: Option<&ProgressSink>,
     no_ffmpeg: bool,
 ) -> bool {
     if native {
-        match download_hls_native(client, url, referer, out_path, cancel, progress, no_ffmpeg).await
-        {
+        match download_hls_native(client, url, referer, out_path, ctl, progress, no_ffmpeg).await {
             Ok(true) => return true,
             Ok(false) => {} // verschlüsselt/leer → ffmpeg
             Err(e) => tracing::debug!("nativer HLS-Download fehlgeschlagen: {e}"),
@@ -466,7 +654,7 @@ async fn deliver_hls(
         is_hls: true,
     };
     report(progress, Progress::Muxing);
-    mux(&variant, out_path, cancel).await.is_ok()
+    mux(&variant, out_path, &ctl.cancel).await.is_ok()
 }
 
 /// Obergrenze einer HLS-Media-Playlist (viele kurze Segment-Zeilen, aber begrenzt).
@@ -742,7 +930,7 @@ async fn download_hls_native(
     media_url: &str,
     referer: Option<&str>,
     out_path: &Path,
-    cancel: &Option<CancellationToken>,
+    ctl: &DownloadControl,
     progress: Option<&ProgressSink>,
     no_ffmpeg: bool,
 ) -> Result<bool> {
@@ -785,7 +973,7 @@ async fn download_hls_native(
         referer,
         cipher.as_ref(),
         &part,
-        cancel,
+        ctl,
         progress,
     )
     .await;
@@ -828,7 +1016,7 @@ async fn download_hls_native(
     // Zusammengesetzten TS-Stream nach out_path remuxen; die lokale Datei ist
     // vertrauenswürdig, daher file-Protokoll erlaubt.
     report(progress, Progress::Muxing);
-    let remux = remux_local(&part, out_path, cancel).await;
+    let remux = remux_local(&part, out_path, &ctl.cancel).await;
     tokio::fs::remove_file(&part).await.ok();
     remux.map(|_| true)
 }
@@ -863,7 +1051,7 @@ async fn fetch_segments_to(
     referer: Option<&str>,
     cipher: Option<&Aes128Ctx>,
     part: &Path,
-    cancel: &Option<CancellationToken>,
+    ctl: &DownloadControl,
     progress: Option<&ProgressSink>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
@@ -883,6 +1071,7 @@ async fn fetch_segments_to(
     let client_c = client.clone();
     let referer_c = referer.map(str::to_string);
     let cipher_c = cipher.cloned();
+    let ctl_c = ctl.clone();
     // Gemeinsamer Byte-Zähler über alle gleichzeitigen Fetches: der Total-Cap
     // greift so schon während des Ladens, nicht erst nach einem fertigen Segment.
     let downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -892,7 +1081,11 @@ async fn fetch_segments_to(
             let referer = referer_c.clone();
             let cipher = cipher_c.clone();
             let downloaded = downloaded.clone();
+            let ctl = ctl_c.clone();
             async move {
+                // Vor dem Netz-Zugriff pausieren (hält auch die in Flug befindlichen
+                // Futures an, nicht nur das Schreiben).
+                ctl.gate().await;
                 fetch_one_segment(
                     &client,
                     &seg,
@@ -900,6 +1093,7 @@ async fn fetch_segments_to(
                     cipher.as_ref(),
                     index,
                     &downloaded,
+                    &ctl,
                 )
                 .await
             }
@@ -909,9 +1103,11 @@ async fn fetch_segments_to(
     let mut written: u64 = 0;
     let mut done = 0usize;
     while let Some(res) = stream.next().await {
-        if is_cancelled(cancel) {
+        if ctl.cancelled() {
             return Err(Error::Ffmpeg("abgebrochen".into()));
         }
+        // Bei Pause auch das Schreiben anhalten, damit der Fortschritt wirklich steht.
+        ctl.gate().await;
         let bytes = res?;
         written += bytes.len() as u64;
         file.write_all(&bytes).await?;
@@ -942,6 +1138,7 @@ async fn fetch_one_segment(
     cipher: Option<&Aes128Ctx>,
     index: usize,
     downloaded: &std::sync::atomic::AtomicU64,
+    ctl: &DownloadControl,
 ) -> Result<Vec<u8>> {
     use std::sync::atomic::Ordering;
 
@@ -969,6 +1166,8 @@ async fn fetch_one_segment(
         if downloaded.fetch_add(n, Ordering::Relaxed) + n > MAX_TOTAL_BYTES {
             return Err(Error::extract("HLS", "Download überschreitet Größenlimit"));
         }
+        // Bandbreitenbegrenzung (pro Download + global), falls gesetzt.
+        ctl.throttle(n).await;
         buf.extend_from_slice(&chunk);
     }
     let out = match cipher {
@@ -1159,6 +1358,40 @@ pub async fn ffprobe_height(url: &str, referer: Option<&str>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_gate_flag() {
+        let g = PauseGate::new();
+        assert!(!g.is_paused());
+        g.pause();
+        assert!(g.is_paused());
+        g.resume();
+        assert!(!g.is_paused());
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_unlimited_is_instant() {
+        // rate 0 = unbegrenzt: acquire kehrt sofort zurück.
+        let r = RateLimiter::new(0);
+        r.acquire(10 * 1024 * 1024).await;
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_throttles_above_budget() {
+        // 1 MiB/s, Anforderung von 4 MiB muss spürbar > 0 warten.
+        let r = RateLimiter::new(1024 * 1024);
+        r.acquire(8 * 1024 * 1024).await; // Burst leeren (capacity = 8 MiB)
+        let t0 = std::time::Instant::now();
+        r.acquire(2 * 1024 * 1024).await; // ~2 s bei 1 MiB/s
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn default_control_behaves_like_cancel_only() {
+        let c = DownloadControl::from_cancel(None);
+        assert!(!c.cancelled());
+        assert!(c.pause.is_none() && c.rate.is_none());
+    }
 
     #[test]
     fn progress_senke_erhaelt_events() {
