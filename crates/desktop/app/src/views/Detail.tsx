@@ -19,6 +19,13 @@ import {
 import { selected, setView, openPlayer } from "../lib/store";
 import { inWatchlist, toggleWatchlist } from "../lib/watchlist";
 import { getProgress, progressVersion } from "../lib/progress";
+import {
+  collections,
+  createCollection,
+  addToCollection,
+  removeFromCollection,
+  inCollection,
+} from "../lib/collections";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 
@@ -99,6 +106,20 @@ export function Detail(): JSX.Element {
   const [bulk, setBulk] = createSignal(false);
   const [saved, setSaved] = createSignal(inWatchlist(sel.url));
   const toggleSave = () => setSaved(toggleWatchlist({ url: sel.url, title: sel.title }));
+
+  // Sammlungen: Menü zum Zuordnen des aktuellen Titels.
+  const [collMenu, setCollMenu] = createSignal(false);
+  const toggleColl = (id: string) => {
+    if (inCollection(id, sel.url)) removeFromCollection(id, sel.url);
+    else addToCollection(id, { url: sel.url, title: sel.title });
+  };
+  const newColl = () => {
+    const name = prompt("Name der neuen Sammlung");
+    if (name && name.trim()) {
+      const id = createCollection(name);
+      addToCollection(id, { url: sel.url, title: sel.title });
+    }
+  };
 
   // Dateiname-Basis (ohne Endung) — identisch zur Download-Benennung.
   const epBase = (e: Episode): string =>
@@ -204,12 +225,27 @@ export function Detail(): JSX.Element {
           ‹ Zurück
         </button>
         <h2 style={{ margin: 0 }}>{sel.title}</h2>
-        <button
-          class="chip"
-          classList={{ on: saved() }}
-          style={{ "margin-left": "auto" }}
-          onClick={toggleSave}
-        >
+        <div class="coll-wrap" style={{ "margin-left": "auto" }}>
+          <button class="chip" classList={{ on: collMenu() }} onClick={() => setCollMenu(!collMenu())}>
+            ＋ Sammlung
+          </button>
+          <Show when={collMenu()}>
+            <div class="coll-menu">
+              <For each={collections()}>
+                {(c) => (
+                  <button class="coll-opt" onClick={() => toggleColl(c.id)}>
+                    <span class="coll-check">{inCollection(c.id, sel.url) ? "✓" : ""}</span>
+                    {c.name}
+                  </button>
+                )}
+              </For>
+              <button class="coll-opt coll-new" onClick={newColl}>
+                ＋ Neue Sammlung …
+              </button>
+            </div>
+          </Show>
+        </div>
+        <button class="chip" classList={{ on: saved() }} onClick={toggleSave}>
           {saved() ? "★ Gemerkt" : "☆ Merken"}
         </button>
       </div>

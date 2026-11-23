@@ -6,7 +6,7 @@
 // den Player → SSRF). Ungültige Einträge werden verworfen.
 
 // JSON-wertige Schlüssel (Objekte/Arrays).
-const JSON_KEYS = ["vindex:watchlist", "vindex:resume", "vindex:recent"] as const;
+const JSON_KEYS = ["vindex:watchlist", "vindex:resume", "vindex:recent", "vindex:collections"] as const;
 // Rohstring-Schlüssel (so liest theme.ts sie auch).
 const RAW_KEYS = ["vindex:theme", "vindex:accent", "vindex:density", "vindex:scale"] as const;
 
@@ -102,6 +102,27 @@ function sanitize(key: string, value: unknown): string | null {
   if (key === "vindex:recent") {
     if (!Array.isArray(value)) return null;
     return JSON.stringify(value.filter((u) => validUrl(u)).slice(0, MAX_ENTRIES));
+  }
+  if (key === "vindex:collections") {
+    if (!Array.isArray(value)) return null;
+    const cols = value
+      .filter((c): c is { id: string; name: string; items: unknown[] } => {
+        const o = c as Record<string, unknown>;
+        return !!o && str(o.id, 64) && str(o.name, 120) && Array.isArray(o.items);
+      })
+      .slice(0, MAX_ENTRIES)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        items: (c.items as unknown[])
+          .filter((e): e is { url: string; title: string } => {
+            const o = e as Record<string, unknown>;
+            return !!o && validUrl(o.url) && str(o.title);
+          })
+          .slice(0, MAX_ENTRIES)
+          .map((e) => ({ url: e.url, title: e.title })),
+      }));
+    return JSON.stringify(cols);
   }
   if (key === "vindex:theme") return THEME_OK.includes(value as string) ? (value as string) : null;
   if (key === "vindex:accent") return ACCENT_OK.includes(value as string) ? (value as string) : null;

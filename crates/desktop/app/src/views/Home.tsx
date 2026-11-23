@@ -10,6 +10,7 @@ import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
 import { watchlist } from "../lib/watchlist";
+import { collections, deleteCollection } from "../lib/collections";
 import { Cover } from "./Cover";
 
 // Home: eine funktionierende Katalog-Suche über den echten Kern.
@@ -151,6 +152,45 @@ export function Home(): JSX.Element {
             )}
           </For>
         </div>
+      </Show>
+
+      <Show when={!searched()}>
+        <For each={collections().filter((c) => c.items.length > 0)}>
+          {(c) => (
+            <>
+              <div class="row-h">
+                <h2>{c.name}</h2>
+                <button
+                  class="chip"
+                  title="Sammlung löschen"
+                  onClick={() => {
+                    if (confirm(`Sammlung „${c.name}" löschen?`)) deleteCollection(c.id);
+                  }}
+                >
+                  Löschen
+                </button>
+              </div>
+              <div class="grid">
+                <For each={c.items}>
+                  {(it) => (
+                    <div class="card" title={it.url} onClick={() => openTitle(it.title, it.url)}>
+                      <div class="poster">
+                        <Cover url={it.url} title={it.title} />
+                        <div class="play-ov">
+                          <button class="play-btn">
+                            <IconPlay />
+                          </button>
+                        </div>
+                      </div>
+                      <div class="t">{it.title}</div>
+                      <div class="s">{c.name}</div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </>
+          )}
+        </For>
       </Show>
 
       <Show when={!searched() && (lib()?.length ?? 0) > 0}>
