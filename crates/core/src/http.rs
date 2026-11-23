@@ -54,13 +54,18 @@ fn proxy_entry_ok(entry: &str) -> bool {
     reqwest::Proxy::all(entry).is_ok()
 }
 
-/// True, wenn jede komma-getrennte Proxy-Angabe in *s* brauchbar ist (gleicher
-/// Parser wie der Consumer). Leer/whitespace = gültig (bedeutet: kein Proxy).
+/// True, wenn *s* mindestens einen nutzbaren Proxy-Eintrag enthält und **jeder**
+/// komma-getrennte Eintrag brauchbar ist (gleicher Parser wie der Consumer). Eine
+/// leere/whitespace-/nur-Komma-Angabe ergibt keinen Eintrag → `false` (sonst würde
+/// eine „gesetzte" Proxy-Angabe zu null Pool-Einträgen führen = ungeproxter Egress).
+/// Das Leeren („kein Proxy") behandelt der Aufrufer separat, nicht über diese Prüfung.
 pub fn proxy_string_ok(s: &str) -> bool {
-    s.split(',')
+    let entries: Vec<&str> = s
+        .split(',')
         .map(str::trim)
         .filter(|e| !e.is_empty())
-        .all(proxy_entry_ok)
+        .collect();
+    !entries.is_empty() && entries.iter().all(|e| proxy_entry_ok(e))
 }
 
 /// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge werden
@@ -592,8 +597,9 @@ mod tests {
 
     #[test]
     fn proxy_string_validierung() {
-        assert!(proxy_string_ok("")); // leer = kein Proxy = ok
-        assert!(proxy_string_ok("   ")); // nur whitespace = ok
+        assert!(!proxy_string_ok("")); // leer = kein Eintrag → false (Aufrufer leert separat)
+        assert!(!proxy_string_ok("   ")); // nur whitespace → false
+        assert!(!proxy_string_ok(",, ,")); // nur Kommas → kein Eintrag → false
         assert!(proxy_string_ok(
             "http://a.example:8080 , socks5://b.example:1080"
         ));
