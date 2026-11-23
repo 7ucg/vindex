@@ -23,42 +23,22 @@ pub fn snapshot(buf: &LogBuf) -> Vec<String> {
     buf.lock().unwrap().iter().cloned().collect()
 }
 
-/// True, wenn das Zeichen zu einem URL-Schema-Token gehört (`[A-Za-z0-9+.-]`).
-fn is_scheme_char(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')
-}
-
 /// True, wenn das Zeichen eine URL beendet (Whitespace oder typische Begrenzer).
 fn is_url_end(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | ',')
 }
 
-/// Ersetzt in einer Zeile jede `<schema>://…`-URL durch `<schema>://host` (plus `/…`,
-/// wenn Pfad/Query folgten). Schema-unabhängig und case-insensitiv; userinfo
-/// (`user:pass@`) wird verworfen, Pfad und Query (signierte Token) fallen weg.
+/// Redigiert in einer Zeile jedes `://`-Vorkommen: Text bis **einschließlich** `://`
+/// bleibt unverändert, aber alles danach (Authority bis zum nächsten Begrenzer) wird
+/// auf `host` reduziert — userinfo (`user:pass@`) verworfen, Pfad und Query (und damit
+/// signierte Token) fallen weg. Bewusst ohne Schema-Prüfung: so kann kein Token über
+/// ein „ungültiges" Schema (z. B. an Text klebendes `2https://…`) durchrutschen.
 fn scrub(line: &str) -> String {
-    let b = line.as_bytes();
     let mut out = String::with_capacity(line.len());
     let mut copied = 0usize; // bis hierhin ist das Original schon in `out`
     let mut i = 0usize;
     while let Some(rel) = line[i..].find("://") {
-        let sep = i + rel; // Index des ':' in "://"
-                           // Schema-Token nach links einsammeln.
-        let mut start = sep;
-        while start > 0 && is_scheme_char(b[start - 1]) {
-            start -= 1;
-        }
-        // Gültiges Schema beginnt mit einem Buchstaben und ist nicht leer.
-        let scheme = &line[start..sep];
-        let valid = scheme
-            .bytes()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic());
-        if !valid {
-            i = sep + 1; // kein echtes Schema — hinter dem ':' weitersuchen
-            continue;
-        }
-        let after = sep + 3; // hinter "://"
+        let after = i + rel + 3; // hinter "://"
         let end_rel = line[after..].find(is_url_end).unwrap_or(line.len() - after);
         let url_end = after + end_rel;
 
@@ -70,9 +50,8 @@ fn scrub(line: &str) -> String {
         // userinfo verwerfen: nur das, was hinter dem letzten '@' steht (host[:port]).
         let host = authority.rsplit('@').next().unwrap_or(authority);
 
-        out.push_str(&line[copied..start]);
-        out.push_str(scheme);
-        out.push_str("://");
+        // Alles bis einschließlich "://" unverändert übernehmen, dann nur den Host.
+        out.push_str(&line[copied..after]);
         out.push_str(host);
         if authority_and_rest.len() > authority.len() {
             out.push_str("/…");
@@ -195,8 +174,17 @@ mod tests {
     }
 
     #[test]
-    fn bare_colon_slashes_without_scheme_untouched() {
-        // Kein Buchstabe vor "://" → kein Schema, nichts redigieren.
+    fn bare_colon_slashes_without_host_path_untouched() {
+        // "://4" hat keinen Pfad → bleibt wie es ist (nichts Sensibles).
         assert_eq!(scrub("ratio 3 ://4 done"), "ratio 3 ://4 done");
+    }
+
+    #[test]
+    fn digit_glued_scheme_still_redacted() {
+        // Parser-Differential: ein an Text klebendes „2https://…" darf den Token
+        // nicht über ein vermeintlich ungültiges Schema durchlassen.
+        let got = scrub("episode 2https://cdn.tld/x?token=secret done");
+        assert!(!got.contains("secret"), "Token durchgerutscht: {got}");
+        assert_eq!(got, "episode 2https://cdn.tld/… done");
     }
 }
