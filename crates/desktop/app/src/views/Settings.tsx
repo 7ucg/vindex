@@ -6,6 +6,7 @@ import {
   setAutostart,
   getConfig,
   setConfig,
+  recentLogs,
   type DesktopConfig,
 } from "../lib/api";
 
@@ -90,6 +91,29 @@ export function Settings(): JSX.Element {
   const onImport = async (e: Event) => {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (f && (await importState(f))) location.reload();
+  };
+
+  // Diagnose: die letzten Log-Zeilen (redigiert) anzeigen, kopieren, exportieren.
+  const [logs, setLogs] = createSignal<string[]>([]);
+  const [logsShown, setLogsShown] = createSignal(false);
+  const loadLogs = async () => {
+    try {
+      setLogs(await recentLogs());
+      setLogsShown(true);
+    } catch {
+      /* egal */
+    }
+  };
+  const copyLogs = () => {
+    void navigator.clipboard?.writeText(logs().join("\n")).catch(() => {});
+  };
+  const exportLogs = () => {
+    const blob = new Blob([logs().join("\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `vindex-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const pickTheme = (t: Theme) => {
@@ -249,6 +273,29 @@ export function Settings(): JSX.Element {
           </select>
         </div>
       </div>
+
+      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
+        <h2 style={{ "font-size": "14px" }}>Diagnose</h2>
+      </div>
+      <div class="controls" style={{ "margin-bottom": logsShown() ? "10px" : "18px" }}>
+        <button class="chip" onClick={() => void loadLogs()}>
+          {logsShown() ? "Aktualisieren" : "Logs anzeigen"}
+        </button>
+        <Show when={logsShown()}>
+          <button class="chip" onClick={copyLogs}>
+            Kopieren
+          </button>
+          <button class="chip" onClick={exportLogs}>
+            Exportieren
+          </button>
+          <button class="chip" onClick={() => setLogsShown(false)}>
+            Ausblenden
+          </button>
+        </Show>
+      </div>
+      <Show when={logsShown()}>
+        <pre class="logbox">{logs().length ? logs().join("\n") : "Keine Log-Zeilen."}</pre>
+      </Show>
 
       <Show when={settings()} fallback={<div class="spinner" />}>
         {(s) => (

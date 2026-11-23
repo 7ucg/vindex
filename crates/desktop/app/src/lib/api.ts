@@ -83,6 +83,10 @@ export function setAlwaysOnTop(on: boolean): Promise<void> {
   return invoke("set_always_on_top", { on });
 }
 
+export function recentLogs(): Promise<string[]> {
+  return invoke<string[]>("recent_logs");
+}
+
 export function seasons(url: string): Promise<number[]> {
   return invoke<number[]>("seasons", { url });
 }

@@ -6,6 +6,7 @@
 
 mod config;
 mod downloads;
+mod logbuf;
 mod stream_proxy;
 
 use std::path::PathBuf;
@@ -22,6 +23,7 @@ struct AppState {
     proxy: Arc<stream_proxy::Proxy>,
     downloads: Arc<downloads::Downloads>,
     config: Mutex<config::DesktopConfig>,
+    logs: logbuf::LogBuf,
 }
 
 impl AppState {
@@ -194,6 +196,12 @@ async fn episodes(
 #[tauri::command]
 fn set_always_on_top(on: bool, window: tauri::WebviewWindow) -> Result<(), String> {
     window.set_always_on_top(on).map_err(|e| e.to_string())
+}
+
+/// Letzte Log-Zeilen fürs Diagnose-Panel (redigiert durch die Logging-Disziplin).
+#[tauri::command]
+fn recent_logs(state: State<'_, AppState>) -> Vec<String> {
+    logbuf::snapshot(&state.logs)
 }
 
 #[tauri::command]
@@ -568,10 +576,14 @@ pub fn run() {
                 "info,vindex_desktop_app_lib=debug,vindex_core=debug",
             )
         });
+    // Ringpuffer für die letzten Log-Zeilen (Diagnose-Panel); teet nach stderr.
+    let logs = logbuf::new_buffer();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
+        .with_writer(logbuf::BufferMaker::new(logs.clone()))
         .try_init();
+    let logs_for_state = logs.clone();
 
     // Settings früh laden (setzt u. a. den obscura-Pfad in core::browser).
     let _ = core::config::Settings::load();
@@ -583,7 +595,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             build_tray(app.handle())?;
 
             let backend = Backend::new().map_err(|e| {
@@ -602,6 +614,7 @@ pub fn run() {
                 proxy,
                 downloads,
                 config: Mutex::new(config::load()),
+                logs: logs_for_state.clone(),
             });
             Ok(())
         })
@@ -613,6 +626,7 @@ pub fn run() {
             episodes,
             resolve_playback,
             set_always_on_top,
+            recent_logs,
             title_meta,
             cover,
             proxy_prefix,
