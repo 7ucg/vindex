@@ -70,7 +70,8 @@ const GENRES: Record<Portal, { slug: string; label: string }[]> = {
   ].map(([slug, label]) => ({ slug, label })),
 };
 
-// Jahr-Filter (aniworld/serienstream unterstützen „…/jahr/<jahr>"; filmo nicht).
+// Jahr-Filter für alle drei Portale: aniworld/serienstream live über „…/jahr/<jahr>",
+// filmo offline über den Index (dort steht das Jahr je Titel).
 const YEARS: number[] = Array.from({ length: new Date().getFullYear() - 1969 }, (_, i) =>
   new Date().getFullYear() - i,
 );
@@ -279,21 +280,19 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               {(g) => <option value={g.slug}>{g.label}</option>}
             </For>
           </select>
-          <Show when={props.portal !== "filmo"}>
-            <select
-              class="cfg-input"
-              style={{ "max-width": "110px" }}
-              value={year() || ""}
-              onChange={(e) => {
-                const y = parseInt(e.currentTarget.value, 10) || 0;
-                setYear(y);
-                if (y) setGenre("");
-              }}
-            >
-              <option value="">Alle Jahre</option>
-              <For each={YEARS}>{(y) => <option value={y}>{y}</option>}</For>
-            </select>
-          </Show>
+          <select
+            class="cfg-input"
+            style={{ "max-width": "110px" }}
+            value={year() || ""}
+            onChange={(e) => {
+              const y = parseInt(e.currentTarget.value, 10) || 0;
+              setYear(y);
+              if (y) setGenre("");
+            }}
+          >
+            <option value="">Alle Jahre</option>
+            <For each={YEARS}>{(y) => <option value={y}>{y}</option>}</For>
+          </select>
           <Show when={(lib() ?? []).length > 0}>
             <button
               class="chip"
