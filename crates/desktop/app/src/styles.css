@@ -1213,3 +1213,23 @@ button:focus:not(:focus-visible) {
   object-fit: cover;
   display: block;
 }
+
+/* Player-Topbar-Buttons: nie umbrechen, kompakter, flach auf dem Video. */
+.player-top .chip {
+  white-space: nowrap;
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  font-size: 12px;
+  box-shadow: none;
+}
+.player-tools {
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.player-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
