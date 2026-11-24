@@ -354,6 +354,10 @@ a {
 }
 .card {
   cursor: pointer;
+  /* Off-Screen-Karten überspringt die Engine beim Rendern (flüssig bei Tausenden
+     Titeln). contain-intrinsic-size hält den Scrollbalken stabil. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
 }
 .poster {
   position: relative;
@@ -872,6 +876,8 @@ button:focus:not(:focus-visible) {
   border-radius: 10px;
   cursor: pointer;
   border: 1px solid transparent;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 52px;
 }
 .list-row:hover {
   background: var(--surface);
