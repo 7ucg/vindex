@@ -1233,3 +1233,20 @@ button:focus:not(:focus-visible) {
   text-overflow: ellipsis;
   min-width: 0;
 }
+
+/* Untertitel-Delay-Anzeige im Player (nur wenn ein Versatz gesetzt ist). */
+.sub-delay-badge {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  z-index: 3;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(18, 16, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  text-shadow: 0 1px 3px #000;
+  transition: opacity 0.25s;
+}

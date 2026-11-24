@@ -91,6 +91,21 @@ export function Player(props: { playback: Playback }): JSX.Element {
     video.pause();
     video.currentTime += dir / 30;
   };
+  // Untertitel-Delay: verschiebt die Cues des aktiven Tracks (negativ = früher).
+  const [subDelay, setSubDelay] = createSignal(0);
+  const shiftSubs = (delta: number) => {
+    const v = video;
+    if (!v) return;
+    const track = Array.from(v.textTracks).find((t) => t.mode === "showing");
+    const cues = track?.cues;
+    if (!cues) return;
+    for (let i = 0; i < cues.length; i++) {
+      const c = cues[i] as VTTCue;
+      c.startTime = Math.max(0, c.startTime + delta);
+      c.endTime = Math.max(c.startTime, c.endTime + delta);
+    }
+    setSubDelay((d) => Math.round((d + delta) * 10) / 10);
+  };
   const screenshot = () => {
     const v = video;
     if (!v || !v.videoWidth) return;
@@ -327,6 +342,12 @@ export function Player(props: { playback: Playback }): JSX.Element {
         break;
       case "a":
         markLoop();
+        break;
+      case "g":
+        shiftSubs(-0.5);
+        break;
+      case "h":
+        shiftSubs(0.5);
         break;
       case "Escape":
         closePlayer();
@@ -629,10 +650,17 @@ export function Player(props: { playback: Playback }): JSX.Element {
         )}
       </Show>
 
+      <Show when={subDelay() !== 0}>
+        <div class="sub-delay-badge" classList={{ "chrome-hidden": !ui() }}>
+          Untertitel {subDelay() > 0 ? "+" : ""}
+          {subDelay()}s
+        </div>
+      </Show>
+
       <div class="player-hint" classList={{ "chrome-hidden": !ui() }}>
         Space Play · ←/→ 5s · ⇧←/→ 30s · J/L 10s · ↑/↓ oder Scroll Lautstärke · M stumm · F
-        Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · 0–9 springen ·
-        Esc schließen
+        Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · G/H UT-Delay ·
+        0–9 springen · Esc schließen
       </div>
     </div>
   );
