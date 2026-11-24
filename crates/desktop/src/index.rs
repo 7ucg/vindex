@@ -391,13 +391,3 @@ pub fn has_title(url: &str) -> bool {
     )
     .is_ok()
 }
-
-/// Existiert die Portal-DB (Katalog/Discover kommen dann aus dem Index)?
-pub fn has_portal(portal: &str) -> bool {
-    std::path::Path::new(&format!("{}/{}.db", index_dir(), portal)).exists()
-}
-
-/// Mindestens eine Portal-DB vorhanden?
-pub fn any_available() -> bool {
-    PORTALS.iter().any(|&p| has_portal(p))
-}

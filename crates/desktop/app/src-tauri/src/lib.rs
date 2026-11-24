@@ -149,16 +149,12 @@ fn app_info() -> AppInfo {
 
 #[tauri::command]
 async fn search(keyword: String, state: State<'_, AppState>) -> Result<Vec<SearchHitDto>, String> {
-    let hits = state
+    let (hits, from_index) = state
         .backend
         .search(&keyword)
         .await
         .map_err(|e| e.to_string())?;
-    let source = if vindex_desktop::index_available() {
-        "db"
-    } else {
-        "live"
-    };
+    let source = if from_index { "db" } else { "live" };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {
@@ -171,16 +167,12 @@ async fn search(keyword: String, state: State<'_, AppState>) -> Result<Vec<Searc
 
 #[tauri::command]
 async fn catalog(portal: String, state: State<'_, AppState>) -> Result<Vec<SearchHitDto>, String> {
-    let hits = state
+    let (hits, from_index) = state
         .backend
         .catalog(&portal)
         .await
         .map_err(|e| e.to_string())?;
-    let source = if vindex_desktop::index_has_portal(&portal) {
-        "db"
-    } else {
-        "live"
-    };
+    let source = if from_index { "db" } else { "live" };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {
@@ -199,16 +191,12 @@ async fn discover(
     year: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchHitDto>, String> {
-    let hits = state
+    let (hits, from_index) = state
         .backend
         .discover(&portal, genre.as_deref(), year)
         .await
         .map_err(|e| e.to_string())?;
-    let source = if vindex_desktop::index_has_portal(&portal) {
-        "db"
-    } else {
-        "live"
-    };
+    let source = if from_index { "db" } else { "live" };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {

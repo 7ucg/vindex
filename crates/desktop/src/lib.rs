@@ -22,16 +22,6 @@ pub fn ensure_index_unpacked(src_dir: &str, dest_dir: &str) -> std::io::Result<(
     index::ensure_unpacked(src_dir, dest_dir)
 }
 
-/// Kommt der Katalog/Discover dieses Portals aus dem lokalen Index?
-pub fn index_has_portal(portal: &str) -> bool {
-    index::has_portal(portal)
-}
-
-/// Ist mindestens eine Portal-DB vorhanden (Suche offline)?
-pub fn index_available() -> bool {
-    index::any_available()
-}
-
 /// Steht dieser Titel im lokalen Index?
 pub fn index_has_title(url: &str) -> bool {
     index::has_title(url)
@@ -140,16 +130,17 @@ impl Backend {
     }
 
     /// Titel-Suche (Teilstring) über den aniworld.to-Katalog.
-    pub async fn search(&self, keyword: &str) -> Result<Vec<SearchHit>> {
+    /// Liefert die Treffer plus die echte Herkunft (`true` = aus dem Index).
+    pub async fn search(&self, keyword: &str) -> Result<(Vec<SearchHit>, bool)> {
         // Zuerst der lokale Index (alle drei Portale, offline). Nur wenn er leer
         // bleibt (kein Index vorhanden), fällt es auf den Live-Katalog zurück.
         let hits = index::search(keyword);
         if !hits.is_empty() {
-            return Ok(hits);
+            return Ok((hits, true));
         }
         let needle = keyword.to_lowercase();
         let entries = site::aniworld::fetch_catalog(&self.client).await?;
-        Ok(entries
+        let live = entries
             .into_iter()
             .filter(|e| e.title.to_lowercase().contains(&needle))
             .take(50)
@@ -157,7 +148,8 @@ impl Backend {
                 url: format!("{}/anime/stream/{}", core::model::BASE, e.slug),
                 title: e.title,
             })
-            .collect())
+            .collect();
+        Ok((live, false))
     }
 
     /// Katalog eines Portals als Titel-Liste fürs Browsen (Grid).
@@ -165,13 +157,13 @@ impl Backend {
     /// aniworld liefert den alphabetischen Katalog direkt. serienstream und filmo
     /// haben portalseitig (noch) keinen durchblätterbaren Katalog im Kern — hier
     /// kommt ein `Err`, das das Frontend als „noch nicht angebunden" zeigt.
-    pub async fn catalog(&self, portal: &str) -> Result<Vec<SearchHit>> {
+    pub async fn catalog(&self, portal: &str) -> Result<(Vec<SearchHit>, bool)> {
         // Lokaler Index zuerst; nur wenn das Portal dort fehlt, live scrapen.
         // Ein vorhandener Index ist der ganze Katalog — kein Live-Fallback.
         if let Some(hits) = index::catalog(portal) {
-            return Ok(hits);
+            return Ok((hits, true));
         }
-        match portal {
+        let live = match portal {
             "aniworld" => {
                 let entries = site::aniworld::fetch_catalog(&self.client)
                     .await
@@ -231,7 +223,8 @@ impl Backend {
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"
             ))),
-        }
+        }?;
+        Ok((live, false))
     }
 
     /// Discover: gefilterte Titel-Liste (Genre oder Jahr). Ohne Filter = voller
@@ -241,7 +234,7 @@ impl Backend {
         portal: &str,
         genre: Option<&str>,
         year: Option<u32>,
-    ) -> Result<Vec<SearchHit>> {
+    ) -> Result<(Vec<SearchHit>, bool)> {
         if genre.is_none() && year.is_none() {
             return self.catalog(portal).await;
         }
@@ -264,9 +257,9 @@ impl Backend {
         };
         // Lokaler Index zuerst (offline gefiltert); nur ohne Index live scrapen.
         if let Some(hits) = index::discover(portal, genre, year) {
-            return Ok(hits);
+            return Ok((hits, true));
         }
-        match portal {
+        let live = match portal {
             "aniworld" => {
                 let base = core::model::BASE;
                 let url = match genre {
@@ -319,7 +312,8 @@ impl Backend {
             other => Err(core::error::Error::Parse(format!(
                 "unbekanntes Portal: {other}"
             ))),
-        }
+        }?;
+        Ok((live, false))
     }
 
     /// Verfügbare Sprachen für einen Titel (Film-URL oder Episoden-URL). Für filmo
