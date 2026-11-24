@@ -33,6 +33,8 @@ import {
 import { rememberTitleUrl } from "../lib/titlemap";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
+const HOSTERS = ["VOE", "Vidoza", "Doodstream", "Filemoon", "Vidmoly", "SpeedFiles"];
+const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
@@ -81,6 +83,9 @@ export function Detail(): JSX.Element {
   const [playErr, setPlayErr] = createSignal<string | null>(null);
   // Sprach-Vorwahl für die Wiedergabe ("" = Standard aus den Einstellungen).
   const [lang, setLang] = createSignal("");
+  // Optionale Hoster-/Qualitäts-Vorwahl pro Download ("" = Einstellungen).
+  const [hoster, setHoster] = createSignal("");
+  const [quality, setQuality] = createSignal("");
   // Tatsächlich verfügbare Sprachen des Titels (Film-URL bzw. erste Episode).
   const [langs] = createResource(
     () => (isMovie ? sel.url : (eps()?.[0]?.url ?? null)),
@@ -117,7 +122,7 @@ export function Detail(): JSX.Element {
   };
   const loadMovie = async () => {
     try {
-      await startDownload(sel.url, sanitize(sel.title), sel.title, lang());
+      await startDownload(sel.url, sanitize(sel.title), sel.title, lang(), hoster(), quality());
       setView("downloads");
     } catch (e) {
       setPlayErr(String(e));
@@ -150,7 +155,7 @@ export function Detail(): JSX.Element {
 
   const enqueue = (e: Episode) => {
     const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
-    return startDownload(e.url, epBase(e), title, lang());
+    return startDownload(e.url, epBase(e), title, lang(), hoster(), quality());
   };
 
   // Bereits heruntergeladene Folgen erkennen (Bibliothek) → direktes Offline-Abspielen.
@@ -370,6 +375,26 @@ export function Detail(): JSX.Element {
             keine Sprache gefunden
           </span>
         </Show>
+        <span class="sleep-label">Hoster</span>
+        <select
+          class="cfg-input"
+          style={{ "max-width": "150px" }}
+          value={hoster()}
+          onChange={(e) => setHoster(e.currentTarget.value)}
+        >
+          <option value="">Automatisch</option>
+          <For each={HOSTERS}>{(h) => <option value={h}>{h}</option>}</For>
+        </select>
+        <span class="sleep-label">Max. Qualität</span>
+        <select
+          class="cfg-input"
+          style={{ "max-width": "120px" }}
+          value={quality()}
+          onChange={(e) => setQuality(e.currentTarget.value)}
+        >
+          <option value="">Standard</option>
+          <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
+        </select>
       </div>
 
       <Show when={isMovie}>

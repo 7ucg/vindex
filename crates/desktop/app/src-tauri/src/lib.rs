@@ -454,6 +454,8 @@ fn start_download(
     file_name: String,
     title: String,
     lang: Option<String>,
+    hoster: Option<String>,
+    max_quality: Option<String>,
     state: State<'_, AppState>,
 ) -> u64 {
     use std::str::FromStr;
@@ -466,6 +468,29 @@ fn start_download(
         .and_then(|l| core::model::Language::from_str(l).ok())
     {
         overrides.language = Some(l);
+    }
+    // Optionale Hoster-Vorwahl: der gewählte Hoster zuerst, dann die Default-Reihenfolge
+    // als Fallback (so bleibt der Download robust, wenn der Wunsch-Hoster fehlt).
+    if let Some(h) = hoster
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(vindex_desktop::Backend::hoster_by_name)
+    {
+        let mut order = vec![h];
+        for d in settings.effective_hosters() {
+            if d != h {
+                order.push(d);
+            }
+        }
+        overrides.hosters = Some(order);
+    }
+    // Optionale Qualitäts-Obergrenze pro Download.
+    if let Some(q) = max_quality
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|q| core::model::Quality::from_str(q).ok())
+    {
+        overrides.max_quality = Some(q);
     }
     downloads::start(
         state.downloads.clone(),

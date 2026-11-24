@@ -229,8 +229,17 @@ export function startDownload(
   fileName: string,
   title: string,
   lang?: string,
+  hoster?: string,
+  maxQuality?: string,
 ): Promise<number> {
-  return invoke<number>("start_download", { url, fileName, title, lang: lang ?? null });
+  return invoke<number>("start_download", {
+    url,
+    fileName,
+    title,
+    lang: lang ?? null,
+    hoster: hoster || null,
+    maxQuality: maxQuality || null,
+  });
 }
 
 export function cancelDownload(id: number): Promise<void> {
