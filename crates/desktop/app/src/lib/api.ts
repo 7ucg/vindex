@@ -62,8 +62,18 @@ export function catalog(portal: string): Promise<SearchHit[]> {
 }
 
 /** Nach Genre oder Jahr gefiltert; ohne Filter = voller Katalog. */
-export function discover(portal: string, genre?: string, year?: number): Promise<SearchHit[]> {
-  return invoke<SearchHit[]>("discover", { portal, genre: genre || null, year: year ?? null });
+export function discover(
+  portal: string,
+  genre?: string,
+  year?: number,
+  language?: string,
+): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("discover", {
+    portal,
+    genre: genre || null,
+    year: year ?? null,
+    language: language || null,
+  });
 }
 
 export interface Episode {
@@ -180,8 +190,14 @@ export interface DesktopConfig {
   max_quality: string | null;
   min_quality: string | null;
   bandwidth_kib: number | null;
+  download_delay_ms: number | null;
   native_hls: boolean | null;
   no_ffmpeg: boolean | null;
+}
+
+/** Mindestabstand zwischen Download-Starts (ms, 0 = aus). */
+export function setDownloadDelay(ms: number): Promise<void> {
+  return invoke("set_download_delay", { ms });
 }
 
 export interface PlatformInfo {

@@ -244,10 +244,22 @@ impl Backend {
         portal: &str,
         genre: Option<&str>,
         year: Option<u32>,
+        language: Option<&str>,
     ) -> Result<(Vec<SearchHit>, bool)> {
-        if genre.is_none() && year.is_none() {
+        if genre.is_none() && year.is_none() && language.is_none() {
             return self.catalog(portal).await;
         }
+        // Sprache gegen die bekannten Varianten prüfen (geht ohnehin parametrisiert
+        // in die Abfrage, aber unbekannte Werte früh ablehnen).
+        use std::str::FromStr;
+        let language = match language {
+            Some(l) if !l.is_empty() => {
+                core::model::Language::from_str(l)
+                    .map_err(|_| core::error::Error::Parse("ungültige Sprache".into()))?;
+                Some(l)
+            }
+            _ => None,
+        };
         // Genre-Slug streng validieren — nie roh in eine URL.
         let genre = match genre {
             Some(g)
@@ -266,8 +278,14 @@ impl Backend {
             None => None,
         };
         // Lokaler Index zuerst (offline gefiltert); nur ohne Index live scrapen.
-        if let Some(hits) = index::discover(portal, genre, year) {
+        if let Some(hits) = index::discover(portal, genre, year, language) {
             return Ok((hits, true));
+        }
+        // Der Live-Pfad kann nicht nach Sprache filtern — die braucht den Index.
+        if language.is_some() {
+            return Err(core::error::Error::Parse(
+                "Sprach-Filter braucht den lokalen Index".into(),
+            ));
         }
         let live = match portal {
             "aniworld" => {

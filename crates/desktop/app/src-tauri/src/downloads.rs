@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -65,6 +66,10 @@ pub struct Downloads {
     sched: Mutex<Sched>,
     /// Globale Bandbreitenbegrenzung über alle Downloads (0 = unbegrenzt).
     global_rate: Arc<RateLimiter>,
+    /// Mindestabstand zwischen Download-Starts in ms (0 = aus).
+    start_delay_ms: AtomicU64,
+    /// Nächster frühester Start-Zeitpunkt (staffelt die Starts).
+    last_start: Mutex<Instant>,
 }
 
 impl Default for Downloads {
@@ -77,6 +82,8 @@ impl Default for Downloads {
                 running: 0,
             }),
             global_rate: Arc::new(RateLimiter::new(0)),
+            start_delay_ms: AtomicU64::new(0),
+            last_start: Mutex::new(Instant::now()),
         }
     }
 }
@@ -155,6 +162,11 @@ impl Downloads {
     /// Globale Bandbreitenbegrenzung setzen (Bytes/s, 0 = unbegrenzt).
     pub fn set_bandwidth(&self, bytes_per_sec: u64) {
         self.global_rate.set_rate(bytes_per_sec);
+    }
+
+    /// Mindestabstand zwischen Download-Starts setzen (ms, 0 = aus).
+    pub fn set_start_delay(&self, ms: u64) {
+        self.start_delay_ms.store(ms, Ordering::Relaxed);
     }
 
     /// Bandbreitenbegrenzung eines einzelnen Downloads (Bytes/s, 0 = unbegrenzt).
@@ -282,6 +294,23 @@ pub fn start(
             }
             release_slot(&downloads);
             return;
+        }
+
+        // Optionaler Mindestabstand zwischen Download-Starts (staffelt die Starts,
+        // damit der Hoster nicht mit mehreren gleichzeitig getroffen wird).
+        let delay_ms = downloads.start_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            let wait = {
+                let gap = std::time::Duration::from_millis(delay_ms);
+                let now = Instant::now();
+                let mut last = downloads.last_start.lock().unwrap();
+                let next = std::cmp::max(*last + gap, now);
+                *last = next;
+                next.saturating_duration_since(now)
+            };
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
         }
 
         // Sink: Fortschritt in die Job-Sicht schreiben und als Event rausschicken.

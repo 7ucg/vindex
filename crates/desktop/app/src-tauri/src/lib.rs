@@ -189,11 +189,12 @@ async fn discover(
     portal: String,
     genre: Option<String>,
     year: Option<u32>,
+    language: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchHitDto>, String> {
     let (hits, from_index) = state
         .backend
-        .discover(&portal, genre.as_deref(), year)
+        .discover(&portal, genre.as_deref(), year, language.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     let source = if from_index { "db" } else { "live" };
@@ -564,6 +565,15 @@ fn set_bandwidth_limit(kib: u64, state: State<'_, AppState>) -> Result<(), Strin
     state.downloads.set_bandwidth(kib.saturating_mul(1024));
     let mut cfg = state.config.lock().unwrap();
     cfg.bandwidth_kib = if kib == 0 { None } else { Some(kib) };
+    config::save(&cfg)
+}
+
+/// Mindestabstand zwischen Download-Starts setzen (ms; 0 = aus) und persistieren.
+#[tauri::command]
+fn set_download_delay(ms: u64, state: State<'_, AppState>) -> Result<(), String> {
+    state.downloads.set_start_delay(ms);
+    let mut cfg = state.config.lock().unwrap();
+    cfg.download_delay_ms = if ms == 0 { None } else { Some(ms) };
     config::save(&cfg)
 }
 
@@ -1175,6 +1185,9 @@ pub fn run() {
             if let Some(kib) = cfg.bandwidth_kib {
                 downloads.set_bandwidth(kib.saturating_mul(1024));
             }
+            if let Some(ms) = cfg.download_delay_ms {
+                downloads.set_start_delay(ms);
+            }
             app.manage(AppState {
                 backend,
                 proxy,
@@ -1209,6 +1222,7 @@ pub fn run() {
             pause_download,
             resume_download,
             set_bandwidth_limit,
+            set_download_delay,
             set_download_rate,
             move_download,
             network_status,

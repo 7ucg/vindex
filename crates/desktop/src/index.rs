@@ -208,22 +208,36 @@ pub fn catalog(portal: &str) -> Option<Vec<SearchHit>> {
 /// Discover nach Genre und/oder Jahr. Genre-Slug (`science-fiction`) wird gegen
 /// die als JSON-Text gespeicherten Anzeige-Genres gematcht; Jahr gegen die
 /// (ggf. als Spanne gespeicherte) Jahres-Textspalte. `None` = Portal nicht im Index.
-pub fn discover(portal: &str, genre: Option<&str>, year: Option<u32>) -> Option<Vec<SearchHit>> {
+pub fn discover(
+    portal: &str,
+    genre: Option<&str>,
+    year: Option<u32>,
+    language: Option<&str>,
+) -> Option<Vec<SearchHit>> {
     let conn = open(portal)?;
-    let mut sql = String::from("SELECT name, url FROM title WHERE 1=1");
+    // Sprach-Filter braucht den Join auf die Hoster-Links (Sprache pro Folge).
+    let mut sql = String::from("SELECT DISTINCT t.name, t.url FROM title t");
+    if language.is_some() {
+        sql.push_str(" JOIN episode e ON e.title_id = t.id JOIN link l ON l.episode_id = e.id");
+    }
+    sql.push_str(" WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(g) = genre {
-        sql.push_str(" AND lower(genres) LIKE ?");
+        sql.push_str(" AND lower(t.genres) LIKE ?");
         args.push(Box::new(format!(
             "%{}%",
             g.replace('-', " ").to_lowercase()
         )));
     }
     if let Some(y) = year {
-        sql.push_str(" AND year LIKE ?");
+        sql.push_str(" AND t.year LIKE ?");
         args.push(Box::new(format!("%{y}%")));
     }
-    sql.push_str(" ORDER BY name");
+    if let Some(l) = language {
+        sql.push_str(" AND l.language = ?");
+        args.push(Box::new(l.to_string()));
+    }
+    sql.push_str(" ORDER BY t.name");
     let mut stmt = conn.prepare(&sql).ok()?;
     let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt

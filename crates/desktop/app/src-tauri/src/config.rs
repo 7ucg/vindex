@@ -20,6 +20,9 @@ pub struct DesktopConfig {
     /// Globale Bandbreitenbegrenzung in KiB/s (0 oder None = unbegrenzt).
     #[serde(default)]
     pub bandwidth_kib: Option<u64>,
+    /// Mindestabstand zwischen Download-Starts in ms (0 oder None = aus).
+    #[serde(default)]
+    pub download_delay_ms: Option<u64>,
     /// Anti-Bot Stufe 2 (TLS-Impersonate) einschalten. None = Kern-Default.
     #[serde(default)]
     pub impersonate: Option<bool>,

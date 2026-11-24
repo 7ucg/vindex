@@ -7,6 +7,7 @@ import {
   getConfig,
   setConfig,
   setBandwidthLimit,
+  setDownloadDelay,
   pickDownloadFolder,
   recentLogs,
   networkStatus,
@@ -105,6 +106,7 @@ export function Settings(): JSX.Element {
     max_quality: null,
     min_quality: null,
     bandwidth_kib: null,
+    download_delay_ms: null,
     native_hls: null,
     no_ffmpeg: null,
   });
@@ -126,6 +128,11 @@ export function Settings(): JSX.Element {
     const kib = Math.max(0, Math.floor(Number(v) || 0));
     setCfg({ ...cfg(), bandwidth_kib: kib === 0 ? null : kib });
     void setBandwidthLimit(kib).catch(() => {});
+  };
+  const updateDelay = (v: string) => {
+    const ms = Math.max(0, Math.floor(Number(v) || 0));
+    setCfg({ ...cfg(), download_delay_ms: ms === 0 ? null : ms });
+    void setDownloadDelay(ms).catch(() => {});
   };
 
   // Netzwerk: DNS fest 1.1.1.1; Impersonate (Stufe 2) + obscura (Stufe 3) live, Proxy nach Neustart.
@@ -408,6 +415,18 @@ export function Settings(): JSX.Element {
             placeholder="0"
             value={cfg().bandwidth_kib ?? ""}
             onChange={(e) => updateBandwidth(e.currentTarget.value)}
+          />
+        </div>
+        <div class="field">
+          <label>Abstand zwischen Download-Starts (ms, 0 = aus)</label>
+          <input
+            class="cfg-input"
+            type="number"
+            min="0"
+            step="250"
+            placeholder="0"
+            value={cfg().download_delay_ms ?? ""}
+            onChange={(e) => updateDelay(e.currentTarget.value)}
           />
         </div>
         <div class="field">

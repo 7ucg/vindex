@@ -76,6 +76,9 @@ const YEARS: number[] = Array.from({ length: new Date().getFullYear() - 1969 }, 
   new Date().getFullYear() - i,
 );
 
+// Sprach-Filter (über den Index): nur Titel mit einem Hoster-Link in der Sprache.
+const FILTER_LANGS = ["German Dub", "German Sub", "English Sub", "English Dub"];
+
 const LAYOUT_KEY = "vindex:portallayout";
 function readLayout(): Layout {
   try {
@@ -104,9 +107,10 @@ const BATCH = 60;
 export function PortalView(props: { portal: Portal }): JSX.Element {
   const [genre, setGenre] = createSignal("");
   const [year, setYear] = createSignal(0);
+  const [flang, setFlang] = createSignal("");
   const [items] = createResource(
-    () => ({ portal: props.portal, genre: genre(), year: year() }),
-    (q) => discover(q.portal, q.genre || undefined, q.year || undefined),
+    () => ({ portal: props.portal, genre: genre(), year: year(), language: flang() }),
+    (q) => discover(q.portal, q.genre || undefined, q.year || undefined, q.language || undefined),
   );
   const [lib] = createResource(library);
   const [onlyLib, setOnlyLib] = createSignal(false);
@@ -116,6 +120,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     void props.portal;
     setGenre("");
     setYear(0);
+    setFlang("");
   });
   const [layout, setLayoutSig] = createSignal<Layout>(readLayout());
   const setLayout = (l: Layout) => {
@@ -292,6 +297,15 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           >
             <option value="">Alle Jahre</option>
             <For each={YEARS}>{(y) => <option value={y}>{y}</option>}</For>
+          </select>
+          <select
+            class="cfg-input"
+            style={{ "max-width": "140px" }}
+            value={flang()}
+            onChange={(e) => setFlang(e.currentTarget.value)}
+          >
+            <option value="">Alle Sprachen</option>
+            <For each={FILTER_LANGS}>{(l) => <option value={l}>{l}</option>}</For>
           </select>
           <Show when={(lib() ?? []).length > 0}>
             <button
