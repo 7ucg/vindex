@@ -1,6 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { resolvePlayback, aniskip, setAlwaysOnTop, type SkipInterval } from "../lib/api";
 import { getCurrentWindow, LogicalSize, type PhysicalSize } from "@tauri-apps/api/window";
+import { actionForKey } from "../lib/keybindings";
 import {
   closePlayer,
   openPlayer,
@@ -313,79 +314,82 @@ export function Player(props: { playback: Playback }): JSX.Element {
   const keys = (e: KeyboardEvent) => {
     const v = video;
     if (!v) return;
+    // Feste Tasten (nicht umbelegbar): Pfeile (±5/±30 s), Ziffern (0–9), Escape.
     switch (e.key) {
-      case " ":
-      case "k":
-        e.preventDefault();
-        v.paused ? void v.play() : v.pause();
-        break;
       case "ArrowLeft":
         v.currentTime -= e.shiftKey ? 30 : 5;
-        break;
+        return;
       case "ArrowRight":
         v.currentTime += e.shiftKey ? 30 : 5;
-        break;
-      case "j":
-        v.currentTime -= 10;
-        break;
-      case "l":
-        v.currentTime += 10;
-        break;
+        return;
       case "ArrowUp":
         e.preventDefault();
         v.volume = Math.min(1, v.volume + 0.1);
-        break;
+        return;
       case "ArrowDown":
         e.preventDefault();
         v.volume = Math.max(0, v.volume - 0.1);
+        return;
+      case "Escape":
+        closePlayer();
+        return;
+    }
+    if (/^[0-9]$/.test(e.key)) {
+      if (v.duration) v.currentTime = (parseInt(e.key, 10) / 10) * v.duration;
+      return;
+    }
+    // Umbelegbare Aktionen.
+    switch (actionForKey(e.key)) {
+      case "playpause":
+        e.preventDefault();
+        v.paused ? void v.play() : v.pause();
         break;
-      case "m":
+      case "back10":
+        v.currentTime -= 10;
+        break;
+      case "fwd10":
+        v.currentTime += 10;
+        break;
+      case "mute":
         v.muted = !v.muted;
         break;
-      case "f":
+      case "fullscreen":
         if (document.fullscreenElement) void document.exitFullscreen();
         else void v.requestFullscreen().catch(() => {});
         break;
-      case "n":
+      case "next":
         if (hasNext()) void next();
         break;
-      case "s":
+      case "skip":
         doSkip();
         break;
-      case "p":
+      case "pip":
         void togglePip();
         break;
-      case "[":
+      case "speeddown":
         setSpeed(rate() - 0.25);
         break;
-      case "]":
+      case "speedup":
         setSpeed(rate() + 0.25);
         break;
-      case ",":
+      case "frameback":
         frameStep(-1);
         break;
-      case ".":
+      case "framefwd":
         frameStep(1);
         break;
-      case "a":
+      case "loop":
         markLoop();
         break;
-      case "g":
+      case "subback":
         shiftSubs(-0.5);
         break;
-      case "h":
+      case "subfwd":
         shiftSubs(0.5);
         break;
-      case "z":
+      case "fit":
         setFitCover(!fitCover());
         break;
-      case "Escape":
-        closePlayer();
-        break;
-      default:
-        if (/^[0-9]$/.test(e.key) && v.duration) {
-          v.currentTime = (parseInt(e.key, 10) / 10) * v.duration;
-        }
     }
   };
 

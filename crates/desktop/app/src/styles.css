@@ -1250,3 +1250,20 @@ button:focus:not(:focus-visible) {
   text-shadow: 0 1px 3px #000;
   transition: opacity 0.25s;
 }
+
+/* Tastenkürzel-Liste in den Einstellungen. */
+.set-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.set-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.set-key-label {
+  font-size: 13px;
+  color: var(--text);
+}

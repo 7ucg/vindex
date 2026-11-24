@@ -20,6 +20,14 @@ import {
 } from "../lib/api";
 
 import { exportState, importState } from "../lib/backup";
+import {
+  ACTIONS,
+  ACTION_LABELS,
+  bindings,
+  setBinding,
+  resetBindings,
+  type Action,
+} from "../lib/keybindings";
 import { incognito, setIncognito } from "../lib/private";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
@@ -84,6 +92,35 @@ export function Settings(): JSX.Element {
     aniworld: "aniworld.to",
     serienstream: "serienstream.to",
     filmo: "filmo.to",
+  };
+
+  // Player-Tastenkürzel umbelegen (Overrides lokal).
+  const [bindVer, setBindVer] = createSignal(0);
+  const [capturing, setCapturing] = createSignal<Action | null>(null);
+  // Reaktiv auf Umbelegungen reagieren (bindings() liest Modul-State).
+  const binds = () => {
+    bindVer();
+    return bindings();
+  };
+  const keyLabel = (k: string) => (k === " " ? "Leertaste" : k === "" ? "–" : k.toUpperCase());
+  const startCapture = (action: Action) => {
+    setCapturing(action);
+    const onKey = (e: KeyboardEvent) => {
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.removeEventListener("keydown", onKey, true);
+      setCapturing(null);
+      if (e.key === "Escape") return;
+      if (/^Arrow/.test(e.key) || /^[0-9]$/.test(e.key)) return;
+      setBinding(action, e.key);
+      setBindVer((n) => n + 1);
+    };
+    window.addEventListener("keydown", onKey, true);
+  };
+  const resetKeys = () => {
+    resetBindings();
+    setBindVer((n) => n + 1);
   };
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
@@ -351,6 +388,33 @@ export function Settings(): JSX.Element {
         </button>
       </div>
 
+      </Section>
+
+      <Section
+        title="Tastenkürzel"
+        desc="Player-Tasten umbelegen. Pfeile (±5/±30 s), Ziffern (springen) und Esc bleiben fest."
+      >
+        <div class="controls" style={{ "margin-bottom": "10px" }}>
+          <button class="chip" onClick={resetKeys}>
+            Auf Standard zurücksetzen
+          </button>
+        </div>
+        <div class="set-keys">
+          <For each={ACTIONS}>
+            {(a) => (
+              <div class="set-key-row">
+                <span class="set-key-label">{ACTION_LABELS[a]}</span>
+                <button
+                  class="chip"
+                  classList={{ on: capturing() === a }}
+                  onClick={() => startCapture(a)}
+                >
+                  {capturing() === a ? "Taste drücken …" : keyLabel(binds()[a])}
+                </button>
+              </div>
+            )}
+          </For>
+        </div>
       </Section>
 
       <Section
