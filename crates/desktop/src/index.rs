@@ -44,24 +44,84 @@ pub fn ensure_unpacked(src_dir: &str, dest_dir: &str) -> std::io::Result<()> {
         if up_to_date {
             continue;
         }
-        decompress(&zst, &db)?;
-        // Alte WAL-/SHM-Sidecars einer vorherigen DB verfälschen die neue — weg damit.
+        // Erst in eine Temp-Datei entpacken und prüfen, dann atomar übernehmen —
+        // ein kaputter/fremder Snapshot ersetzt nie eine intakte DB.
+        let tmp = format!("{db}.incoming");
+        decompress(&zst, &tmp)?;
+        let verdict = verify_snapshot(&tmp);
+        // Lesen im WAL-Modus hinterlässt Sidecars neben der Temp-Datei — wegräumen.
+        let _ = std::fs::remove_file(format!("{tmp}-wal"));
+        let _ = std::fs::remove_file(format!("{tmp}-shm"));
+        if verdict.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            continue;
+        }
         let _ = std::fs::remove_file(format!("{db}-wal"));
         let _ = std::fs::remove_file(format!("{db}-shm"));
+        std::fs::rename(&tmp, &db)?;
         let _ = std::fs::write(&stamp, src_len.to_string());
     }
     Ok(())
 }
 
-/// zstd-Streaming-Dekompression (großes Fenster erlaubt, falls mit `--long` gepackt).
+/// Obergrenze für entpackte Snapshots — Schutz vor Dekompressionsbomben.
+const MAX_DB_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// zstd-Streaming-Dekompression mit gedeckeltem Output (Fenster klein: 27 deckt
+/// den Exporter und die Alt-Snapshots). Bei Überschreitung: Abbruch + Rest löschen.
 fn decompress(src: &str, dst: &str) -> std::io::Result<()> {
-    use std::io::Write;
+    use std::io::{Read, Write};
     let input = std::io::BufReader::new(std::fs::File::open(src)?);
     let mut dec = zstd::stream::Decoder::new(input)?;
-    dec.window_log_max(31)?;
+    dec.window_log_max(27)?;
     let mut out = std::io::BufWriter::new(std::fs::File::create(dst)?);
-    std::io::copy(&mut dec, &mut out)?;
+    let written = std::io::copy(&mut dec.take(MAX_DB_BYTES + 1), &mut out)?;
     out.flush()?;
+    drop(out);
+    if written > MAX_DB_BYTES {
+        let _ = std::fs::remove_file(dst);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Snapshot zu groß beim Entpacken",
+        ));
+    }
+    Ok(())
+}
+
+/// Prüft eine entpackte Snapshot-DB vor der Übernahme: Integrität, keine
+/// Views/Trigger und die erwarteten Tabellen.
+fn verify_snapshot(path: &str) -> Result<(), ()> {
+    let conn =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| ())?;
+    let _ = conn.pragma_update(None, "trusted_schema", false);
+    let ok: String = conn
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(|_| ())?;
+    if ok != "ok" {
+        return Err(());
+    }
+    let extras: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','view')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| ())?;
+    if extras != 0 {
+        return Err(());
+    }
+    for table in ["title", "episode", "link"] {
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .map_err(|_| ())?;
+        if n != 1 {
+            return Err(());
+        }
+    }
     Ok(())
 }
 

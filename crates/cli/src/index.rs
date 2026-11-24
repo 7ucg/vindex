@@ -1114,15 +1114,52 @@ fn zstd_compress(src: &str, dst: &str, level: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Entpackt eine zstd-Datei (großes Fenster erlaubt, falls mit `--long` gepackt).
+/// Obergrenze für entpackte Snapshots — Schutz vor Dekompressionsbomben aus
+/// fremden Quellen. Großzügig über dem echten Bedarf (serienstream ~220 MB).
+const MAX_DB_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Entpackt eine zstd-Datei mit gedeckeltem Output. Das Fenster bleibt klein
+/// (der Exporter nutzt kein `--long`; 27 deckt auch die Alt-Snapshots). Bei
+/// Überschreitung wird abgebrochen und die halbe Datei entfernt.
 fn zstd_decompress(src: &str, dst: &str) -> anyhow::Result<()> {
-    use std::io::Write;
+    use std::io::{Read, Write};
     let input = std::io::BufReader::new(std::fs::File::open(src)?);
     let mut dec = zstd::stream::Decoder::new(input)?;
-    dec.window_log_max(31)?;
+    dec.window_log_max(27)?;
     let mut out = std::io::BufWriter::new(std::fs::File::create(dst)?);
-    std::io::copy(&mut dec, &mut out)?;
+    let written = std::io::copy(&mut dec.take(MAX_DB_BYTES + 1), &mut out)?;
     out.flush()?;
+    drop(out);
+    if written > MAX_DB_BYTES {
+        let _ = std::fs::remove_file(dst);
+        anyhow::bail!("Snapshot zu groß beim Entpacken (> {MAX_DB_BYTES} Bytes) — abgebrochen");
+    }
+    Ok(())
+}
+
+/// Prüft eine entpackte Snapshot-DB, bevor sie übernommen wird: Integrität, keine
+/// Views/Trigger (die beim Lesen Funktionen auslösen könnten) und die erwarteten
+/// Tabellen. Fremde Schnappschüsse sind nicht vertrauenswürdig.
+fn verify_snapshot(path: &str) -> anyhow::Result<()> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // Fremdes Schema nicht automatisch vertrauen.
+    let _ = conn.pragma_update(None, "trusted_schema", false);
+    let check: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    anyhow::ensure!(check == "ok", "Integritätsprüfung fehlgeschlagen: {check}");
+    let extras: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','view')",
+        [],
+        |r| r.get(0),
+    )?;
+    anyhow::ensure!(extras == 0, "Snapshot enthält Views/Trigger — abgelehnt");
+    for table in ["title", "episode", "link"] {
+        let n: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |r| r.get(0),
+        )?;
+        anyhow::ensure!(n == 1, "Tabelle {table} fehlt im Snapshot");
+    }
     Ok(())
 }
 
@@ -1157,10 +1194,23 @@ fn import(args: ImportArgs) -> anyhow::Result<()> {
             eprintln!("[{portal}] kein Schnappschuss ({zst}) — übersprungen");
             continue;
         }
-        zstd_decompress(&zst, &db)?;
-        // Alte WAL-/SHM-Sidecars neben der frisch entpackten DB würden sie verfälschen.
+        // Erst in eine Temp-Datei entpacken und prüfen, dann atomar übernehmen —
+        // ein fremder/kaputter Snapshot ersetzt nie eine intakte DB.
+        let tmp = format!("{db}.incoming");
+        zstd_decompress(&zst, &tmp)?;
+        let verdict = verify_snapshot(&tmp);
+        // Lesen im WAL-Modus hinterlässt Sidecars neben der Temp-Datei — wegräumen.
+        let _ = std::fs::remove_file(format!("{tmp}-wal"));
+        let _ = std::fs::remove_file(format!("{tmp}-shm"));
+        if let Err(e) = verdict {
+            let _ = std::fs::remove_file(&tmp);
+            eprintln!("[{portal}] Snapshot abgelehnt: {e}");
+            continue;
+        }
+        // Alte WAL-/SHM-Sidecars der Ziel-DB würden die neue verfälschen.
         let _ = std::fs::remove_file(format!("{db}-wal"));
         let _ = std::fs::remove_file(format!("{db}-shm"));
+        std::fs::rename(&tmp, &db)?;
         let sz = std::fs::metadata(&db)?.len();
         eprintln!("[{portal}] {db} ({:.1} MB)", sz as f64 / 1_048_576.0);
     }
