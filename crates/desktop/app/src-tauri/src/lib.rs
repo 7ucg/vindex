@@ -82,6 +82,8 @@ impl AppState {
 struct SearchHitDto {
     title: String,
     url: String,
+    /// Herkunft der Liste: "db" (lokaler Index) oder "live" (Portal gescrapt).
+    source: &'static str,
 }
 
 /// Laufzeit-Einstellungen, soweit das Frontend sie zeigt/braucht.
@@ -152,11 +154,17 @@ async fn search(keyword: String, state: State<'_, AppState>) -> Result<Vec<Searc
         .search(&keyword)
         .await
         .map_err(|e| e.to_string())?;
+    let source = if vindex_desktop::index_available() {
+        "db"
+    } else {
+        "live"
+    };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {
             title: h.title,
             url: h.url,
+            source,
         })
         .collect())
 }
@@ -168,11 +176,17 @@ async fn catalog(portal: String, state: State<'_, AppState>) -> Result<Vec<Searc
         .catalog(&portal)
         .await
         .map_err(|e| e.to_string())?;
+    let source = if vindex_desktop::index_has_portal(&portal) {
+        "db"
+    } else {
+        "live"
+    };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {
             title: h.title,
             url: h.url,
+            source,
         })
         .collect())
 }
@@ -190,13 +204,36 @@ async fn discover(
         .discover(&portal, genre.as_deref(), year)
         .await
         .map_err(|e| e.to_string())?;
+    let source = if vindex_desktop::index_has_portal(&portal) {
+        "db"
+    } else {
+        "live"
+    };
     Ok(hits
         .into_iter()
         .map(|h| SearchHitDto {
             title: h.title,
             url: h.url,
+            source,
         })
         .collect())
+}
+
+/// Portal-URL eines Titels per Name — für Bibliotheks-Cover, wenn keine URL
+/// gemerkt ist. `null`, wenn nichts im Index passt.
+#[tauri::command]
+fn title_url_by_name(name: String) -> Option<String> {
+    vindex_desktop::index_url_by_name(&name)
+}
+
+/// Herkunft eines einzelnen Titels: "db" (im Index) oder "live".
+#[tauri::command]
+fn data_source(url: String) -> &'static str {
+    if vindex_desktop::index_has_title(&url) {
+        "db"
+    } else {
+        "live"
+    }
 }
 
 #[tauri::command]
@@ -1041,6 +1078,8 @@ pub fn run() {
             search,
             catalog,
             discover,
+            title_url_by_name,
+            data_source,
             seasons,
             episodes,
             resolve_playback,

@@ -344,3 +344,60 @@ pub fn cover(url: &str) -> Option<Option<String>> {
     })
     .ok()
 }
+
+/// Portal-URL eines Titels per Name (für Bibliotheks-Cover, wenn keine URL
+/// gemerkt ist). Exakt zuerst, dann Präfix; über alle Portale.
+pub fn url_by_name(name: &str) -> Option<String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return None;
+    }
+    for portal in PORTALS {
+        let Some(conn) = open(portal) else { continue };
+        let exact: Option<String> = conn
+            .query_row("SELECT url FROM title WHERE name = ?1 LIMIT 1", [n], |r| {
+                r.get(0)
+            })
+            .ok();
+        if exact.is_some() {
+            return exact;
+        }
+        let like: Option<String> = conn
+            .query_row(
+                "SELECT url FROM title WHERE name LIKE ?1 ORDER BY length(name) LIMIT 1",
+                [format!("{n}%")],
+                |r| r.get(0),
+            )
+            .ok();
+        if like.is_some() {
+            return like;
+        }
+    }
+    None
+}
+
+/// Steht dieser Titel (per URL-Slug) im Index?
+pub fn has_title(url: &str) -> bool {
+    let Some(slug) = core::site::slug_from_url(url) else {
+        return false;
+    };
+    let Some(conn) = open(portal_of_url(url)) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM title WHERE slug = ?1 LIMIT 1",
+        [&slug],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// Existiert die Portal-DB (Katalog/Discover kommen dann aus dem Index)?
+pub fn has_portal(portal: &str) -> bool {
+    std::path::Path::new(&format!("{}/{}.db", index_dir(), portal)).exists()
+}
+
+/// Mindestens eine Portal-DB vorhanden?
+pub fn any_available() -> bool {
+    PORTALS.iter().any(|&p| has_portal(p))
+}

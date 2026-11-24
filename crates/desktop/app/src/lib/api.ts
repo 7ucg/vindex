@@ -12,6 +12,17 @@ export interface AppInfo {
 export interface SearchHit {
   title: string;
   url: string;
+  source?: "db" | "live";
+}
+
+/** Portal-URL eines Titels per Name (für Bibliotheks-Cover). */
+export function titleUrlByName(name: string): Promise<string | null> {
+  return invoke<string | null>("title_url_by_name", { name });
+}
+
+/** Herkunft eines Titels: "db" (lokaler Index) oder "live". */
+export function dataSource(url: string): Promise<"db" | "live"> {
+  return invoke<"db" | "live">("data_source", { url });
 }
 
 export interface AppSettings {

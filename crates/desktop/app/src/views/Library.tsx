@@ -1,15 +1,38 @@
-import { createResource, createSignal, For, Show, type JSX } from "solid-js";
+import { createResource, createSignal, For, onMount, Show, type JSX } from "solid-js";
 import {
   library,
   deleteLibraryItem,
   openLibraryItem,
   localMediaUrl,
   revealLibraryItem,
+  titleUrlByName,
   type LibraryEntry,
 } from "../lib/api";
 import { openPlayer } from "../lib/store";
 import { getTitleUrl } from "../lib/titlemap";
 import { Cover } from "./Cover";
+
+// Cover einer Bibliotheks-Gruppe: erst die gemerkte Portal-URL, sonst per
+// Titelname im lokalen Index nachschlagen. Ohne Treffer bleibt die Fläche leer.
+function LibCover(props: { name: string }): JSX.Element {
+  const [url, setUrl] = createSignal<string | null>(getTitleUrl(props.name));
+  onMount(() => {
+    if (!url()) {
+      titleUrlByName(props.name)
+        .then((u) => u && setUrl(u))
+        .catch(() => {});
+    }
+  });
+  return (
+    <Show when={url()}>
+      {(u) => (
+        <div class="lib-group-cover">
+          <Cover url={u()} title={props.name} />
+        </div>
+      )}
+    </Show>
+  );
+}
 
 function size(bytes: number): string {
   const m = bytes / (1024 * 1024);
@@ -95,13 +118,7 @@ export function Library(): JSX.Element {
         {(g) => (
           <>
             <div class="row-h" style={{ "align-items": "center", gap: "10px" }}>
-              <Show when={getTitleUrl(g.key)}>
-                {(u) => (
-                  <div class="lib-group-cover">
-                    <Cover url={u()} title={g.key} />
-                  </div>
-                )}
-              </Show>
+              <LibCover name={g.key} />
               <h2 style={{ "font-size": "15px", margin: 0 }}>{g.key}</h2>
               <span class="link">{g.items.length}</span>
             </div>

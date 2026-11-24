@@ -597,11 +597,12 @@ a {
   gap: 14px;
   padding: 14px 18px;
   background: linear-gradient(rgba(0, 0, 0, 0.65), transparent);
-  opacity: 0.001;
-  transition: opacity 0.2s;
-}
-.player-overlay:hover .player-top {
   opacity: 1;
+  transition: opacity 0.25s;
+}
+.player-top.chrome-hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 .player-title {
   font-weight: 600;
@@ -685,13 +686,16 @@ a {
   text-align: center;
   font-size: 11.5px;
   color: var(--muted);
-  opacity: 0.001;
-  transition: opacity 0.2s;
+  opacity: 0.85;
+  transition: opacity 0.25s;
   pointer-events: none;
   text-shadow: 0 1px 3px #000;
 }
-.player-overlay:hover .player-hint {
-  opacity: 0.85;
+.player-hint.chrome-hidden {
+  opacity: 0;
+}
+.player-overlay.cursor-hidden {
+  cursor: none;
 }
 .player-video {
   width: 100%;
@@ -1079,4 +1083,34 @@ button:focus:not(:focus-visible) {
   overflow: hidden;
   background: var(--surface-2);
   border: 1px solid var(--line);
+}
+
+/* Herkunfts-Badge auf Titelkarten: Index (Akzent) vs Live (dezent). */
+.src-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: linear-gradient(90deg, #7c5cff, #b14cff);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.src-badge.live {
+  background: rgba(18, 16, 26, 0.82);
+  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+/* Dasselbe Badge im Detail-Kopf, inline neben dem Titel. */
+.src-badge.inline {
+  position: static;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 10px;
+  box-shadow: none;
 }

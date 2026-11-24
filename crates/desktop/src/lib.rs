@@ -22,6 +22,26 @@ pub fn ensure_index_unpacked(src_dir: &str, dest_dir: &str) -> std::io::Result<(
     index::ensure_unpacked(src_dir, dest_dir)
 }
 
+/// Kommt der Katalog/Discover dieses Portals aus dem lokalen Index?
+pub fn index_has_portal(portal: &str) -> bool {
+    index::has_portal(portal)
+}
+
+/// Ist mindestens eine Portal-DB vorhanden (Suche offline)?
+pub fn index_available() -> bool {
+    index::any_available()
+}
+
+/// Steht dieser Titel im lokalen Index?
+pub fn index_has_title(url: &str) -> bool {
+    index::has_title(url)
+}
+
+/// Portal-URL eines Titels per Name (für Bibliotheks-Cover).
+pub fn index_url_by_name(name: &str) -> Option<String> {
+    index::url_by_name(name)
+}
+
 use std::path::PathBuf;
 
 use core::config::Settings;
@@ -147,10 +167,9 @@ impl Backend {
     /// kommt ein `Err`, das das Frontend als „noch nicht angebunden" zeigt.
     pub async fn catalog(&self, portal: &str) -> Result<Vec<SearchHit>> {
         // Lokaler Index zuerst; nur wenn das Portal dort fehlt, live scrapen.
+        // Ein vorhandener Index ist der ganze Katalog — kein Live-Fallback.
         if let Some(hits) = index::catalog(portal) {
-            if !hits.is_empty() {
-                return Ok(hits);
-            }
+            return Ok(hits);
         }
         match portal {
             "aniworld" => {
@@ -245,9 +264,7 @@ impl Backend {
         };
         // Lokaler Index zuerst (offline gefiltert); nur ohne Index live scrapen.
         if let Some(hits) = index::discover(portal, genre, year) {
-            if !hits.is_empty() {
-                return Ok(hits);
-            }
+            return Ok(hits);
         }
         match portal {
             "aniworld" => {

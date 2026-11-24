@@ -386,6 +386,19 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
                     <Show when={selectMode()}>
                       <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
                     </Show>
+                    <Show when={h.source}>
+                      <div
+                        class="src-badge"
+                        classList={{ live: h.source === "live" }}
+                        title={
+                          h.source === "db"
+                            ? "Aus lokalem Index"
+                            : "Live vom Portal geladen"
+                        }
+                      >
+                        {h.source === "db" ? "Index" : "Live"}
+                      </div>
+                    </Show>
                     <div class="play-ov" aria-hidden="true">
                       <button class="play-btn" tabindex="-1">
                         <IconPlay />

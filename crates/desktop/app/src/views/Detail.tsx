@@ -16,6 +16,7 @@ import {
   localMediaUrl,
   openExternal,
   availableLanguages,
+  dataSource,
   type Episode,
   type LangOption,
 } from "../lib/api";
@@ -62,6 +63,7 @@ export function Detail(): JSX.Element {
 
   const [seasonList] = createResource(() => (isMovie ? null : sel.url), seasons);
   const [meta] = createResource(() => sel.url, titleMeta);
+  const [src] = createResource(() => sel.url, dataSource);
   const [active, setActive] = createSignal<number | null>(null);
 
   // Sobald die Staffeln da sind, die erste vorauswählen.
@@ -244,6 +246,15 @@ export function Detail(): JSX.Element {
           ‹ Zurück
         </button>
         <h2 style={{ margin: 0 }}>{sel.title}</h2>
+        <Show when={src()}>
+          <span
+            class="src-badge inline"
+            classList={{ live: src() === "live" }}
+            title={src() === "db" ? "Aus lokalem Index" : "Live vom Portal geladen"}
+          >
+            {src() === "db" ? "Index" : "Live"}
+          </span>
+        </Show>
         <div class="coll-wrap" style={{ "margin-left": "auto" }}>
           <button class="chip" classList={{ on: collMenu() }} onClick={() => setCollMenu(!collMenu())}>
             ＋ Sammlung

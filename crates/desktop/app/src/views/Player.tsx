@@ -23,6 +23,17 @@ export function Player(props: { playback: Playback }): JSX.Element {
   let hls: import("hls.js").default | undefined;
   const [err, setErr] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
+  // Leisten (obere Toolbar + Tasten-Hinweis) blenden nach Ruhe aus; jede
+  // Mausbewegung zeigt sie wieder. Beim Pausieren bleiben sie sichtbar.
+  const [ui, setUi] = createSignal(true);
+  let hideTimer: number | undefined;
+  const poke = (): void => {
+    setUi(true);
+    clearTimeout(hideTimer);
+    hideTimer = window.setTimeout(() => {
+      if (video && !video.paused && !menuOpen()) setUi(false);
+    }, 5000);
+  };
   const [stopAfter, setStopAfter] = createSignal(false);
   const [goingNext, setGoingNext] = createSignal(false);
   const [skips, setSkips] = createSignal<SkipInterval[]>([]);
@@ -333,6 +344,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
     const src = props.playback.url;
 
     el.addEventListener("playing", () => setLoading(false));
+    el.addEventListener("canplay", () => setLoading(false));
+    el.addEventListener("loadeddata", () => setLoading(false));
     el.addEventListener("waiting", () => setLoading(true));
     el.addEventListener("error", () => {
       if (!props.playback.isHls) {
@@ -342,6 +355,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
     });
     el.addEventListener("ended", onEnded);
     el.addEventListener("timeupdate", () => {
+      // Läuft die Zeit, wird nichts mehr geladen — Spinner sicher ausblenden.
+      setLoading(false);
       const t = el.currentTime;
       const hit = skips().find((s) => t >= s.start && t < s.end - 0.3);
       setSkipTarget(hit ? { end: hit.end, label: hit.kind === "ed" ? "Outro" : "Intro" } : null);
@@ -360,6 +375,14 @@ export function Player(props: { playback: Playback }): JSX.Element {
       }
     });
     window.addEventListener("keydown", keys);
+
+    // Leisten-Auto-Hide: beim Pausieren einblenden, beim Abspielen Timer starten.
+    el.addEventListener("pause", () => {
+      setUi(true);
+      clearTimeout(hideTimer);
+    });
+    el.addEventListener("play", poke);
+    poke();
 
     // AniSkip-Zeiten holen (still, falls Jikan nicht erreichbar ist).
     const ref = props.playback.skipRef;
@@ -433,6 +456,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
     // Nur den lokalen Timer löschen — das Deadline im Store bleibt und wird nach
     // dem Remount (nächste Folge) neu bewaffnet.
     if (sleepHandle) clearTimeout(sleepHandle);
+    clearTimeout(hideTimer);
     if (extSubUrl) URL.revokeObjectURL(extSubUrl);
     // „Immer oben" gilt dem ganzen Fenster — beim Schließen zurücknehmen.
     if (onTop()) void setAlwaysOnTop(false).catch(() => {});
@@ -440,8 +464,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
   });
 
   return (
-    <div class="player-overlay">
-      <div class="player-top">
+    <div class="player-overlay" classList={{ "cursor-hidden": !ui() }} onMouseMove={poke}>
+      <div class="player-top" classList={{ "chrome-hidden": !ui() }}>
         <button class="chip" onClick={closePlayer}>
           ‹ Schließen
         </button>
@@ -605,7 +629,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
         )}
       </Show>
 
-      <div class="player-hint">
+      <div class="player-hint" classList={{ "chrome-hidden": !ui() }}>
         Space Play · ←/→ 5s · ⇧←/→ 30s · J/L 10s · ↑/↓ oder Scroll Lautstärke · M stumm · F
         Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · 0–9 springen ·
         Esc schließen
