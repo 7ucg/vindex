@@ -76,7 +76,17 @@ export function Library(): JSX.Element {
   const play = async (e: LibraryEntry) => {
     try {
       const url = await localMediaUrl(e.name);
-      openPlayer({ title: e.name, url, isHls: false });
+      // Aus „Titel SxxExx" Staffel/Folge lesen und die Portal-URL im Index
+      // nachschlagen — damit AniSkip auch bei Bibliotheks-Wiedergabe greift.
+      let skipRef: { url: string; season: number; episode: number } | undefined;
+      const m = /^(.*?)\s+S(\d+)E(\d+)/i.exec(e.name);
+      if (m && m[1].trim()) {
+        const titleUrl = await titleUrlByName(m[1].trim()).catch(() => null);
+        if (titleUrl) {
+          skipRef = { url: titleUrl, season: parseInt(m[2], 10), episode: parseInt(m[3], 10) };
+        }
+      }
+      openPlayer({ title: e.name, url, isHls: false, skipRef });
     } catch {
       void openLibraryItem(e.name).catch(() => {});
     }

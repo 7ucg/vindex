@@ -20,6 +20,10 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const JIKAN_SEARCH: &str = "https://api.jikan.moe/v4/anime";
 const JIKAN_RELATIONS: &str = "https://api.jikan.moe/v4/anime";
 
+/// AniList-GraphQL (liefert `idMal` direkt). Primäre Quelle für die MAL-ID, weil
+/// Jikan in manchen Netzen nicht erreichbar ist; Jikan bleibt Fallback.
+const ANILIST: &str = "https://graphql.anilist.co";
+
 /// Jikan erlaubt grob 3 Requests/Sekunde; zwischen Folgeabrufen (Relations) wird
 /// kurz pausiert, um nicht in die 429-Drossel zu laufen.
 const JIKAN_DELAY_MS: u64 = 400;
@@ -237,6 +241,109 @@ async fn season_chain(client: &reqwest::Client, start: u64) -> Result<Vec<u64>> 
 /// Löst die MAL-ID für `slug` + `staffel` auf. Staffel 1 nutzt direkt den
 /// Suchtreffer; höhere Staffeln folgen ab Staffel 1 der **Sequel-Kette**
 /// (`staffel`-ter Eintrag). `None`, wenn Jikan nichts Passendes liefert.
+/// Setzt eine AniList-GraphQL-Abfrage ab und gibt das geparste JSON zurück.
+async fn anilist_query(client: &reqwest::Client, body: String) -> Result<serde_json::Value> {
+    let resp = client
+        .post(ANILIST)
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .body(body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(Error::Parse(format!("anilist http {}", resp.status())));
+    }
+    let text = capped_text(resp, MAX_RESPONSE_BYTES).await?;
+    serde_json::from_str(&text).map_err(|e| Error::Parse(format!("anilist json: {e}")))
+}
+
+/// Wählt aus AniList-Treffern die Staffel-1-Fassung: Eintrag mit MAL-ID und dem
+/// frühesten Startjahr (der Ur-Serie), bevorzugt TV. Liefert (AniList-ID, MAL-ID).
+fn anilist_pick_s1(media: &[serde_json::Value]) -> Option<(i64, u64)> {
+    media
+        .iter()
+        .filter(|m| m.get("idMal").and_then(|v| v.as_u64()).is_some())
+        .min_by_key(|m| {
+            let year = m
+                .get("startDate")
+                .and_then(|d| d.get("year"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(i64::MAX);
+            let tv_rank = if m.get("format").and_then(|v| v.as_str()) == Some("TV") {
+                0
+            } else {
+                1
+            };
+            (year, tv_rank)
+        })
+        .and_then(|m| Some((m.get("id")?.as_i64()?, m.get("idMal")?.as_u64()?)))
+}
+
+/// Folgt der `SEQUEL`-Beziehung eines AniList-Eintrags zur nächsten Staffel.
+/// Deterministisch: kleinste MAL-ID unter den Sequel-Kandidaten mit MAL-ID.
+async fn anilist_sequel(client: &reqwest::Client, anilist_id: i64) -> Result<Option<(i64, u64)>> {
+    let body = serde_json::json!({
+        "query": "query($id:Int){Media(id:$id){relations{edges{relationType node{id idMal format}}}}}",
+        "variables": {"id": anilist_id}
+    })
+    .to_string();
+    let v = anilist_query(client, body).await?;
+    let edges = match v
+        .get("data")
+        .and_then(|d| d.get("Media"))
+        .and_then(|m| m.get("relations"))
+        .and_then(|r| r.get("edges"))
+        .and_then(|e| e.as_array())
+    {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let best = edges
+        .iter()
+        .filter(|e| e.get("relationType").and_then(|v| v.as_str()) == Some("SEQUEL"))
+        .filter_map(|e| e.get("node"))
+        .filter(|n| n.get("idMal").and_then(|v| v.as_u64()).is_some())
+        .filter_map(|n| Some((n.get("id")?.as_i64()?, n.get("idMal")?.as_u64()?)))
+        .min_by_key(|&(_, mal)| mal);
+    Ok(best)
+}
+
+/// MAL-ID über AniList auflösen (Suche + Staffel-Kette). `None`, wenn nichts passt.
+async fn anilist_resolve(
+    client: &reqwest::Client,
+    query: &str,
+    staffel: u32,
+) -> Result<Option<u64>> {
+    let body = serde_json::json!({
+        "query": "query($q:String){Page(perPage:8){media(search:$q,type:ANIME,sort:SEARCH_MATCH){id idMal format startDate{year}}}}",
+        "variables": {"q": query}
+    })
+    .to_string();
+    let v = anilist_query(client, body).await?;
+    let media = v
+        .get("data")
+        .and_then(|d| d.get("Page"))
+        .and_then(|p| p.get("media"))
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let Some((mut aid, mut mal)) = anilist_pick_s1(&media) else {
+        return Ok(None);
+    };
+    let mut season = 1u32;
+    while season < staffel {
+        match anilist_sequel(client, aid).await? {
+            Some((nid, nmal)) => {
+                aid = nid;
+                mal = nmal;
+                season += 1;
+            }
+            None => break,
+        }
+    }
+    Ok(Some(mal))
+}
+
 pub async fn resolve_mal_id(
     client: &reqwest::Client,
     slug: &str,
@@ -245,6 +352,10 @@ pub async fn resolve_mal_id(
     let query = slug_to_query(slug);
     if query.is_empty() {
         return Ok(None);
+    }
+    // AniList zuerst (erreichbar, liefert idMal direkt); Jikan nur als Fallback.
+    if let Ok(Some(id)) = anilist_resolve(client, &query, staffel).await {
+        return Ok(Some(id));
     }
     let entries = search_anime(client, &query).await?;
     let Some(season1) = pick_season1(&entries) else {
