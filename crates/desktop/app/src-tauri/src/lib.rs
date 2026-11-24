@@ -838,6 +838,52 @@ fn wire_bundled_binaries() {
     }
 }
 
+/// Findet den Ordner mit den mitgelieferten `<portal>.db.zst`. Im Bundle die
+/// Resources (`resource_dir/index`), im Debug zusätzlich das Repo-`index/`.
+fn bundled_zst_dir(app: &tauri::App) -> Option<std::path::PathBuf> {
+    let mut cands: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(res) = app.path().resource_dir() {
+        cands.push(res.join("index"));
+    }
+    // Repo-`index/` nur im Debug-Build (Pfad der Build-Maschine).
+    #[cfg(debug_assertions)]
+    cands.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../index"));
+    cands.into_iter().find(|p| {
+        ["aniworld", "serienstream", "filmo"]
+            .iter()
+            .any(|portal| p.join(format!("{portal}.db.zst")).is_file())
+    })
+}
+
+/// Entpackt die mitgelieferten Index-Schnappschüsse in den App-Datenordner und
+/// setzt `VINDEX_INDEX_DIR` darauf, damit die Facade offline aus dem Index liest.
+/// Eine per ENV gesetzte Dir gewinnt (z. B. Entwicklerwunsch) und wird respektiert.
+fn setup_index(app: &tauri::App) {
+    if std::env::var("VINDEX_INDEX_DIR")
+        .ok()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return;
+    }
+    let Some(src) = bundled_zst_dir(app) else {
+        tracing::info!("keine Index-Schnappschüsse gefunden — Facade bleibt live");
+        return;
+    };
+    let Ok(base) = app.path().app_data_dir() else {
+        tracing::warn!("app_data_dir nicht verfügbar — Index übersprungen");
+        return;
+    };
+    let dest = base.join("index");
+    let (src_s, dest_s) = (src.to_string_lossy(), dest.to_string_lossy().into_owned());
+    match vindex_desktop::ensure_index_unpacked(&src_s, &dest_s) {
+        Ok(()) => {
+            std::env::set_var("VINDEX_INDEX_DIR", &dest_s);
+            tracing::info!("Index bereit in {dest_s}");
+        }
+        Err(e) => tracing::warn!("Index entpacken fehlgeschlagen: {e}"),
+    }
+}
+
 /// Ist der Autostart (Login) aktiviert?
 #[tauri::command]
 fn autostart_enabled(app: tauri::AppHandle) -> bool {
@@ -960,6 +1006,10 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
             build_tray(app.handle())?;
+
+            // Mitgelieferte Index-Schnappschüsse in den App-Datenordner entpacken
+            // und VINDEX_INDEX_DIR setzen, bevor das Backend das erste Mal liest.
+            setup_index(app);
 
             let backend = Backend::new().map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("Backend-Init fehlgeschlagen: {e}"))

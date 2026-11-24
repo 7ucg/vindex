@@ -35,6 +35,11 @@
   "bundle": {
     "active": true,
     "targets": ["appimage", "deb", "nsis"],
+    "resources": {
+      "../../../../index/aniworld.db.zst": "index/aniworld.db.zst",
+      "../../../../index/serienstream.db.zst": "index/serienstream.db.zst",
+      "../../../../index/filmo.db.zst": "index/filmo.db.zst"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -13,6 +13,15 @@
 
 pub use vindex_core as core;
 
+mod index;
+
+/// Entpackt die mitgelieferten `<portal>.db.zst` aus `src_dir` in `dest_dir`
+/// (nur fehlende/veränderte). Die App ruft das beim Start auf und setzt danach
+/// `VINDEX_INDEX_DIR` auf `dest_dir`.
+pub fn ensure_index_unpacked(src_dir: &str, dest_dir: &str) -> std::io::Result<()> {
+    index::ensure_unpacked(src_dir, dest_dir)
+}
+
 use std::path::PathBuf;
 
 use core::config::Settings;
@@ -112,6 +121,12 @@ impl Backend {
 
     /// Titel-Suche (Teilstring) über den aniworld.to-Katalog.
     pub async fn search(&self, keyword: &str) -> Result<Vec<SearchHit>> {
+        // Zuerst der lokale Index (alle drei Portale, offline). Nur wenn er leer
+        // bleibt (kein Index vorhanden), fällt es auf den Live-Katalog zurück.
+        let hits = index::search(keyword);
+        if !hits.is_empty() {
+            return Ok(hits);
+        }
         let needle = keyword.to_lowercase();
         let entries = site::aniworld::fetch_catalog(&self.client).await?;
         Ok(entries
@@ -131,6 +146,12 @@ impl Backend {
     /// haben portalseitig (noch) keinen durchblätterbaren Katalog im Kern — hier
     /// kommt ein `Err`, das das Frontend als „noch nicht angebunden" zeigt.
     pub async fn catalog(&self, portal: &str) -> Result<Vec<SearchHit>> {
+        // Lokaler Index zuerst; nur wenn das Portal dort fehlt, live scrapen.
+        if let Some(hits) = index::catalog(portal) {
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
         match portal {
             "aniworld" => {
                 let entries = site::aniworld::fetch_catalog(&self.client)
@@ -222,6 +243,12 @@ impl Backend {
             Some(_) => return Err(core::error::Error::Parse("ungültiges Jahr".into())),
             None => None,
         };
+        // Lokaler Index zuerst (offline gefiltert); nur ohne Index live scrapen.
+        if let Some(hits) = index::discover(portal, genre, year) {
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
         match portal {
             "aniworld" => {
                 let base = core::model::BASE;
@@ -283,6 +310,9 @@ impl Backend {
     /// Reihenfolge, nur tatsächlich angebotene Varianten.
     pub async fn available_languages(&self, url: &str) -> Result<Vec<Language>> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if let Some(langs) = index::languages(url) {
+            return Ok(langs);
+        }
         if site::is_filmo(url) {
             let fclient = http::cookie_client()?;
             let movie = site::filmo::movie(&fclient, url).await?;
@@ -309,6 +339,9 @@ impl Backend {
                 "filmo ist ein Film, keine Serie mit Staffeln".into(),
             ));
         }
+        if let Some(s) = index::seasons(url) {
+            return Ok(s);
+        }
         let base = site::base_for_url(url);
         let slug = site::slug_from_url(url)
             .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
@@ -323,6 +356,9 @@ impl Backend {
                 "filmo ist ein Film, keine Serie mit Episoden".into(),
             ));
         }
+        if let Some(e) = index::episodes(url, season) {
+            return Ok(e);
+        }
         let base = site::base_for_url(url);
         let slug = site::slug_from_url(url)
             .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
@@ -333,12 +369,18 @@ impl Backend {
     /// Land, IMDB, Genres, Regie/Besetzung/Produktion).
     pub async fn title_meta(&self, url: &str) -> Result<core::site::TitleMeta> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if let Some(m) = index::title_meta(url) {
+            return Ok(m);
+        }
         site::title_meta(&self.client, url).await
     }
 
     /// Nur das Poster-Cover eines Titels (für das Grid, lazy pro Karte).
     pub async fn cover(&self, url: &str) -> Result<Option<String>> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
+        if let Some(poster) = index::cover(url) {
+            return Ok(poster);
+        }
         Ok(site::og_meta(&self.client, url).await?.0)
     }
 

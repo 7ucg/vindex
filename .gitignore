@@ -29,3 +29,7 @@ crates/desktop/TODO.md
 vindex-index.db*
 index-crawl.log
 HANDOVER-index.md
+# Entpackte Portal-DBs bleiben lokal; nur die komprimierten .db.zst werden geteilt.
+index/*.db
+index/*.db-wal
+index/*.db-shm
