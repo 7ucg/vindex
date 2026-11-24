@@ -1,0 +1,62 @@
+name: build
+
+# Baut die Desktop-App (crates/desktop/app) auf allen drei Plattformen und legt
+# die Bundles als Artefakte ab. Kein Release — das kommt separat mit Signing.
+# Trigger bei Bedarf einschränken (viele Minuten pro Lauf).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Systempakete (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: crates/desktop/app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/desktop/app/src-tauri
+
+      - name: Frontend-Abhängigkeiten
+        working-directory: crates/desktop/app
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle bauen
+        working-directory: crates/desktop/app
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}
+          path: crates/desktop/app/src-tauri/target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 7
