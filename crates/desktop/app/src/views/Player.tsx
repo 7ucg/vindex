@@ -1,5 +1,6 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { resolvePlayback, aniskip, setAlwaysOnTop, type SkipInterval } from "../lib/api";
+import { getCurrentWindow, LogicalSize, type PhysicalSize } from "@tauri-apps/api/window";
 import {
   closePlayer,
   openPlayer,
@@ -180,14 +181,37 @@ export function Player(props: { playback: Playback }): JSX.Element {
     void setAlwaysOnTop(next).catch(() => {});
   };
 
+  // Bild-in-Bild: echtes Browser-PiP (Windows/macOS) — fehlt es (Linux/webkitgtk),
+  // Fallback auf einen Fenster-Mini-Player (klein + immer oben).
+  const [mini, setMini] = createSignal(false);
+  let prevSize: PhysicalSize | null = null;
   const togglePip = async () => {
-    const v = video as (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> }) | undefined;
-    if (!v) return;
+    const v = video as
+      | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+      | undefined;
+    if (v && document.pictureInPictureEnabled && v.requestPictureInPicture) {
+      try {
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else await v.requestPictureInPicture();
+        return;
+      } catch {
+        /* Fallback auf Fenster-Mini-Player */
+      }
+    }
+    const win = getCurrentWindow();
     try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else await v.requestPictureInPicture?.();
+      if (!mini()) {
+        prevSize = await win.innerSize();
+        await win.setAlwaysOnTop(true);
+        await win.setSize(new LogicalSize(480, 300));
+        setMini(true);
+      } else {
+        if (prevSize) await win.setSize(prevSize);
+        await win.setAlwaysOnTop(onTop());
+        setMini(false);
+      }
     } catch {
-      /* PiP evtl. nicht verfügbar */
+      /* egal */
     }
   };
   // A/B-Loop: erst A setzen, dann B; nochmal = löschen.
@@ -487,6 +511,12 @@ export function Player(props: { playback: Playback }): JSX.Element {
     if (extSubUrl) URL.revokeObjectURL(extSubUrl);
     // „Immer oben" gilt dem ganzen Fenster — beim Schließen zurücknehmen.
     if (onTop()) void setAlwaysOnTop(false).catch(() => {});
+    // Fenster-Mini-Player beim Schließen zurücksetzen (Größe + immer-oben).
+    if (mini()) {
+      const win = getCurrentWindow();
+      if (prevSize) void win.setSize(prevSize).catch(() => {});
+      void win.setAlwaysOnTop(false).catch(() => {});
+    }
     if (hls) hls.destroy();
   });
 
