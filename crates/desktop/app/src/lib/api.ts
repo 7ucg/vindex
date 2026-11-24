@@ -25,6 +25,20 @@ export function dataSource(url: string): Promise<"db" | "live"> {
   return invoke<"db" | "live">("data_source", { url });
 }
 
+export interface IndexPortal {
+  portal: string;
+  titles: number | null;
+}
+export interface IndexInfo {
+  dir: string;
+  portals: IndexPortal[];
+}
+
+/** Wo die Index-DBs liegen und wie viele Titel je Portal. */
+export function indexInfo(): Promise<IndexInfo> {
+  return invoke<IndexInfo>("index_info");
+}
+
 export interface AppSettings {
   download_path: string;
   language: string;

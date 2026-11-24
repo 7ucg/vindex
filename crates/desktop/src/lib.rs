@@ -27,6 +27,16 @@ pub fn index_has_title(url: &str) -> bool {
     index::has_title(url)
 }
 
+/// Der aktuell genutzte Index-Ordner.
+pub fn index_dir() -> String {
+    index::dir()
+}
+
+/// Titelzahl einer Portal-DB (`None`, wenn die DB fehlt).
+pub fn index_portal_titles(portal: &str) -> Option<i64> {
+    index::portal_titles(portal)
+}
+
 /// Portal-URL eines Titels per Name (für Bibliotheks-Cover).
 pub fn index_url_by_name(name: &str) -> Option<String> {
     index::url_by_name(name)

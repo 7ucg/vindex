@@ -13,6 +13,7 @@ import {
   setImpersonate,
   setObscura,
   setProxy,
+  indexInfo,
   type DesktopConfig,
   type NetworkStatus,
 } from "../lib/api";
@@ -77,6 +78,12 @@ function Section(props: { title: string; desc?: string; children: JSX.Element })
 export function Settings(): JSX.Element {
   const [settings] = createResource(appSettings);
   const [info] = createResource(appInfo);
+  const [idx] = createResource(indexInfo);
+  const PORTAL_LABEL: Record<string, string> = {
+    aniworld: "aniworld.to",
+    serienstream: "serienstream.to",
+    filmo: "filmo.to",
+  };
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
   const [density, setDensity] = createSignal<Density>(getDensity());
@@ -285,6 +292,32 @@ export function Settings(): JSX.Element {
         />
       </div>
 
+      </Section>
+
+      <Section
+        title="Index"
+        desc="Lokale Katalog-DBs (offline). Werden beim Start entpackt und von hier gelesen."
+      >
+        <Show when={idx()} fallback={<div class="spinner" />}>
+          {(i) => (
+            <>
+              <div class="field">
+                <label>Ordner</label>
+                <input class="cfg-input" value={i().dir} readonly />
+              </div>
+              <dl class="kv">
+                <For each={i().portals}>
+                  {(p) => (
+                    <>
+                      <dt>{PORTAL_LABEL[p.portal] ?? p.portal}</dt>
+                      <dd>{p.titles === null ? "nicht vorhanden" : `${p.titles} Titel`}</dd>
+                    </>
+                  )}
+                </For>
+              </dl>
+            </>
+          )}
+        </Show>
       </Section>
 
       <Section title="Privatsphäre" desc="Inkognito schreibt in dieser Sitzung nichts mit.">

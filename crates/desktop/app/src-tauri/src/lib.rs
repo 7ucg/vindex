@@ -224,6 +224,35 @@ fn data_source(url: String) -> &'static str {
     }
 }
 
+/// Ein Portal im Index: Name und Titelzahl (`null` = DB nicht vorhanden).
+#[derive(Serialize)]
+struct IndexPortalDto {
+    portal: &'static str,
+    titles: Option<i64>,
+}
+
+/// Wo die Index-DBs liegen und was drinsteht — für die Einstellungen.
+#[derive(Serialize)]
+struct IndexInfoDto {
+    dir: String,
+    portals: Vec<IndexPortalDto>,
+}
+
+#[tauri::command]
+fn index_info() -> IndexInfoDto {
+    let portals = ["aniworld", "serienstream", "filmo"]
+        .iter()
+        .map(|&p| IndexPortalDto {
+            portal: p,
+            titles: vindex_desktop::index_portal_titles(p),
+        })
+        .collect();
+    IndexInfoDto {
+        dir: vindex_desktop::index_dir(),
+        portals,
+    }
+}
+
 #[tauri::command]
 async fn seasons(url: String, state: State<'_, AppState>) -> Result<Vec<u32>, String> {
     state.backend.seasons(&url).await.map_err(|e| e.to_string())
@@ -1068,6 +1097,7 @@ pub fn run() {
             discover,
             title_url_by_name,
             data_source,
+            index_info,
             seasons,
             episodes,
             resolve_playback,

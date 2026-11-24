@@ -391,3 +391,15 @@ pub fn has_title(url: &str) -> bool {
     )
     .is_ok()
 }
+
+/// Der aktuell genutzte Index-Ordner (VINDEX_INDEX_DIR oder „index").
+pub fn dir() -> String {
+    index_dir()
+}
+
+/// Titelzahl einer Portal-DB; `None`, wenn die DB fehlt/nicht lesbar ist.
+pub fn portal_titles(portal: &str) -> Option<i64> {
+    let conn = open(portal)?;
+    conn.query_row("SELECT count(*) FROM title", [], |r| r.get(0))
+        .ok()
+}
