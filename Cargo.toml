@@ -52,6 +52,8 @@ anyhow = "1"
 thiserror = "2"
 # Lokaler Katalog-Index (SQLite, gebündelt — keine Systemabhängigkeit)
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Komprimierte Index-Schnappschüsse zum Teilen (pro Portal eine .db.zst)
+zstd = "0.13"
 # CLI
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"

@@ -36,16 +36,20 @@ enum IndexCommand {
     Resolve(ResolveArgs),
     /// Zeigt den Bestand der Datenbank.
     Stats(StatsArgs),
+    /// Teilt die DB pro Portal in komprimierte Schnappschüsse (`<portal>.db.zst`).
+    Export(ExportArgs),
+    /// Führt komprimierte Schnappschüsse in die lokale DB zusammen.
+    Import(ImportArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
 struct BuildArgs {
-    /// Pfad zur SQLite-Datenbank.
-    #[arg(long, default_value = "vindex-index.db")]
-    db: String,
+    /// Ordner mit den drei Portal-DBs (`<portal>.db`).
+    #[arg(long, default_value = "index")]
+    dir: String,
 
     /// Portal: aniworld, serienstream, filmo oder all. Bei „all" laufen die drei
-    /// Portale gleichzeitig (je eigene DB-Connection).
+    /// Portale gleichzeitig (je eigene DB-Datei).
     #[arg(long, default_value = "all")]
     portal: String,
 
@@ -69,9 +73,9 @@ struct BuildArgs {
 
 #[derive(Parser, Debug)]
 struct ResolveArgs {
-    /// Pfad zur SQLite-Datenbank.
-    #[arg(long, default_value = "vindex-index.db")]
-    db: String,
+    /// Ordner mit den drei Portal-DBs (`<portal>.db`).
+    #[arg(long, default_value = "index")]
+    dir: String,
 
     /// Portal: aniworld, serienstream, filmo oder all.
     #[arg(long, default_value = "all")]
@@ -96,9 +100,35 @@ struct ResolveArgs {
 
 #[derive(Parser, Debug)]
 struct StatsArgs {
-    /// Pfad zur SQLite-Datenbank.
-    #[arg(long, default_value = "vindex-index.db")]
-    db: String,
+    /// Ordner mit den drei Portal-DBs (`<portal>.db`).
+    #[arg(long, default_value = "index")]
+    dir: String,
+}
+
+#[derive(Parser, Debug)]
+struct ExportArgs {
+    /// Ordner mit den Portal-DBs; die `.db.zst` werden daneben geschrieben.
+    #[arg(long, default_value = "index")]
+    dir: String,
+
+    /// Portal: aniworld, serienstream, filmo oder all.
+    #[arg(long, default_value = "all")]
+    portal: String,
+
+    /// zstd-Kompressionsstufe (1–22).
+    #[arg(long, default_value_t = 19)]
+    level: i32,
+}
+
+#[derive(Parser, Debug)]
+struct ImportArgs {
+    /// Ordner mit den `<portal>.db.zst`; die `.db` werden daneben entpackt.
+    #[arg(long, default_value = "index")]
+    dir: String,
+
+    /// Portal: aniworld, serienstream, filmo oder all.
+    #[arg(long, default_value = "all")]
+    portal: String,
 }
 
 pub async fn run(args: IndexArgs) -> anyhow::Result<()> {
@@ -106,6 +136,8 @@ pub async fn run(args: IndexArgs) -> anyhow::Result<()> {
         IndexCommand::Build(a) => build(a).await,
         IndexCommand::Resolve(a) => resolve(a).await,
         IndexCommand::Stats(a) => stats(a),
+        IndexCommand::Export(a) => export(a),
+        IndexCommand::Import(a) => import(a),
     }
 }
 
@@ -196,6 +228,17 @@ fn portals_from_arg(portal: &str) -> anyhow::Result<Vec<&'static str>> {
     })
 }
 
+/// Dateipfad der Portal-DB im Index-Ordner (`<dir>/<portal>.db`).
+fn portal_db_path(dir: &str, portal: &str) -> String {
+    format!("{dir}/{portal}.db")
+}
+
+/// Öffnet die Portal-DB (legt den Ordner bei Bedarf an).
+fn open_portal_db(dir: &str, portal: &str) -> anyhow::Result<Connection> {
+    std::fs::create_dir_all(dir)?;
+    open_db(&portal_db_path(dir, portal))
+}
+
 // ---------------------------------------------------------------------------
 // Build
 // ---------------------------------------------------------------------------
@@ -229,7 +272,7 @@ async fn build(args: BuildArgs) -> anyhow::Result<()> {
     // bereits vollständig gecrawlte Titel werden nie erneut angefasst.
     let conns = portals
         .iter()
-        .map(|_| open_db(&args.db))
+        .map(|p| open_portal_db(&args.dir, p))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let futs = portals
         .iter()
@@ -605,7 +648,7 @@ async fn resolve(args: ResolveArgs) -> anyhow::Result<()> {
     // über busy_timeout. Fortsetzbar: nur offene Links (embed_url IS NULL).
     let conns = portals
         .iter()
-        .map(|_| open_db(&args.db))
+        .map(|p| open_portal_db(&args.dir, p))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let futs = portals
         .iter()
@@ -1021,36 +1064,105 @@ async fn resolve_filmo_movie(
 // ---------------------------------------------------------------------------
 
 fn stats(args: StatsArgs) -> anyhow::Result<()> {
-    let conn = open_db(&args.db)?;
-    let mut stmt = conn.prepare(
-        "SELECT title.portal,
-                COUNT(DISTINCT title.id),
-                COUNT(DISTINCT CASE WHEN title.crawled_at IS NOT NULL THEN title.id END),
-                COUNT(DISTINCT episode.id),
-                COUNT(DISTINCT link.id),
-                COUNT(DISTINCT CASE WHEN link.embed_url IS NOT NULL THEN link.id END)
-         FROM title
-         LEFT JOIN episode ON episode.title_id = title.id
-         LEFT JOIN link ON link.episode_id = episode.id
-         GROUP BY title.portal ORDER BY title.portal",
-    )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
-            r.get::<_, i64>(2)?,
-            r.get::<_, i64>(3)?,
-            r.get::<_, i64>(4)?,
-            r.get::<_, i64>(5)?,
-        ))
-    })?;
     println!(
         "{:<14} {:>7} {:>9} {:>8} {:>8} {:>10}",
         "Portal", "Titel", "gecrawlt", "Folgen", "Links", "aufgelöst"
     );
-    for row in rows {
-        let (portal, titles, crawled, episodes, links, resolved) = row?;
+    for portal in ["aniworld", "serienstream", "filmo"] {
+        let path = portal_db_path(&args.dir, portal);
+        if !std::path::Path::new(&path).exists() {
+            continue;
+        }
+        let conn = open_db(&path)?;
+        let row = conn.query_row(
+            "SELECT COUNT(DISTINCT title.id),
+                    COUNT(DISTINCT CASE WHEN title.crawled_at IS NOT NULL THEN title.id END),
+                    COUNT(DISTINCT episode.id),
+                    COUNT(DISTINCT link.id),
+                    COUNT(DISTINCT CASE WHEN link.embed_url IS NOT NULL THEN link.id END)
+             FROM title
+             LEFT JOIN episode ON episode.title_id = title.id
+             LEFT JOIN link ON link.episode_id = episode.id",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )?;
+        let (titles, crawled, episodes, links, resolved) = row;
         println!("{portal:<14} {titles:>7} {crawled:>9} {episodes:>8} {links:>8} {resolved:>10}");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import (komprimierte Portal-Schnappschüsse zum Teilen)
+// ---------------------------------------------------------------------------
+
+/// Komprimiert eine Datei mit zstd (Streaming, kein Voll-Einlesen).
+fn zstd_compress(src: &str, dst: &str, level: i32) -> anyhow::Result<()> {
+    use std::io::Write;
+    let input = std::io::BufReader::new(std::fs::File::open(src)?);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(dst)?);
+    zstd::stream::copy_encode(input, &mut out, level)?;
+    out.flush()?;
+    Ok(())
+}
+
+/// Entpackt eine zstd-Datei (großes Fenster erlaubt, falls mit `--long` gepackt).
+fn zstd_decompress(src: &str, dst: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let input = std::io::BufReader::new(std::fs::File::open(src)?);
+    let mut dec = zstd::stream::Decoder::new(input)?;
+    dec.window_log_max(31)?;
+    let mut out = std::io::BufWriter::new(std::fs::File::create(dst)?);
+    std::io::copy(&mut dec, &mut out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn export(args: ExportArgs) -> anyhow::Result<()> {
+    let portals = portals_from_arg(&args.portal)?;
+    for portal in portals {
+        let db = portal_db_path(&args.dir, portal);
+        if !std::path::Path::new(&db).exists() {
+            eprintln!("[{portal}] keine DB ({db}) — übersprungen");
+            continue;
+        }
+        // WAL in die Hauptdatei schreiben, damit der Schnappschuss vollständig ist.
+        {
+            let conn = open_db(&db)?;
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        }
+        let zst = format!("{db}.zst");
+        zstd_compress(&db, &zst, args.level)?;
+        let sz = std::fs::metadata(&zst)?.len();
+        eprintln!("[{portal}] {zst} ({:.1} MB)", sz as f64 / 1_048_576.0);
+    }
+    Ok(())
+}
+
+fn import(args: ImportArgs) -> anyhow::Result<()> {
+    let portals = portals_from_arg(&args.portal)?;
+    std::fs::create_dir_all(&args.dir)?;
+    for portal in portals {
+        let db = portal_db_path(&args.dir, portal);
+        let zst = format!("{db}.zst");
+        if !std::path::Path::new(&zst).exists() {
+            eprintln!("[{portal}] kein Schnappschuss ({zst}) — übersprungen");
+            continue;
+        }
+        zstd_decompress(&zst, &db)?;
+        // Alte WAL-/SHM-Sidecars neben der frisch entpackten DB würden sie verfälschen.
+        let _ = std::fs::remove_file(format!("{db}-wal"));
+        let _ = std::fs::remove_file(format!("{db}-shm"));
+        let sz = std::fs::metadata(&db)?.len();
+        eprintln!("[{portal}] {db} ({:.1} MB)", sz as f64 / 1_048_576.0);
     }
     Ok(())
 }
