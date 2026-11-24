@@ -314,6 +314,16 @@ export function library(): Promise<LibraryEntry[]> {
   return invoke<LibraryEntry[]>("library");
 }
 
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+}
+
+/** Kopiert Mediendateien aus einem Ordner in die Bibliothek. */
+export function importFromFolder(path: string): Promise<ImportResult> {
+  return invoke<ImportResult>("import_from_folder", { path });
+}
+
 /** Taskleisten-/Icon-Fortschritt (0–100) oder null zum Ausblenden. */
 export function setTaskbarProgress(progress: number | null): Promise<void> {
   return invoke("set_taskbar_progress", { progress });

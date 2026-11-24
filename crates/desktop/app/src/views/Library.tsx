@@ -7,6 +7,8 @@ import {
   localMediaUrl,
   revealLibraryItem,
   titleUrlByName,
+  importFromFolder,
+  pickDownloadFolder,
   type LibraryEntry,
 } from "../lib/api";
 import { openPlayer } from "../lib/store";
@@ -67,6 +69,21 @@ export function Library(): JSX.Element {
     setRenameErr(null);
     setDraft(e.name);
     setEditing(e.name);
+  };
+  const [importMsg, setImportMsg] = createSignal<string | null>(null);
+  const importFolder = async () => {
+    const path = await pickDownloadFolder().catch(() => null);
+    if (!path) return;
+    setImportMsg("Importiere …");
+    try {
+      const r = await importFromFolder(path);
+      setImportMsg(
+        `${r.imported} importiert${r.skipped ? `, ${r.skipped} übersprungen` : ""}`,
+      );
+      await refetch();
+    } catch (err) {
+      setImportMsg(`Fehler: ${String(err)}`);
+    }
   };
   const commitRename = async (e: LibraryEntry) => {
     const nn = draft().trim();
@@ -144,10 +161,16 @@ export function Library(): JSX.Element {
 
   return (
     <div class="wrap">
-      <div class="row-h">
+      <div class="row-h" style={{ "align-items": "center", gap: "10px" }}>
         <h2>Bibliothek</h2>
         <Show when={entries()}>
           <span class="link">{entries()!.length} Dateien</span>
+        </Show>
+        <button class="chip" style={{ "margin-left": "auto" }} onClick={() => void importFolder()}>
+          Ordner importieren
+        </button>
+        <Show when={importMsg()}>
+          <span class="sleep-label">{importMsg()}</span>
         </Show>
       </div>
 

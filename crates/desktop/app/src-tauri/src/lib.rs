@@ -712,6 +712,59 @@ fn is_media(name: &str) -> bool {
     )
 }
 
+/// Ergebnis eines Ordner-Imports fürs Frontend.
+#[derive(Serialize)]
+struct ImportResult {
+    imported: usize,
+    skipped: usize,
+}
+
+/// Importiert Mediendateien aus einem (vom Nutzer gewählten) Ordner in die
+/// Bibliothek: kopiert jede reguläre Mediendatei in den Download-Ordner, sofern
+/// dort noch nicht vorhanden. Nicht-destruktiv; Symlinks und Unterordner werden
+/// übersprungen, der Zielname ist immer nur der Basisname (kein Traversal).
+#[tauri::command]
+fn import_from_folder(path: String, state: State<'_, AppState>) -> Result<ImportResult, String> {
+    let src = std::fs::canonicalize(std::path::PathBuf::from(&path)).map_err(|e| e.to_string())?;
+    if !src.is_dir() {
+        return Err("kein Ordner".into());
+    }
+    let dir = state.download_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir_canon = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    if src == dir_canon {
+        return Err("Quelle ist bereits der Download-Ordner".into());
+    }
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    for entry in std::fs::read_dir(&src).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let p = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !is_media(name) {
+            continue;
+        }
+        let dst = dir.join(name);
+        if dst.exists() {
+            skipped += 1;
+            continue;
+        }
+        match std::fs::copy(&p, &dst) {
+            Ok(_) => imported += 1,
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok(ImportResult { imported, skipped })
+}
+
 /// Validiert einen Bibliotheks-Dateinamen und gibt den **kanonisierten** Pfad
 /// zurück: reiner Mediendateiname (keine Trenner/`..`), reguläre Datei (kein
 /// Symlink/Verzeichnis), und der kanonisierte Elternpfad ist exakt `canon_dir`.
@@ -1237,6 +1290,7 @@ pub fn run() {
             library,
             delete_library_item,
             rename_library_item,
+            import_from_folder,
             open_library_item,
             local_media_url,
             reveal_library_item,
