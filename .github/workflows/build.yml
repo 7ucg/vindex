@@ -9,6 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nur Lesezugriff — der Build braucht keinen Token-Schreibzugriff (kein Release).
+permissions:
+  contents: read
+
 jobs:
   bundle:
     strategy:
@@ -45,6 +49,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/desktop/app/src-tauri
+          # Cache nur von main schreiben — Fork-PRs können ihn nicht vergiften.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Frontend-Abhängigkeiten
         working-directory: crates/desktop/app
