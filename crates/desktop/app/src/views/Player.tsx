@@ -91,6 +91,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
     video.pause();
     video.currentTime += dir / 30;
   };
+  // Bild: Helligkeit (CSS-Filter) und Zuschnitt (contain ↔ cover).
+  const [brightness, setBrightness] = createSignal(1);
+  const [fitCover, setFitCover] = createSignal(false);
   // Untertitel-Delay: verschiebt die Cues des aktiven Tracks (negativ = früher).
   const [subDelay, setSubDelay] = createSignal(0);
   const shiftSubs = (delta: number) => {
@@ -348,6 +351,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
         break;
       case "h":
         shiftSubs(0.5);
+        break;
+      case "z":
+        setFitCover(!fitCover());
         break;
       case "Escape":
         closePlayer();
@@ -622,6 +628,31 @@ export function Player(props: { playback: Playback }): JSX.Element {
               </For>
             </div>
           </Show>
+          <div class="pm-sec">Bild</div>
+          <div class="pm-row">
+            <button
+              class="chip"
+              classList={{ on: fitCover() }}
+              onClick={() => setFitCover(!fitCover())}
+            >
+              {fitCover() ? "● Vollbild-Zuschnitt" : "○ Vollbild-Zuschnitt"}
+            </button>
+            <button class="chip" onClick={() => setBrightness(1)}>
+              Helligkeit zurücksetzen
+            </button>
+          </div>
+          <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
+            <span class="sleep-label">Helligkeit</span>
+            <input
+              type="range"
+              min="0.3"
+              max="1.8"
+              step="0.05"
+              value={brightness()}
+              onInput={(e) => setBrightness(parseFloat(e.currentTarget.value))}
+            />
+            <span class="sleep-label">{Math.round(brightness() * 100)}%</span>
+          </div>
         </div>
       </Show>
 
@@ -640,6 +671,10 @@ export function Player(props: { playback: Playback }): JSX.Element {
         autoplay
         playsinline
         onWheel={onWheel}
+        style={{
+          filter: `brightness(${brightness()})`,
+          "object-fit": fitCover() ? "cover" : "contain",
+        }}
       />
 
       <Show when={skipTarget()}>
@@ -660,7 +695,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
       <div class="player-hint" classList={{ "chrome-hidden": !ui() }}>
         Space Play · ←/→ 5s · ⇧←/→ 30s · J/L 10s · ↑/↓ oder Scroll Lautstärke · M stumm · F
         Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · G/H UT-Delay ·
-        0–9 springen · Esc schließen
+        Z Zuschnitt · 0–9 springen · Esc schließen
       </div>
     </div>
   );
