@@ -699,6 +699,39 @@ fn delete_library_item(name: String, state: State<'_, AppState>) -> Result<(), S
     std::fs::remove_file(&canon).map_err(|e| e.to_string())
 }
 
+/// Benennt eine Mediendatei um. Quelle wird wie `delete` validiert; der Zielname
+/// muss ein reiner Dateiname mit Medien-Endung sein (keine Trenner/Traversal) und
+/// darf nicht existieren — so bleibt die Datei im Download-Ordner und auffindbar.
+#[tauri::command]
+fn rename_library_item(
+    name: String,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dir = state.download_dir();
+    let canon_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    let src = safe_media_path(&dir, &canon_dir, &name)
+        .ok_or_else(|| "ungültige oder unbekannte Mediendatei".to_string())?;
+    let new_name = new_name.trim();
+    if new_name.is_empty()
+        || new_name.contains('/')
+        || new_name.contains('\\')
+        || new_name.contains("..")
+        || new_name.chars().any(|c| c.is_control())
+        || !is_media(new_name)
+    {
+        return Err("ungültiger Zielname (Medien-Endung behalten)".into());
+    }
+    let dst = canon_dir.join(new_name);
+    if dst.parent() != Some(canon_dir.as_path()) {
+        return Err("ungültiger Zielpfad".into());
+    }
+    if dst.exists() {
+        return Err("Zieldatei existiert bereits".into());
+    }
+    std::fs::rename(&src, &dst).map_err(|e| e.to_string())
+}
+
 /// Validiert `name` wie `library`/`delete` und gibt den kanonisierten Pfad zurück
 /// — gemeinsame Basis für Öffnen und „im Ordner zeigen" (kein Frontend-Opener-Grant).
 fn library_path(name: &str, state: &AppState) -> Result<std::path::PathBuf, String> {
@@ -1124,6 +1157,7 @@ pub fn run() {
             list_downloads,
             library,
             delete_library_item,
+            rename_library_item,
             open_library_item,
             local_media_url,
             reveal_library_item,

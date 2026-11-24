@@ -277,6 +277,10 @@ export function deleteLibraryItem(name: string): Promise<void> {
   return invoke("delete_library_item", { name });
 }
 
+export function renameLibraryItem(name: string, newName: string): Promise<void> {
+  return invoke("rename_library_item", { name, newName });
+}
+
 export function openLibraryItem(name: string): Promise<void> {
   return invoke("open_library_item", { name });
 }

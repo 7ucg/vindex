@@ -2,6 +2,7 @@ import { createResource, createSignal, For, onMount, Show, type JSX } from "soli
 import {
   library,
   deleteLibraryItem,
+  renameLibraryItem,
   openLibraryItem,
   localMediaUrl,
   revealLibraryItem,
@@ -58,6 +59,33 @@ interface Group {
 export function Library(): JSX.Element {
   const [entries, { refetch }] = createResource(library);
   const [busy, setBusy] = createSignal<string | null>(null);
+  // Inline-Umbenennen: welcher Eintrag gerade bearbeitet wird + Entwurf/Fehler.
+  const [editing, setEditing] = createSignal<string | null>(null);
+  const [draft, setDraft] = createSignal("");
+  const [renameErr, setRenameErr] = createSignal<string | null>(null);
+  const startRename = (e: LibraryEntry) => {
+    setRenameErr(null);
+    setDraft(e.name);
+    setEditing(e.name);
+  };
+  const commitRename = async (e: LibraryEntry) => {
+    const nn = draft().trim();
+    if (!nn || nn === e.name) {
+      setEditing(null);
+      return;
+    }
+    setBusy(e.name);
+    try {
+      await renameLibraryItem(e.name, nn);
+      setEditing(null);
+      setRenameErr(null);
+      await refetch();
+    } catch (err) {
+      setRenameErr(String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const groups = (): Group[] => {
     const all = entries() ?? [];
@@ -157,7 +185,23 @@ export function Library(): JSX.Element {
                       ▶
                     </div>
                     <div class="info">
-                      <div class="n">{e.name}</div>
+                      <Show when={editing() === e.name} fallback={<div class="n">{e.name}</div>}>
+                        <input
+                          class="cfg-input"
+                          style={{ width: "100%" }}
+                          value={draft()}
+                          onInput={(ev) => setDraft(ev.currentTarget.value)}
+                          onKeyDown={(ev) => {
+                            if (ev.key === "Enter") void commitRename(e);
+                            if (ev.key === "Escape") setEditing(null);
+                          }}
+                        />
+                        <Show when={renameErr()}>
+                          <div class="sub" style={{ color: "var(--err)" }}>
+                            {renameErr()}
+                          </div>
+                        </Show>
+                      </Show>
                       <div class="sub">
                         {size(e.size_bytes)}
                         <Show when={e.modified}> · {when(e.modified)}</Show>
@@ -176,6 +220,31 @@ export function Library(): JSX.Element {
                       >
                         Ordner
                       </button>
+                      <Show
+                        when={editing() === e.name}
+                        fallback={
+                          <button class="chip" onClick={() => startRename(e)}>
+                            Umbenennen
+                          </button>
+                        }
+                      >
+                        <button
+                          class="chip"
+                          disabled={busy() === e.name}
+                          onClick={() => void commitRename(e)}
+                        >
+                          {busy() === e.name ? "…" : "Speichern"}
+                        </button>
+                        <button
+                          class="chip"
+                          onClick={() => {
+                            setEditing(null);
+                            setRenameErr(null);
+                          }}
+                        >
+                          Abbrechen
+                        </button>
+                      </Show>
                       <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
                         {busy() === e.name ? "…" : "Löschen"}
                       </button>
