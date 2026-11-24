@@ -222,6 +222,17 @@ export interface JobView {
   total: number;
   bytes: number;
   error: string | null;
+  queue_pos: number | null; // Position in der Warteschlange (0 = als Nächstes)
+}
+
+/** Bandbreitenlimit eines einzelnen Downloads (KiB/s, 0 = unbegrenzt). */
+export function setDownloadRate(id: number, kib: number): Promise<void> {
+  return invoke("set_download_rate", { id, kib });
+}
+
+/** Wartenden Download in der Warteschlange verschieben (hoch/runter). */
+export function moveDownload(id: number, up: boolean): Promise<void> {
+  return invoke("move_download", { id, up });
 }
 
 export function startDownload(

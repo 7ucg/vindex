@@ -6,6 +6,8 @@ import {
   pauseDownload,
   resumeDownload,
   retryDownload,
+  setDownloadRate,
+  moveDownload,
   onDownloadUpdate,
   type JobView,
 } from "../lib/api";
@@ -132,10 +134,31 @@ export function Downloads(): JSX.Element {
     return m >= 1 ? `${m.toFixed(1)} MB/s` : `${(bps / 1024).toFixed(0)} KB/s`;
   };
   const totalSpeed = () => active().reduce((s, j) => s + (rate()[j.id]?.speed || 0), 0);
-  // Aktive Jobs zuerst, Erledigte ans Ende.
+  // Laufende zuerst, dann Wartende (nach Queue-Position), Erledigte ans Ende.
   const ordered = () => {
-    const rank = (st: string) => (finished(st) ? 1 : 0);
-    return [...jobs()].sort((a, b) => rank(a.status) - rank(b.status));
+    const rank = (j: JobView) => (finished(j.status) ? 2 : j.status === "queued" ? 1 : 0);
+    return [...jobs()].sort((a, b) => {
+      const d = rank(a) - rank(b);
+      if (d !== 0) return d;
+      if (a.status === "queued" && b.status === "queued")
+        return (a.queue_pos ?? 0) - (b.queue_pos ?? 0);
+      return 0;
+    });
+  };
+  const refresh = async () => {
+    try {
+      setJobs(await listDownloads());
+    } catch {
+      /* leer */
+    }
+  };
+  const moveJob = async (id: number, up: boolean) => {
+    await moveDownload(id, up).catch(() => {});
+    await refresh();
+  };
+  const setJobRate = (id: number, kibStr: string) => {
+    const kib = Math.max(0, parseInt(kibStr, 10) || 0);
+    void setDownloadRate(id, kib).catch(() => {});
   };
   const pausable = (st: string) => ["running", "resolving", "queued"].includes(st);
   const pauseAll = () => active().forEach((j) => pausable(j.status) && void pauseDownload(j.id));
@@ -231,6 +254,34 @@ export function Downloads(): JSX.Element {
                   </div>
                 </div>
                 <div class="act">
+                  <Show when={j.status === "queued"}>
+                    <button
+                      class="chip"
+                      title="In der Warteschlange nach oben"
+                      onClick={() => void moveJob(j.id, true)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      class="chip"
+                      title="In der Warteschlange nach unten"
+                      onClick={() => void moveJob(j.id, false)}
+                    >
+                      ↓
+                    </button>
+                  </Show>
+                  <Show when={!finished(j.status)}>
+                    <input
+                      class="cfg-input"
+                      style={{ width: "92px" }}
+                      type="number"
+                      min="0"
+                      step="256"
+                      placeholder="KiB/s"
+                      title="Tempolimit nur für diesen Download (KiB/s, 0 = unbegrenzt)"
+                      onChange={(e) => setJobRate(j.id, e.currentTarget.value)}
+                    />
+                  </Show>
                   <Show when={["running", "resolving", "queued"].includes(j.status)}>
                     <button class="chip" onClick={() => pauseDownload(j.id)}>
                       Pause

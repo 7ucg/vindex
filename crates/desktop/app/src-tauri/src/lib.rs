@@ -546,6 +546,18 @@ fn resume_download(app: tauri::AppHandle, id: u64, state: State<'_, AppState>) {
     }
 }
 
+/// Bandbreitenbegrenzung eines einzelnen Downloads (KiB/s; 0 = unbegrenzt).
+#[tauri::command]
+fn set_download_rate(id: u64, kib: u64, state: State<'_, AppState>) {
+    state.downloads.set_rate(id, kib.saturating_mul(1024));
+}
+
+/// Verschiebt einen wartenden Download in der Warteschlange (hoch/runter).
+#[tauri::command]
+fn move_download(id: u64, up: bool, state: State<'_, AppState>) {
+    state.downloads.move_in_queue(id, up);
+}
+
 /// Globale Bandbreitenbegrenzung setzen (KiB/s; 0 = unbegrenzt) und persistieren.
 #[tauri::command]
 fn set_bandwidth_limit(kib: u64, state: State<'_, AppState>) -> Result<(), String> {
@@ -1197,6 +1209,8 @@ pub fn run() {
             pause_download,
             resume_download,
             set_bandwidth_limit,
+            set_download_rate,
+            move_download,
             network_status,
             set_impersonate,
             set_obscura,
