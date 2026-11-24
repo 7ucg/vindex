@@ -330,15 +330,22 @@ async fn anilist_resolve(
     let Some((mut aid, mut mal)) = anilist_pick_s1(&media) else {
         return Ok(None);
     };
+    // Staffel-Kette gekappt (wie bei Jikan): max. Schritte, Zyklus-Schutz und ein
+    // kleiner Abstand zwischen den Anfragen gegen Rate-Limit/Endlosschleifen.
+    const MAX_SEASONS: u32 = 20;
+    let target = staffel.min(MAX_SEASONS);
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(aid);
     let mut season = 1u32;
-    while season < staffel {
+    while season < target {
+        tokio::time::sleep(std::time::Duration::from_millis(JIKAN_DELAY_MS)).await;
         match anilist_sequel(client, aid).await? {
-            Some((nid, nmal)) => {
+            Some((nid, nmal)) if visited.insert(nid) => {
                 aid = nid;
                 mal = nmal;
                 season += 1;
             }
-            None => break,
+            _ => break,
         }
     }
     Ok(Some(mal))

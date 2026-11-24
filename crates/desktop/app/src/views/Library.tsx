@@ -81,9 +81,18 @@ export function Library(): JSX.Element {
       let skipRef: { url: string; season: number; episode: number } | undefined;
       const m = /^(.*?)\s+S(\d+)E(\d+)/i.exec(e.name);
       if (m && m[1].trim()) {
-        const titleUrl = await titleUrlByName(m[1].trim()).catch(() => null);
-        if (titleUrl) {
-          skipRef = { url: titleUrl, season: parseInt(m[2], 10), episode: parseInt(m[3], 10) };
+        const season = parseInt(m[2], 10);
+        const episode = parseInt(m[3], 10);
+        const valid =
+          Number.isInteger(season) &&
+          season >= 1 &&
+          season <= 100 &&
+          Number.isInteger(episode) &&
+          episode >= 1 &&
+          episode <= 5000;
+        if (valid) {
+          const titleUrl = await titleUrlByName(m[1].trim()).catch(() => null);
+          if (titleUrl) skipRef = { url: titleUrl, season, episode };
         }
       }
       openPlayer({ title: e.name, url, isHls: false, skipRef });
