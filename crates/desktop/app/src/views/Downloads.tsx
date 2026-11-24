@@ -164,6 +164,9 @@ export function Downloads(): JSX.Element {
   const pauseAll = () => active().forEach((j) => pausable(j.status) && void pauseDownload(j.id));
   const resumeAll = () =>
     jobs().forEach((j) => j.status === "paused" && void resumeDownload(j.id));
+  // Alle noch nicht abgeschlossenen abbrechen (stoppt auch die wartende Queue).
+  const cancelAll = () =>
+    jobs().forEach((j) => !finished(j.status) && void cancelDownload(j.id));
   const anyFinished = () => jobs().some((j) => finished(j.status));
   const clearDone = async () => {
     await clearFinishedDownloads().catch(() => {});
@@ -200,6 +203,11 @@ export function Downloads(): JSX.Element {
             <Show when={jobs().some((j) => j.status === "paused")}>
               <button class="chip" onClick={resumeAll}>
                 Alle fortsetzen
+              </button>
+            </Show>
+            <Show when={active().length > 0}>
+              <button class="chip" onClick={cancelAll}>
+                Alle abbrechen
               </button>
             </Show>
             <Show when={anyFinished()}>
