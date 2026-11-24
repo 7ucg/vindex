@@ -71,6 +71,14 @@ impl Downloads {
         v
     }
 
+    /// Entfernt abgeschlossene Jobs (fertig/Fehler/abgebrochen) aus der Liste.
+    pub fn clear_finished(&self) {
+        self.jobs
+            .lock()
+            .unwrap()
+            .retain(|_, j| !matches!(j.view.status.as_str(), "done" | "error" | "cancelled"));
+    }
+
     pub fn cancel(&self, id: u64) {
         if let Some(j) = self.jobs.lock().unwrap().get(&id) {
             j.cancel.cancel();

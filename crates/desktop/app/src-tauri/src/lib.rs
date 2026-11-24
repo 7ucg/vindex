@@ -286,6 +286,24 @@ fn set_always_on_top(on: bool, window: tauri::WebviewWindow) -> Result<(), Strin
     window.set_always_on_top(on).map_err(|e| e.to_string())
 }
 
+/// Fortschrittsbalken auf dem Fenster-/Taskleisten-Icon (0–100), `None` = aus.
+/// Best-effort — abhängig vom Desktop (Unity/Windows/macOS ja, GNOME oft nicht).
+#[tauri::command]
+fn set_taskbar_progress(window: tauri::WebviewWindow, progress: Option<u32>) {
+    use tauri::window::{ProgressBarState, ProgressBarStatus};
+    let state = match progress {
+        Some(p) => ProgressBarState {
+            status: Some(ProgressBarStatus::Normal),
+            progress: Some(p.min(100) as u64),
+        },
+        None => ProgressBarState {
+            status: Some(ProgressBarStatus::None),
+            progress: None,
+        },
+    };
+    let _ = window.set_progress_bar(state);
+}
+
 /// Letzte Log-Zeilen fürs Diagnose-Panel (redigiert durch die Logging-Disziplin).
 #[tauri::command]
 fn recent_logs(state: State<'_, AppState>) -> Vec<String> {
@@ -506,6 +524,12 @@ fn start_download(
 #[tauri::command]
 fn cancel_download(id: u64, state: State<'_, AppState>) {
     state.downloads.cancel(id);
+}
+
+/// Entfernt alle abgeschlossenen Jobs (fertig/Fehler/abgebrochen) aus der Liste.
+#[tauri::command]
+fn clear_finished_downloads(state: State<'_, AppState>) {
+    state.downloads.clear_finished();
 }
 
 #[tauri::command]
@@ -1160,6 +1184,7 @@ pub fn run() {
             episodes,
             resolve_playback,
             set_always_on_top,
+            set_taskbar_progress,
             recent_logs,
             available_languages,
             title_meta,
@@ -1168,6 +1193,7 @@ pub fn run() {
             aniskip,
             start_download,
             cancel_download,
+            clear_finished_downloads,
             pause_download,
             resume_download,
             set_bandwidth_limit,

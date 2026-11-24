@@ -246,6 +246,11 @@ export function cancelDownload(id: number): Promise<void> {
   return invoke("cancel_download", { id });
 }
 
+/** Entfernt fertige/abgebrochene Jobs aus der Download-Liste. */
+export function clearFinishedDownloads(): Promise<void> {
+  return invoke("clear_finished_downloads");
+}
+
 export function pauseDownload(id: number): Promise<void> {
   return invoke("pause_download", { id });
 }
@@ -280,6 +285,11 @@ export interface LibraryEntry {
 
 export function library(): Promise<LibraryEntry[]> {
   return invoke<LibraryEntry[]>("library");
+}
+
+/** Taskleisten-/Icon-Fortschritt (0–100) oder null zum Ausblenden. */
+export function setTaskbarProgress(progress: number | null): Promise<void> {
+  return invoke("set_taskbar_progress", { progress });
 }
 
 export function deleteLibraryItem(name: string): Promise<void> {

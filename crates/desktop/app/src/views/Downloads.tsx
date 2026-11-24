@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, For, Show, type JSX } from "solid-js"
 import {
   listDownloads,
   cancelDownload,
+  clearFinishedDownloads,
   pauseDownload,
   resumeDownload,
   retryDownload,
@@ -140,6 +141,15 @@ export function Downloads(): JSX.Element {
   const pauseAll = () => active().forEach((j) => pausable(j.status) && void pauseDownload(j.id));
   const resumeAll = () =>
     jobs().forEach((j) => j.status === "paused" && void resumeDownload(j.id));
+  const anyFinished = () => jobs().some((j) => finished(j.status));
+  const clearDone = async () => {
+    await clearFinishedDownloads().catch(() => {});
+    try {
+      setJobs(await listDownloads());
+    } catch {
+      /* leer */
+    }
+  };
 
   return (
     <div class="wrap">
@@ -167,6 +177,11 @@ export function Downloads(): JSX.Element {
             <Show when={jobs().some((j) => j.status === "paused")}>
               <button class="chip" onClick={resumeAll}>
                 Alle fortsetzen
+              </button>
+            </Show>
+            <Show when={anyFinished()}>
+              <button class="chip" onClick={() => void clearDone()}>
+                Erledigte leeren
               </button>
             </Show>
           </div>

@@ -1,4 +1,5 @@
-import { Switch, Match, type JSX } from "solid-js";
+import { Switch, Match, onMount, onCleanup, type JSX } from "solid-js";
+import { listDownloads, onDownloadUpdate, setTaskbarProgress, type JobView } from "./lib/api";
 import { Sidebar } from "./views/Sidebar";
 import { Home } from "./views/Home";
 import { Settings } from "./views/Settings";
@@ -12,6 +13,43 @@ import { CommandPalette } from "./views/CommandPalette";
 import { view, playback } from "./lib/store";
 
 export default function App(): JSX.Element {
+  // Gesamt-Download-Fortschritt aufs Taskleisten-Icon spiegeln — global, damit es
+  // auch läuft, wenn der Downloads-Tab gerade nicht offen ist.
+  onMount(() => {
+    const jobs = new Map<number, JobView>();
+    const DONE = ["done", "error", "cancelled"];
+    let unlisten: (() => void) | undefined;
+    const apply = () => {
+      const active = [...jobs.values()].filter((j) => !DONE.includes(j.status));
+      if (active.length === 0) {
+        void setTaskbarProgress(null).catch(() => {});
+        return;
+      }
+      let d = 0;
+      let t = 0;
+      for (const j of active)
+        if (j.total > 0) {
+          d += j.done;
+          t += j.total;
+        }
+      const pct = t > 0 ? Math.min(100, Math.round((d * 100) / t)) : 0;
+      void setTaskbarProgress(pct).catch(() => {});
+    };
+    listDownloads()
+      .then((list) => {
+        for (const j of list) jobs.set(j.id, j);
+        apply();
+      })
+      .catch(() => {});
+    onDownloadUpdate((j) => {
+      jobs.set(j.id, j);
+      apply();
+    })
+      .then((u) => (unlisten = u))
+      .catch(() => {});
+    onCleanup(() => unlisten?.());
+  });
+
   return (
     <div class="app">
       <Sidebar />
