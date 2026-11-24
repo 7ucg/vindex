@@ -61,6 +61,19 @@ const SCALES: { id: Scale; label: string }[] = [
 ];
 
 // Settings: zeigt die effektiven Laufzeit-Einstellungen (VINDEX_* / .env), live aus dem Kern.
+// Eine Einstellungs-Sektion als Karte mit Titel und kurzer Erklärung.
+function Section(props: { title: string; desc?: string; children: JSX.Element }): JSX.Element {
+  return (
+    <section class="set-card">
+      <div class="set-card-head">
+        <h3>{props.title}</h3>
+        <Show when={props.desc}>{(d) => <p class="set-card-desc">{d()}</p>}</Show>
+      </div>
+      <div class="set-card-body">{props.children}</div>
+    </section>
+  );
+}
+
 export function Settings(): JSX.Element {
   const [settings] = createResource(appSettings);
   const [info] = createResource(appInfo);
@@ -187,16 +200,18 @@ export function Settings(): JSX.Element {
   };
 
   return (
-    <div class="wrap">
+    <div class="wrap settings">
       <div class="row-h">
         <h2>Einstellungen</h2>
       </div>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Erscheinungsbild</h2>
-      </div>
-      <div class="controls" style={{ "margin-bottom": "12px" }}>
-        <For each={THEMES}>
+      <Section
+        title="Erscheinungsbild"
+        desc="Thema, Akzentfarbe, Dichte und Darstellungsgröße der App."
+      >
+        <div class="controls">
+          <span class="sleep-label">Thema</span>
+          <For each={THEMES}>
           {(t) => (
             <button
               class="chip"
@@ -251,10 +266,10 @@ export function Settings(): JSX.Element {
         </For>
       </div>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Daten</h2>
-      </div>
-      <div class="controls" style={{ "margin-bottom": "18px" }}>
+      </Section>
+
+      <Section title="Daten" desc="Einstellungen und Merklisten sichern oder wiederherstellen.">
+        <div class="controls">
         <button class="chip" onClick={exportState}>
           Sichern (Export)
         </button>
@@ -270,10 +285,10 @@ export function Settings(): JSX.Element {
         />
       </div>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Privatsphäre</h2>
-      </div>
-      <div class="controls" style={{ "margin-bottom": "6px" }}>
+      </Section>
+
+      <Section title="Privatsphäre" desc="Inkognito schreibt in dieser Sitzung nichts mit.">
+        <div class="controls" style={{ "margin-bottom": "6px" }}>
         <button
           class="chip"
           classList={{ on: incognito() }}
@@ -287,19 +302,22 @@ export function Settings(): JSX.Element {
         Download-Verlauf). Gilt nur bis zum nächsten Start; Merken bleibt möglich.
       </p>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>System</h2>
-      </div>
-      <div class="controls" style={{ "margin-bottom": "18px" }}>
+      </Section>
+
+      <Section title="System" desc="Beim Login automatisch starten.">
+        <div class="controls">
         <button class="chip" classList={{ on: autostart() }} onClick={toggleAutostart}>
           {autostart() ? "★ Autostart an" : "☆ Beim Login starten"}
         </button>
       </div>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Downloads</h2>
-      </div>
-      <div class="panel" style={{ padding: "16px", "margin-bottom": "18px" }}>
+      </Section>
+
+      <Section
+        title="Downloads"
+        desc="Zielordner, Sprache, Qualität, Tempolimit und Lade-Verfahren."
+      >
+        <div class="set-fields">
         <div class="field">
           <label>Ordner</label>
           <div style={{ display: "flex", gap: "8px" }}>
@@ -384,10 +402,10 @@ export function Settings(): JSX.Element {
         </div>
       </div>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Netzwerk</h2>
-      </div>
-      <div class="panel" style={{ padding: "16px", "margin-bottom": "10px" }}>
+      </Section>
+
+      <Section title="Netzwerk" desc="DNS fest auf 1.1.1.1; Anti-Bot-Stufen und Egress-Proxy.">
+        <div class="set-fields">
         <div class="field">
           <label>DNS</label>
           <input class="cfg-input" value="1.1.1.1 (fest)" disabled />
@@ -436,10 +454,10 @@ export function Settings(): JSX.Element {
         aus Sicherheitsgründen deaktiviert.
       </p>
 
-      <div class="row-h" style={{ margin: "6px 2px 10px" }}>
-        <h2 style={{ "font-size": "14px" }}>Diagnose</h2>
-      </div>
-      <div class="controls" style={{ "margin-bottom": logsShown() ? "10px" : "18px" }}>
+      </Section>
+
+      <Section title="Diagnose" desc="App-Logs ansehen (URLs sind redigiert).">
+        <div class="controls" style={{ "margin-bottom": logsShown() ? "10px" : "18px" }}>
         <button class="chip" onClick={() => void loadLogs()}>
           {logsShown() ? "Aktualisieren" : "Logs anzeigen"}
         </button>
@@ -459,6 +477,9 @@ export function Settings(): JSX.Element {
         <pre class="logbox">{logs().length ? logs().join("\n") : "Keine Log-Zeilen."}</pre>
       </Show>
 
+      </Section>
+
+      <Section title="Übersicht" desc="Aktuell wirksame Download-Einstellungen.">
       <Show when={settings()} fallback={<div class="spinner" />}>
         {(s) => (
           <div class="panel">
@@ -489,6 +510,8 @@ export function Settings(): JSX.Element {
         gespeichert. Hoster-Reihenfolge und die weiteren Werte stammen aus den{" "}
         <code>VINDEX_*</code>-Variablen und <code>.env</code>.
       </p>
+
+      </Section>
 
       <Show when={settings.error}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>

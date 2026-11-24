@@ -123,14 +123,53 @@ export function Downloads(): JSX.Element {
     setHist([]);
   };
 
-  const active = () => jobs().filter((j) => !["done", "error", "cancelled"].includes(j.status));
+  const finished = (st: string) => ["done", "error", "cancelled"].includes(st);
+  const active = () => jobs().filter((j) => !finished(j.status));
+  const fmtSpeed = (bps: number): string => {
+    if (!bps) return "";
+    const m = bps / (1024 * 1024);
+    return m >= 1 ? `${m.toFixed(1)} MB/s` : `${(bps / 1024).toFixed(0)} KB/s`;
+  };
+  const totalSpeed = () => active().reduce((s, j) => s + (rate()[j.id]?.speed || 0), 0);
+  // Aktive Jobs zuerst, Erledigte ans Ende.
+  const ordered = () => {
+    const rank = (st: string) => (finished(st) ? 1 : 0);
+    return [...jobs()].sort((a, b) => rank(a.status) - rank(b.status));
+  };
+  const pausable = (st: string) => ["running", "resolving", "queued"].includes(st);
+  const pauseAll = () => active().forEach((j) => pausable(j.status) && void pauseDownload(j.id));
+  const resumeAll = () =>
+    jobs().forEach((j) => j.status === "paused" && void resumeDownload(j.id));
 
   return (
     <div class="wrap">
       <div class="row-h">
         <h2>Downloads</h2>
         <Show when={jobs().length > 0}>
-          <span class="link">{active().length} aktiv · {jobs().length} gesamt</span>
+          <div
+            style={{
+              "margin-left": "auto",
+              display: "flex",
+              gap: "10px",
+              "align-items": "center",
+            }}
+          >
+            <span class="link">
+              {active().length} aktiv
+              <Show when={totalSpeed() > 0}> · {fmtSpeed(totalSpeed())}</Show> · {jobs().length}{" "}
+              gesamt
+            </span>
+            <Show when={active().filter((j) => pausable(j.status)).length > 1}>
+              <button class="chip" onClick={pauseAll}>
+                Alle pausieren
+              </button>
+            </Show>
+            <Show when={jobs().some((j) => j.status === "paused")}>
+              <button class="chip" onClick={resumeAll}>
+                Alle fortsetzen
+              </button>
+            </Show>
+          </div>
         </Show>
       </div>
 
@@ -142,9 +181,9 @@ export function Downloads(): JSX.Element {
 
       <Show when={jobs().length > 0}>
         <div class="panel">
-          <For each={jobs()}>
+          <For each={ordered()}>
             {(j) => (
-              <div class="dl">
+              <div class="dl" classList={{ "dl-done": finished(j.status) }}>
                 <div
                   class="thumb"
                   style={{

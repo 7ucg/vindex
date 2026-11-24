@@ -1114,3 +1114,51 @@ button:focus:not(:focus-visible) {
   margin-left: 10px;
   box-shadow: none;
 }
+
+/* Einstellungen: jede Sektion als klar abgegrenzte Karte mit Titel + Hinweis. */
+.settings {
+  max-width: 760px;
+}
+.set-card {
+  background: var(--surface);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+.set-card-head {
+  margin-bottom: 12px;
+}
+.set-card-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.set-card-desc {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.set-card-body > .controls {
+  margin-bottom: 10px;
+}
+.set-card-body > .controls:last-child {
+  margin-bottom: 0;
+}
+/* Felder-Spalte (Downloads/Netzwerk) ohne doppelten Kasten. */
+.set-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.set-card-body > .panel {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* Erledigte Downloads dezenter als aktive. */
+.dl.dl-done {
+  opacity: 0.55;
+}
