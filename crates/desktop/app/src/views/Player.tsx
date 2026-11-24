@@ -540,7 +540,13 @@ export function Player(props: { playback: Playback }): JSX.Element {
           >
             A-B
           </button>
-          <button class="chip" onClick={() => void togglePip()} title="Bild-in-Bild" aria-label="Bild-in-Bild">
+          <button
+            class="chip"
+            classList={{ on: mini() }}
+            onClick={() => void togglePip()}
+            title="Bild-in-Bild"
+            aria-label="Bild-in-Bild"
+          >
             PiP
           </button>
           <button
