@@ -753,13 +753,34 @@ fn import_from_folder(path: String, state: State<'_, AppState>) -> Result<Import
             continue;
         }
         let dst = dir.join(name);
-        if dst.exists() {
+        // Ziel exklusiv anlegen: `create_new` schlägt fehl, wenn der Pfad existiert
+        // (auch als Symlink) — kein TOCTOU und kein Schreiben durch einen
+        // untergeschobenen Symlink. Die Quelle `p` ist oben als reguläre Datei geprüft.
+        let mut dstf = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dst)
+        {
+            Ok(f) => f,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let mut srcf = match std::fs::File::open(&p) {
+            Ok(f) => f,
+            Err(_) => {
+                let _ = std::fs::remove_file(&dst);
+                skipped += 1;
+                continue;
+            }
+        };
+        if std::io::copy(&mut srcf, &mut dstf).is_ok() {
+            imported += 1;
+        } else {
+            drop(dstf);
+            let _ = std::fs::remove_file(&dst);
             skipped += 1;
-            continue;
-        }
-        match std::fs::copy(&p, &dst) {
-            Ok(_) => imported += 1,
-            Err(_) => skipped += 1,
         }
     }
     Ok(ImportResult { imported, skipped })
