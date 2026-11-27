@@ -102,8 +102,23 @@ const LABEL: Record<Portal, string> = {
   filmo: "filmo.to",
 };
 
-// Große Kataloge: progressiv rendern (Batch beim Scrollen), nicht alle 2500 auf einmal.
-const BATCH = 60;
+// Virtualisierung: nur die im Viewport sichtbaren Zeilen im DOM halten. OVERSCAN
+// rendert ein paar Zeilen über/unter dem Rand vor, damit das Lazy-Cover (300px
+// rootMargin in Cover.tsx) rechtzeitig zieht und beim Scrollen nichts blitzt.
+const OVERSCAN = 3;
+// Bis die echten Maße stehen (erster Frame), diese Zahl roh rendern und dann messen.
+const FALLBACK = 60;
+
+// Nächster scrollbarer Vorfahre (hier .main); null = Fensterscroll.
+function scrollParent(node: HTMLElement | null | undefined): HTMLElement | null {
+  let el = node?.parentElement ?? null;
+  while (el) {
+    const oy = getComputedStyle(el).overflowY;
+    if (oy === "auto" || oy === "scroll") return el;
+    el = el.parentElement;
+  }
+  return null;
+}
 
 export function PortalView(props: { portal: Portal }): JSX.Element {
   const [genre, setGenre] = createSignal("");
@@ -147,19 +162,122 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [selectMode, setSelectMode] = createSignal(false);
   const [picked, setPicked] = createSignal<Map<string, string>>(new Map());
   const [bulkBusy, setBulkBusy] = createSignal(false);
-  const [shown, setShown] = createSignal(BATCH);
-  let sentinel: HTMLDivElement | undefined;
 
-  // Beim Wechsel von Portal, Filter, Sortierung oder Bibliotheksfilter wieder von vorn.
+  // --- Virtualisierung ---------------------------------------------------
+  let wrapEl: HTMLDivElement | undefined; // Anker, um den Scroll-Container zu finden
+  let outerEl: HTMLDivElement | undefined; // stabiler Oberrand der virtualisierten Liste
+  let scrollEl: HTMLElement | null = null; // .main (oder null = Fenster)
+  const [scrollTop, setScrollTop] = createSignal(0);
+  const [viewportH, setViewportH] = createSignal(0);
+  const [gridTop, setGridTop] = createSignal(0); // Oberkante der Liste in Scroll-Koordinaten
+  const [cols, setCols] = createSignal(0); // Spalten (Liste: 1)
+  const [rowH, setRowH] = createSignal(0); // Zeilenhöhe inkl. gap
+
+  const curScrollTop = () => (scrollEl ? scrollEl.scrollTop : window.scrollY);
+  const curViewportH = () => (scrollEl ? scrollEl.clientHeight : window.innerHeight);
+  const scrollRectTop = () => (scrollEl ? scrollEl.getBoundingClientRect().top : 0);
+
+  // Nur Scroll-Zustand (billig, pro Frame).
+  const measureScroll = () => {
+    setScrollTop(curScrollTop());
+    setViewportH(curViewportH());
+  };
+  // Geometrie: Listenoberkante, Spaltenzahl, Zeilenhöhe — aus echten DOM-Maßen,
+  // damit Dichte/Theme/Layout automatisch stimmen (keine CSS-Konstanten raten).
+  const measureGeom = () => {
+    if (!outerEl) return;
+    setGridTop(outerEl.getBoundingClientRect().top - scrollRectTop() + curScrollTop());
+    const grid = outerEl.querySelector(".grid, .list") as HTMLElement | null;
+    if (!grid) return;
+    const sel = layout() === "grid" ? ".card" : ".list-row";
+    const item = grid.querySelector(sel) as HTMLElement | null;
+    if (!item) return;
+    const cs = getComputedStyle(grid);
+    const colGap = parseFloat(cs.columnGap) || 0;
+    const rowGap = parseFloat(cs.rowGap) || 0;
+    if (layout() === "list") {
+      setCols(1);
+    } else {
+      const iw = item.offsetWidth;
+      setCols(Math.max(1, Math.round((grid.clientWidth + colGap) / (iw + colGap))));
+    }
+    setRowH(item.offsetHeight + rowGap);
+  };
+
+  onMount(() => {
+    scrollEl = scrollParent(wrapEl);
+    let rafPending = false;
+    const onScroll = () => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        measureScroll();
+      });
+    };
+    const target: HTMLElement | Window = scrollEl ?? window;
+    target.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => {
+      measureScroll();
+      measureGeom();
+    });
+    if (scrollEl) ro.observe(scrollEl);
+    requestAnimationFrame(() => {
+      measureScroll();
+      measureGeom();
+    });
+    onCleanup(() => {
+      target.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    });
+  });
+
+  // Nach Datenwechsel / Layout-Umschaltung neu vermessen, sobald das DOM steht.
+  createEffect(() => {
+    visible();
+    layout();
+    requestAnimationFrame(() => {
+      measureGeom();
+      measureScroll();
+    });
+  });
+
+  // Bei neuer Abfrage/Filter/Sortierung nach oben springen: sonst zeigt das
+  // virtualisierte Fenster bei einer jetzt kürzeren Liste unter deren Ende (leer).
   createEffect(() => {
     filter();
-    sort();
-    onlyLib();
     genre();
     year();
+    flang();
+    sort();
+    onlyLib();
     void props.portal;
-    setShown(BATCH);
+    if (scrollEl) scrollEl.scrollTop = 0;
+    else window.scrollTo(0, 0);
+    setScrollTop(0);
   });
+
+  // Sichtbares Fenster: Start/Ende-Index + Spacer-Höhen für eine korrekte Scrollleiste.
+  const win = createMemo(() => {
+    const n = visible().length;
+    const c = cols() || 1;
+    const rh = rowH();
+    if (rh <= 0 || n === 0) return { start: 0, end: Math.min(n, FALLBACK), pad: 0, tail: 0 };
+    const rows = Math.ceil(n / c);
+    const firstRow = Math.floor((scrollTop() - gridTop()) / rh);
+    // Gegen das Listenende klemmen: sonst steht das Fenster nach dem Verkleinern der
+    // Liste (Filter/Sort) jenseits der letzten Zeile und der Bildschirm bleibt leer.
+    const startRow = Math.min(Math.max(0, firstRow - OVERSCAN), Math.max(0, rows - 1));
+    const rowsInView = Math.ceil((viewportH() || 1) / rh);
+    const endRow = Math.min(rows, startRow + rowsInView + OVERSCAN * 2);
+    return {
+      start: startRow * c,
+      end: Math.min(n, endRow * c),
+      pad: startRow * rh,
+      tail: Math.max(0, (rows - endRow) * rh),
+    };
+  });
+  const windowItems = createMemo(() => visible().slice(win().start, win().end));
 
   // Ein Titel gilt als „in Bibliothek", wenn eine Datei mit seinem Namen beginnt.
   const inLibrary = (title: string): boolean => {
@@ -167,25 +285,6 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     if (!base) return false;
     return (lib() ?? []).some((f) => f.name.startsWith(base));
   };
-
-  onMount(() => {
-    // Nachladen beim Scrollen. Wichtig: nach jedem Batch den Sentinel neu beobachten,
-    // solange er sichtbar bleibt und noch mehr da ist — sonst feuert der Observer bei
-    // großem rootMargin nur einmal und es „fehlt" der Rest (nur ein Batch sichtbar).
-    let io: IntersectionObserver;
-    const cb: IntersectionObserverCallback = (entries) => {
-      if (!entries[0]?.isIntersecting) return;
-      const total = visible().length;
-      setShown((n) => Math.min(n + BATCH, total));
-      if (sentinel && shown() < total) {
-        io.unobserve(sentinel);
-        io.observe(sentinel);
-      }
-    };
-    io = new IntersectionObserver(cb, { rootMargin: "800px" });
-    if (sentinel) io.observe(sentinel);
-    onCleanup(() => io.disconnect());
-  });
 
   const isMovie = () => props.portal === "filmo";
 
@@ -208,9 +307,19 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       const eps = await episodes(url, s).catch(() => []);
       for (const e of eps) {
         const base = `${sanitize(title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
-        await startDownload(e.url, base, `${title} — S${e.season}E${e.index_in_season}`).catch(
-          () => {},
-        );
+        // Staffel/Folge mitgeben: der Kern baut den Namen (inkl. naming_template) selbst,
+        // damit Bulk-, Detail- und Abo-Downloads identisch benennen (Dedup bleibt heil).
+        await startDownload(
+          e.url,
+          base,
+          `${title} — S${e.season}E${e.index_in_season}`,
+          undefined,
+          undefined,
+          undefined,
+          e.season,
+          e.index_in_season,
+          false,
+        ).catch(() => {});
       }
     }
   };
@@ -249,7 +358,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   });
 
   return (
-    <div class="wrap">
+    <div class="wrap" ref={wrapEl}>
       <div class="row-h">
         <h2>{LABEL[props.portal]}</h2>
         <Show when={ready()}>
@@ -391,78 +500,78 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       </Show>
 
       <Show when={visible().length > 0}>
-        <Show
-          when={layout() === "grid"}
-          fallback={
-            <div class="list">
-              <For each={visible().slice(0, shown())}>
+        {/* Virtualisierung: Spacer oben/unten halten die Gesamthöhe, dazwischen nur
+            das sichtbare Fenster. Optik/Grid-Layout unverändert. */}
+        <div class="virt" ref={outerEl}>
+          <div class="virt-pad" style={{ height: `${win().pad}px` }} />
+          <Show
+            when={layout() === "grid"}
+            fallback={
+              <div class="list">
+                <For each={windowItems()}>
+                  {(h) => (
+                    <div
+                      class="list-row"
+                      classList={{ picked: picked().has(h.url) }}
+                      title={h.url}
+                      onClick={() => onCard(h)}
+                    >
+                      <div class="list-thumb">
+                        <Cover url={h.url} title={h.title} />
+                        <Show when={selectMode()}>
+                          <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
+                        </Show>
+                      </div>
+                      <div class="list-title">{h.title}</div>
+                      <div class="list-portal">{LABEL[props.portal]}</div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            }
+          >
+            <div class="grid">
+              <For each={windowItems()}>
                 {(h) => (
                   <div
-                    class="list-row"
+                    class="card"
                     classList={{ picked: picked().has(h.url) }}
                     title={h.url}
                     onClick={() => onCard(h)}
                   >
-                    <div class="list-thumb">
+                    <div class="poster">
                       <Cover url={h.url} title={h.title} />
                       <Show when={selectMode()}>
                         <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
                       </Show>
+                      <Show when={h.source}>
+                        <div
+                          class="src-badge"
+                          classList={{ live: h.source === "live" }}
+                          title={
+                            h.source === "db"
+                              ? t("portal.src_db_title")
+                              : t("portal.src_live_title")
+                          }
+                        >
+                          {h.source === "db" ? t("portal.src_db") : t("portal.src_live")}
+                        </div>
+                      </Show>
+                      <div class="play-ov" aria-hidden="true">
+                        <button class="play-btn" tabindex="-1">
+                          <IconPlay />
+                        </button>
+                      </div>
                     </div>
-                    <div class="list-title">{h.title}</div>
-                    <div class="list-portal">{LABEL[props.portal]}</div>
+                    <div class="t">{h.title}</div>
+                    <div class="s">{LABEL[props.portal]}</div>
                   </div>
                 )}
               </For>
             </div>
-          }
-        >
-          <div class="grid">
-            <For each={visible().slice(0, shown())}>
-              {(h) => (
-                <div
-                  class="card"
-                  classList={{ picked: picked().has(h.url) }}
-                  title={h.url}
-                  onClick={() => onCard(h)}
-                >
-                  <div class="poster">
-                    <Cover url={h.url} title={h.title} />
-                    <Show when={selectMode()}>
-                      <div class="pick-mark">{picked().has(h.url) ? "✓" : ""}</div>
-                    </Show>
-                    <Show when={h.source}>
-                      <div
-                        class="src-badge"
-                        classList={{ live: h.source === "live" }}
-                        title={
-                          h.source === "db"
-                            ? t("portal.src_db_title")
-                            : t("portal.src_live_title")
-                        }
-                      >
-                        {h.source === "db" ? t("portal.src_db") : t("portal.src_live")}
-                      </div>
-                    </Show>
-                    <div class="play-ov" aria-hidden="true">
-                      <button class="play-btn" tabindex="-1">
-                        <IconPlay />
-                      </button>
-                    </div>
-                  </div>
-                  <div class="t">{h.title}</div>
-                  <div class="s">{LABEL[props.portal]}</div>
-                </div>
-              )}
-            </For>
-          </div>
-        </Show>
-        <div ref={sentinel} style={{ height: "1px" }} />
-        <Show when={shown() < visible().length}>
-          <p class="note">
-            {t("portal.shown_of", { n: shown(), total: visible().length })}
-          </p>
-        </Show>
+          </Show>
+          <div class="virt-pad" style={{ height: `${win().tail}px` }} />
+        </div>
       </Show>
     </div>
   );

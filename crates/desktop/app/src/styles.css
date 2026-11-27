@@ -346,6 +346,17 @@ a {
   border-color: transparent;
 }
 
+/* ---------- Virtualisiertes Grid/Liste ---------- */
+/* Wrapper um das sichtbare Fenster; die beiden Spacer halten die Gesamthöhe,
+   damit die Scrollleiste trotz nur teilweise gerendertem DOM stimmt. */
+.virt {
+  display: block;
+}
+.virt-pad {
+  flex: none;
+  width: 100%;
+}
+
 /* ---------- Poster grid ---------- */
 .grid {
   display: grid;
