@@ -29,6 +29,10 @@ const SLEEP_OPTIONS = [15, 30, 60];
 export function Player(props: { playback: Playback }): JSX.Element {
   let video: HTMLVideoElement | undefined;
   let hls: import("hls.js").default | undefined;
+  // WebAudio-Graph für Lautstärke-Angleichung (einmal pro <video> aufgebaut).
+  let audioCtx: AudioContext | undefined;
+  let srcNode: MediaElementAudioSourceNode | undefined;
+  let compressor: DynamicsCompressorNode | undefined;
   const [err, setErr] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
   // Leisten (obere Toolbar + Tasten-Hinweis) blenden nach Ruhe aus; jede
@@ -71,6 +75,19 @@ export function Player(props: { playback: Playback }): JSX.Element {
   const pickSub = (i: number) => {
     if (hls) hls.subtitleTrack = i;
     setCurSub(i);
+    if (i < 0) {
+      setCueText("");
+      return;
+    }
+    // HLS setzt die Track-Modes selbst — kurz verzögert auf "hidden" zwingen,
+    // damit das eigene Overlay rendert und keine Doppel-Untertitel entstehen.
+    setTimeout(() => {
+      const v = video;
+      if (!v) return;
+      const tt = v.textTracks;
+      for (let k = 0; k < tt.length; k++) if (tt[k].mode !== "disabled") tt[k].mode = "hidden";
+      wireCues();
+    }, 50);
   };
 
   const doSkip = () => {
@@ -102,12 +119,119 @@ export function Player(props: { playback: Playback }): JSX.Element {
   // Bild: Helligkeit (CSS-Filter) und Zuschnitt (contain ↔ cover).
   const [brightness, setBrightness] = createSignal(1);
   const [fitCover, setFitCover] = createSignal(false);
+  // Untertitel-Stil (eigenes Overlay statt ::cue, erlaubt vertikale Position).
+  type SubStyle = { size: number; color: string; bgAlpha: number; bottom: number };
+  const SUB_DEFAULT: SubStyle = { size: 28, color: "#ffffff", bgAlpha: 0.5, bottom: 8 };
+  const readSubStyle = (): SubStyle => {
+    try {
+      const raw = localStorage.getItem("vindex:subtitle-style");
+      if (raw) return { ...SUB_DEFAULT, ...(JSON.parse(raw) as Partial<SubStyle>) };
+    } catch {
+      /* egal */
+    }
+    return { ...SUB_DEFAULT };
+  };
+  const [subStyle, setSubStyleRaw] = createSignal<SubStyle>(readSubStyle());
+  const setSubStyle = (s: SubStyle) => {
+    setSubStyleRaw(s);
+    try {
+      localStorage.setItem("vindex:subtitle-style", JSON.stringify(s));
+    } catch {
+      /* egal */
+    }
+  };
+  // Eigenes Overlay: aktiver Track läuft auf "hidden", wir lesen activeCues selbst.
+  const [cueText, setCueText] = createSignal("");
+  const renderActiveCues = () => {
+    const v = video;
+    if (!v) {
+      setCueText("");
+      return;
+    }
+    const tt = v.textTracks;
+    let out = "";
+    for (let i = 0; i < tt.length; i++) {
+      if (tt[i].mode === "disabled") continue;
+      const ac = tt[i].activeCues;
+      if (!ac || !ac.length) continue;
+      const parts: string[] = [];
+      for (let j = 0; j < ac.length; j++) {
+        const t = (ac[j] as VTTCue).text.replace(/<[^>]+>/g, "");
+        if (t) parts.push(t);
+      }
+      out = parts.join("\n");
+      break;
+    }
+    setCueText(out);
+  };
+  // cuechange-Listener auf allen aktiven Tracks sicherstellen (idempotent).
+  const wireCues = () => {
+    const v = video;
+    if (!v) return;
+    const tt = v.textTracks;
+    for (let i = 0; i < tt.length; i++) {
+      tt[i].removeEventListener("cuechange", renderActiveCues);
+      tt[i].addEventListener("cuechange", renderActiveCues);
+    }
+    renderActiveCues();
+  };
+  // Audio-Normalisierung: <video> durch einen DynamicsCompressor routen.
+  const [normalize, setNormalizeRaw] = createSignal<boolean>(
+    (() => {
+      try {
+        return localStorage.getItem("vindex:audio-normalize") === "1";
+      } catch {
+        return false;
+      }
+    })(),
+  );
+  const setNormalize = (on: boolean) => {
+    setNormalizeRaw(on);
+    try {
+      localStorage.setItem("vindex:audio-normalize", on ? "1" : "0");
+    } catch {
+      /* egal */
+    }
+  };
+  const applyNormalize = (on: boolean) => {
+    const v = video;
+    if (!v) return;
+    try {
+      if (!audioCtx) audioCtx = new AudioContext();
+      // MediaElementSource lässt sich pro Element nur EINMAL erzeugen.
+      if (!srcNode) srcNode = audioCtx.createMediaElementSource(v);
+      if (!compressor) {
+        compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.value = -24;
+        compressor.knee.value = 30;
+        compressor.ratio.value = 12;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.25;
+      }
+    } catch {
+      // Zweiter createMediaElementSource-Aufruf wirft InvalidStateError — ignorieren.
+      return;
+    }
+    void audioCtx.resume().catch(() => {});
+    // Umschalten durch connect/disconnect (Bypass), nicht neu bauen.
+    srcNode.disconnect();
+    compressor.disconnect();
+    if (on) {
+      srcNode.connect(compressor);
+      compressor.connect(audioCtx.destination);
+    } else {
+      srcNode.connect(audioCtx.destination);
+    }
+  };
   // Untertitel-Delay: verschiebt die Cues des aktiven Tracks (negativ = früher).
   const [subDelay, setSubDelay] = createSignal(0);
   const shiftSubs = (delta: number) => {
     const v = video;
     if (!v) return;
-    const track = Array.from(v.textTracks).find((t) => t.mode === "showing");
+    // Aktiver Track kann "hidden" sein (eigenes Overlay), nicht nur "showing".
+    const track = Array.from(v.textTracks).find(
+      (t) => t.mode === "showing" || t.mode === "hidden",
+    );
     const cues = track?.cues;
     if (!cues) return;
     for (let i = 0; i < cues.length; i++) {
@@ -145,10 +269,68 @@ export function Player(props: { playback: Playback }): JSX.Element {
       .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2"); // Komma → Punkt
     return `WEBVTT\n\n${body.trim()}\n`;
   };
+  // .ass/.ssa -> VTT. Nur Textdarstellung, kein libass-Styling (Position/Farben/
+  // Fonts aus .ass werden ignoriert). Liest nur den [Events]-Abschnitt.
+  const assToVtt = (s: string): string => {
+    const lines = s.replace(/\r+/g, "").split("\n");
+    let inEvents = false;
+    let iStart = 1;
+    let iEnd = 2;
+    let iText = 9; // Default: Text ist die letzte Format-Spalte
+    const cues: string[] = [];
+    const toVttTime = (t: string): string => {
+      // H:MM:SS.cs (Zentisekunden) -> HH:MM:SS.mmm
+      const m = t.trim().match(/(\d+):(\d{2}):(\d{2})[.,](\d{1,2})/);
+      if (!m) return "00:00:00.000";
+      const h = m[1].padStart(2, "0");
+      const cs = (m[4] + "00").slice(0, 2);
+      return `${h}:${m[2]}:${m[3]}.${cs}0`;
+    };
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (/^\[Events\]/i.test(line)) {
+        inEvents = true;
+        continue;
+      }
+      if (/^\[/.test(line)) {
+        inEvents = false;
+        continue;
+      }
+      if (!inEvents) continue;
+      if (/^Format:/i.test(line)) {
+        const cols = line.slice(7).split(",").map((c) => c.trim().toLowerCase());
+        const si = cols.indexOf("start");
+        const ei = cols.indexOf("end");
+        const ti = cols.indexOf("text");
+        if (si >= 0) iStart = si;
+        if (ei >= 0) iEnd = ei;
+        iText = ti >= 0 ? ti : cols.length - 1;
+        continue;
+      }
+      if (!/^Dialogue:/i.test(line)) continue;
+      // Erst die Felder vor der Text-Spalte abtrennen, Rest (darf Kommata haben) als Text joinen.
+      const parts = line.slice(9).split(",");
+      if (parts.length <= iText) continue;
+      const start = toVttTime(parts[iStart]);
+      const end = toVttTime(parts[iEnd]);
+      let txt = parts.slice(iText).join(",");
+      txt = txt
+        .replace(/\{[^}]*\}/g, "") // Override-Tags entfernen
+        .replace(/\\N/gi, "\n")
+        .replace(/\\h/gi, " ")
+        .trim();
+      if (!txt) continue;
+      cues.push(`${start} --> ${end}\n${txt}\n`);
+    }
+    return `WEBVTT\n\n${cues.join("\n")}`;
+  };
   const loadSub = async (file: File) => {
     if (!video) return;
     let text = await file.text();
-    if (file.name.toLowerCase().endsWith(".srt") || !text.trimStart().startsWith("WEBVTT")) {
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".ass") || name.endsWith(".ssa")) {
+      text = assToVtt(text);
+    } else if (name.endsWith(".srt") || !text.trimStart().startsWith("WEBVTT")) {
       text = srtToVtt(text);
     }
     const blob = new Blob([text], { type: "text/vtt" });
@@ -165,7 +347,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
     setExtSub(tr.label);
     queueMicrotask(() => {
       const tt = video!.textTracks;
-      for (let i = 0; i < tt.length; i++) tt[i].mode = i === tt.length - 1 ? "showing" : "disabled";
+      // Ziel-Track auf "hidden" (nicht "showing") — wir rendern selbst im Overlay.
+      for (let i = 0; i < tt.length; i++) tt[i].mode = i === tt.length - 1 ? "hidden" : "disabled";
+      wireCues();
     });
   };
   const clearSub = () => {
@@ -174,6 +358,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
     if (extSubUrl) URL.revokeObjectURL(extSubUrl);
     extSubUrl = undefined;
     setExtSub(null);
+    setCueText("");
   };
   const onSubFile = (e: Event) => {
     const f = (e.target as HTMLInputElement).files?.[0];
@@ -444,6 +629,10 @@ export function Player(props: { playback: Playback }): JSX.Element {
       clearTimeout(hideTimer);
     });
     el.addEventListener("play", poke);
+    // Erst bei echter Wiedergabe (User-Geste) den Audio-Graph anlegen (Resume).
+    el.addEventListener("play", () => {
+      if (normalize()) applyNormalize(true);
+    });
     poke();
 
     // AniSkip-Zeiten holen (still, falls Jikan nicht erreichbar ist).
@@ -529,6 +718,12 @@ export function Player(props: { playback: Playback }): JSX.Element {
       void win.setAlwaysOnTop(false).catch(() => {});
     }
     if (hls) hls.destroy();
+    // MediaElementSource bindet das <video>; nach close() ist der Graph für
+    // dieses Element weg (ein neues <video> beim Auto-Next bekommt eigenen Graph).
+    if (audioCtx) void audioCtx.close().catch(() => {});
+    audioCtx = undefined;
+    srcNode = undefined;
+    compressor = undefined;
   });
 
   return (
@@ -576,7 +771,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
             class="chip"
             classList={{ on: !!extSub() }}
             onClick={() => (extSub() ? clearSub() : subInput?.click())}
-            title={extSub() ? `Untertitel: ${extSub()} (entfernen)` : "Untertitel laden (.srt/.vtt)"}
+            title={
+              extSub() ? `Untertitel: ${extSub()} (entfernen)` : "Untertitel laden (.srt/.vtt/.ass)"
+            }
             aria-label="Externe Untertitel"
           >
             UT
@@ -584,21 +781,19 @@ export function Player(props: { playback: Playback }): JSX.Element {
           <input
             ref={subInput}
             type="file"
-            accept=".srt,.vtt,text/vtt"
+            accept=".srt,.vtt,.ass,.ssa,text/vtt"
             style={{ display: "none" }}
             onChange={onSubFile}
           />
-          <Show when={levels().length > 1 || audios().length > 1 || subs().length > 0}>
-            <button
-              class="chip"
-              classList={{ on: menuOpen() }}
-              onClick={() => setMenuOpen(!menuOpen())}
-              title="Qualität, Audio, Untertitel"
-              aria-label="Qualität, Audio, Untertitel"
-            >
-              ⚙
-            </button>
-          </Show>
+          <button
+            class="chip"
+            classList={{ on: menuOpen() }}
+            onClick={() => setMenuOpen(!menuOpen())}
+            title="Qualität, Audio, Untertitel, Darstellung"
+            aria-label="Qualität, Audio, Untertitel, Darstellung"
+          >
+            ⚙
+          </button>
           <Show when={hasNext()}>
             <button class="chip" disabled={goingNext()} onClick={() => void next()}>
               {goingNext() ? "lädt …" : "Nächste ›"}
@@ -700,6 +895,68 @@ export function Player(props: { playback: Playback }): JSX.Element {
             />
             <span class="sleep-label">{Math.round(brightness() * 100)}%</span>
           </div>
+
+          <div class="pm-sec">Untertitel-Darstellung</div>
+          <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
+            <span class="sleep-label">Größe</span>
+            <input
+              type="range"
+              min="16"
+              max="48"
+              step="1"
+              value={subStyle().size}
+              onInput={(e) => setSubStyle({ ...subStyle(), size: parseInt(e.currentTarget.value, 10) })}
+            />
+            <span class="sleep-label">{subStyle().size}px</span>
+          </div>
+          <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
+            <span class="sleep-label">Farbe</span>
+            <input
+              type="color"
+              value={subStyle().color}
+              onInput={(e) => setSubStyle({ ...subStyle(), color: e.currentTarget.value })}
+            />
+            <span class="sleep-label">Deckkraft BG</span>
+            <input
+              type="range"
+              min="0"
+              max="0.9"
+              step="0.05"
+              value={subStyle().bgAlpha}
+              onInput={(e) =>
+                setSubStyle({ ...subStyle(), bgAlpha: parseFloat(e.currentTarget.value) })
+              }
+            />
+          </div>
+          <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
+            <span class="sleep-label">Position</span>
+            <input
+              type="range"
+              min="0"
+              max="40"
+              step="1"
+              value={subStyle().bottom}
+              onInput={(e) =>
+                setSubStyle({ ...subStyle(), bottom: parseInt(e.currentTarget.value, 10) })
+              }
+            />
+            <span class="sleep-label">{subStyle().bottom}%</span>
+          </div>
+
+          <div class="pm-sec">Ton</div>
+          <div class="pm-row">
+            <button
+              class="chip"
+              classList={{ on: normalize() }}
+              onClick={() => {
+                const n = !normalize();
+                setNormalize(n);
+                applyNormalize(n);
+              }}
+            >
+              {normalize() ? "● Lautstärke angleichen" : "○ Lautstärke angleichen"}
+            </button>
+          </div>
         </div>
       </Show>
 
@@ -723,6 +980,22 @@ export function Player(props: { playback: Playback }): JSX.Element {
           "object-fit": fitCover() ? "cover" : "contain",
         }}
       />
+
+      {/* Eigenes Untertitel-Overlay (ersetzt native ::cue). Hinweis: Im echten
+          Browser-PiP ist dieses Overlay unsichtbar — es liegt nicht im <video>. */}
+      <Show when={cueText()}>
+        <div
+          class="sub-overlay"
+          style={{
+            "--sub-size": subStyle().size + "px",
+            "--sub-color": subStyle().color,
+            "--sub-bg": "rgba(0,0,0," + subStyle().bgAlpha + ")",
+            "--sub-bottom": subStyle().bottom + "%",
+          }}
+        >
+          <For each={cueText().split("\n")}>{(line) => <span>{line}</span>}</For>
+        </div>
+      </Show>
 
       <Show when={skipTarget()}>
         {(t) => (
