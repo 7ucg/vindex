@@ -21,7 +21,7 @@ jobs:
         os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Systempakete (Linux)
         if: runner.os == 'Linux'
@@ -34,19 +34,19 @@ jobs:
             libayatana-appindicator3-dev \
             patchelf
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: crates/desktop/app/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: crates/desktop/app/src-tauri
           # Cache nur von main schreiben — Fork-PRs können ihn nicht vergiften.
@@ -60,7 +60,7 @@ jobs:
         working-directory: crates/desktop/app
         run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bundle-${{ matrix.os }}
           path: crates/desktop/app/src-tauri/target/release/bundle/**
