@@ -1425,11 +1425,15 @@ fn apply_schedule(downloads: &downloads::Downloads, cfg: &config::DesktopConfig)
 /// Downloads gleich (TS-`sanitize`) — beide müssen übereinstimmen, sonst bricht der
 /// Bibliotheks-Abgleich.
 fn sanitize_title_component(raw: &str) -> String {
-    let mut s: String = raw
+    let filtered: String = raw
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
         .collect();
+    // ZUERST kürzen, DANN normalisieren: so kann das Kürzen keinen End-Punkt/Leerraum
+    // hinterlassen, den das Dateisystem (Windows) entfernt und so den Abgleich bricht.
+    // Dieselbe Regel-Reihenfolge wie das Detail-Frontend (TS-`sanitize`).
+    let mut s: String = filtered.chars().take(120).collect();
     s = s.trim().trim_matches('.').trim().to_string();
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -1437,9 +1441,6 @@ fn sanitize_title_component(raw: &str) -> String {
     ];
     if RESERVED.contains(&s.to_ascii_uppercase().as_str()) {
         s.push('_');
-    }
-    if s.chars().count() > 120 {
-        s = s.chars().take(120).collect::<String>().trim().to_string();
     }
     if s.is_empty() {
         s = "titel".to_string();
