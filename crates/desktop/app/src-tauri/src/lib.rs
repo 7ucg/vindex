@@ -1418,17 +1418,41 @@ fn apply_schedule(downloads: &downloads::Downloads, cfg: &config::DesktopConfig)
     );
 }
 
-/// Datei-Basisname einer Episode — identisch zur Benennung im Detail-Frontend
-/// (problematische Zeichen entfernt, zweistellige Nummern). Die echte Datei
-/// bekommt vom Kern noch die Container-Endung (.mkv/.ts), darum wird beim Abgleich
-/// mit der Bibliothek per Präfix (`starts_with`) verglichen.
-fn episode_file_base(title: &str, season: u32, index_in_season: u32) -> String {
-    let t: String = title
+/// Härtet einen gescrapten Titel zu einer Datei-Namenskomponente: Steuerzeichen und
+/// auf Windows/Unix unzulässige Zeichen raus, führende/abschließende Punkte und
+/// Leerraum weg (Windows duldet kein Namensende auf '.'), reservierte Gerätenamen
+/// meiden, Länge begrenzen, leerer Rest → Platzhalter. Das Detail-Frontend benennt
+/// Downloads gleich (TS-`sanitize`) — beide müssen übereinstimmen, sonst bricht der
+/// Bibliotheks-Abgleich.
+fn sanitize_title_component(raw: &str) -> String {
+    let mut s: String = raw
         .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
         .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-        .collect::<String>()
-        .trim()
-        .to_string();
+        .collect();
+    s = s.trim().trim_matches('.').trim().to_string();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&s.to_ascii_uppercase().as_str()) {
+        s.push('_');
+    }
+    if s.chars().count() > 120 {
+        s = s.chars().take(120).collect::<String>().trim().to_string();
+    }
+    if s.is_empty() {
+        s = "titel".to_string();
+    }
+    s
+}
+
+/// Datei-Basisname einer Episode — identisch zur Benennung im Detail-Frontend
+/// (Titel gehärtet, zweistellige Nummern). Die echte Datei bekommt vom Kern noch die
+/// Container-Endung (.mkv/.ts), darum wird beim Abgleich mit der Bibliothek per
+/// Präfix bis zum Punkt (`file_matches_base`) verglichen.
+fn episode_file_base(title: &str, season: u32, index_in_season: u32) -> String {
+    let t = sanitize_title_component(title);
     if season == 0 {
         format!("{t} - Film {index_in_season:02}")
     } else {
@@ -1504,8 +1528,19 @@ async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
     let mut active = state.downloads.active_file_names();
     let settings = state.backend.settings();
 
+    // Grenzen gegen unbegrenztes Einreihen aus gescrapten Serien: ein Abo mit sehr
+    // vielen oder manipulierten Folgenlisten darf die Queue nicht fluten.
+    const MAX_PER_SUB: usize = 60;
+    const MAX_PER_PASS: usize = 200;
+    const MAX_PENDING: usize = 500;
+    const MAX_SEASONS: usize = 100;
+    const MAX_EPS_PER_SEASON: usize = 500;
+
     let mut queued = 0usize;
-    for sub in subs {
+    'subs: for sub in subs {
+        if queued >= MAX_PER_PASS || active.len() >= MAX_PENDING {
+            break;
+        }
         // Nur Serien/Anime mit Staffeln. filmo-Filme liefern hier `Err` → überspringen.
         let seasons = match state.backend.seasons(&sub.url).await {
             Ok(s) => s,
@@ -1514,7 +1549,8 @@ async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
                 continue;
             }
         };
-        for season in seasons {
+        let mut per_sub = 0usize;
+        for season in seasons.into_iter().take(MAX_SEASONS) {
             let eps = match state.backend.episodes(&sub.url, season).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -1522,7 +1558,13 @@ async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
                     continue;
                 }
             };
-            for ep in eps {
+            for ep in eps.into_iter().take(MAX_EPS_PER_SEASON) {
+                if queued >= MAX_PER_PASS || active.len() >= MAX_PENDING {
+                    break 'subs;
+                }
+                if per_sub >= MAX_PER_SUB {
+                    continue 'subs;
+                }
                 let base = episode_file_base(&sub.title, ep.season, ep.index_in_season);
                 // Schon vorhanden (Bibliothek) oder schon in der Queue/laufend?
                 if existing.iter().any(|n| file_matches_base(n, &base)) || active.contains(&base) {
@@ -1540,6 +1582,7 @@ async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
                 );
                 active.insert(base);
                 queued += 1;
+                per_sub += 1;
             }
         }
     }
