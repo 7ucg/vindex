@@ -580,15 +580,14 @@ async fn play_external(
         (player, resolve_anime4k_value(&cfg))
     };
 
-    let args = core::mpv::build_player_args(
-        player,
-        &resolved.url,
-        resolved.referer.as_deref(),
-        None,
-        None,
-        anime4k.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    // mpv über den lokalen Stream-Proxy führen, NICHT an die rohe Hoster-URL: so
+    // läuft auch der externe Player über DNS 1.1.1.1 + konfigurierten Proxy/obscura,
+    // und der Referer wird vom Proxy injiziert (kein Egress am Schutz vorbei).
+    let stream = state
+        .proxy
+        .stream_url(&resolved.url, resolved.referer.as_deref());
+    let args = core::mpv::build_player_args(player, &stream, None, None, None, anime4k.as_deref())
+        .map_err(|e| e.to_string())?;
 
     // Abgekoppelt starten: der Player läuft in einem eigenen Fenster, die App bleibt
     // bedienbar. Fehler (z. B. mpv fehlt) landen im Log, nicht im UI-Thread.
