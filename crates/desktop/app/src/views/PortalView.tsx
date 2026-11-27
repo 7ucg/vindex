@@ -232,6 +232,31 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     });
   });
 
+  // Sicherer Zugriff: eine Resource im Fehlerzustand WIRFT beim Lesen von items().
+  // ready() liefert die Liste, ohne zu werfen — sonst bräche die Fehleranzeige.
+  const ready = () => (items.error || items.loading ? null : items() ?? []);
+
+  // Ein Titel gilt als „in Bibliothek", wenn eine Datei mit seinem Namen beginnt.
+  const inLibrary = (title: string): boolean => {
+    const base = sanitize(title);
+    if (!base) return false;
+    return (lib() ?? []).some((f) => f.name.startsWith(base));
+  };
+
+  // Gefilterte/sortierte Trefferliste. MUSS vor der Virtualisierung (win/windowItems)
+  // stehen, die visible() sofort beim Anlegen liest — sonst Temporal-Dead-Zone.
+  const visible = createMemo(() => {
+    const all: SearchHit[] = ready() ?? [];
+    const f = filter().trim().toLowerCase();
+    let out = f ? all.filter((h) => h.title.toLowerCase().includes(f)) : all.slice();
+    if (onlyLib()) out = out.filter((h) => inLibrary(h.title));
+    // Nur az/za clientseitig sortieren; bei den Server-Sorts (year_*/newest) die
+    // Backend-Reihenfolge unverändert lassen — nicht doppelt sortieren.
+    if (sort() === "az") out.sort((a, b) => a.title.localeCompare(b.title));
+    else if (sort() === "za") out.sort((a, b) => b.title.localeCompare(a.title));
+    return out;
+  });
+
   // Nach Datenwechsel / Layout-Umschaltung neu vermessen, sobald das DOM steht.
   createEffect(() => {
     visible();
@@ -278,13 +303,6 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     };
   });
   const windowItems = createMemo(() => visible().slice(win().start, win().end));
-
-  // Ein Titel gilt als „in Bibliothek", wenn eine Datei mit seinem Namen beginnt.
-  const inLibrary = (title: string): boolean => {
-    const base = sanitize(title);
-    if (!base) return false;
-    return (lib() ?? []).some((f) => f.name.startsWith(base));
-  };
 
   const isMovie = () => props.portal === "filmo";
 
@@ -340,22 +358,6 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       setPicked(new Map());
     }
   };
-
-  // Sicherer Zugriff: eine Resource im Fehlerzustand WIRFT beim Lesen von items().
-  // ready() liefert die Liste, ohne zu werfen — sonst bräche die Fehleranzeige.
-  const ready = () => (items.error || items.loading ? null : items() ?? []);
-
-  const visible = createMemo(() => {
-    const all: SearchHit[] = ready() ?? [];
-    const f = filter().trim().toLowerCase();
-    let out = f ? all.filter((h) => h.title.toLowerCase().includes(f)) : all.slice();
-    if (onlyLib()) out = out.filter((h) => inLibrary(h.title));
-    // Nur az/za clientseitig sortieren; bei den Server-Sorts (year_*/newest) die
-    // Backend-Reihenfolge unverändert lassen — nicht doppelt sortieren.
-    if (sort() === "az") out.sort((a, b) => a.title.localeCompare(b.title));
-    else if (sort() === "za") out.sort((a, b) => b.title.localeCompare(a.title));
-    return out;
-  });
 
   return (
     <div class="wrap" ref={wrapEl}>
