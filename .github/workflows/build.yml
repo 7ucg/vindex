@@ -58,7 +58,8 @@ jobs:
 
       - name: Bundle bauen (ohne Signierung/Updater-Artefakte)
         working-directory: crates/desktop/app
-        run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Override als Datei statt Inline-JSON — sonst zerlegt die Windows-Shell die Anführungszeichen.
+        run: pnpm tauri build --config ci-updater-off.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
