@@ -837,8 +837,10 @@ fn set_obscura(path: Option<String>, state: State<'_, AppState>) -> Result<(), S
     config::save(&cfg)
 }
 
-/// Egress-Proxy setzen/löschen. Der HTTP-Client ist bereits gebaut → wirkt nach Neustart.
-/// Ein gesetzter Proxy schaltet Stufe 3 (obscura) ab, damit sie nicht umgangen wird.
+/// Egress-Proxy setzen/löschen. Wirkt sofort (kein Neustart): der Pool im Kern wird
+/// ausgetauscht und der Backend-HTTP-Client neu gebaut — wieder mit festem
+/// 1.1.1.1-Resolver und dem neuen Proxy. Ein gesetzter Proxy schaltet Stufe 3
+/// (obscura) ab, damit sie nicht umgangen wird.
 #[tauri::command]
 fn set_proxy(url: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
     let p = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -848,6 +850,13 @@ fn set_proxy(url: Option<String>, state: State<'_, AppState>) -> Result<(), Stri
         }
     }
     std::env::set_var("VINDEX_PROXY", p.as_deref().unwrap_or(""));
+    // Pool im Kern austauschen: validierte Einträge (leer = kein Proxy). proxy_string_ok
+    // hat die Angabe schon bestätigt; set_proxy_pool filtert zur Sicherheit erneut.
+    let entries: Vec<String> = p
+        .as_deref()
+        .map(|s| s.split(',').map(|e| e.trim().to_string()).collect())
+        .unwrap_or_default();
+    core::http::set_proxy_pool(entries);
     let mut cfg = state.config.lock().unwrap();
     cfg.proxy = p.clone();
     // Proxy und obscura schließen sich aus: beim Setzen eines Proxys Stufe 3 abschalten.
@@ -856,7 +865,12 @@ fn set_proxy(url: Option<String>, state: State<'_, AppState>) -> Result<(), Stri
         std::env::set_var("VINDEX_OBSCURA", "");
         cfg.obscura = None;
     }
-    config::save(&cfg)
+    config::save(&cfg)?;
+    // Client neu bauen, damit der neue Proxy (bzw. „kein Proxy") sofort greift.
+    state
+        .backend
+        .rebuild_client()
+        .map_err(|e| format!("HTTP-Client konnte nicht neu gebaut werden: {e}"))
 }
 
 /// Spiegelt die Netzwerk-Felder der Desktop-Config in die ENV, damit der Kern

@@ -128,15 +128,42 @@ pub fn with_language_fallback(prefs: &mut DownloadPrefs) {
 }
 
 /// Facade-Objekt, das ein GUI-Frontend hält (ein HTTP-Client).
+///
+/// Der Client liegt hinter einem `RwLock`, damit er zur Laufzeit neu gebaut
+/// werden kann (Proxy-Wechsel ohne Neustart) — siehe [`Backend::rebuild_client`].
 pub struct Backend {
-    client: reqwest::Client,
+    client: std::sync::RwLock<reqwest::Client>,
 }
 
 impl Backend {
     pub fn new() -> Result<Self> {
         Ok(Backend {
-            client: http::browser_client()?,
+            client: std::sync::RwLock::new(http::browser_client()?),
         })
+    }
+
+    /// Aktueller HTTP-Client. Der Clone ist billig (reqwest teilt den Pool intern
+    /// per `Arc`); so halten die Methoden keinen Lock über ein `await`.
+    fn client(&self) -> reqwest::Client {
+        self.client
+            .read()
+            .expect("Backend-HTTP-Client-Lock vergiftet")
+            .clone()
+    }
+
+    /// Baut den HTTP-Client neu — **immer** über [`http::browser_client`], damit
+    /// der frische Client wieder den festen 1.1.1.1-Resolver (`GuardedResolver`)
+    /// **und** den aktuellen Proxy-Pool trägt. Nach einem Proxy-Wechsel aufrufen,
+    /// dann greift der neue Proxy sofort (kein Neustart). Nie einen nackten
+    /// `reqwest::Client` einsetzen — das wäre ein DNS-Leak (kein 1.1.1.1).
+    pub fn rebuild_client(&self) -> Result<()> {
+        let fresh = http::browser_client()?;
+        let mut guard = self
+            .client
+            .write()
+            .expect("Backend-HTTP-Client-Lock vergiftet");
+        *guard = fresh;
+        Ok(())
     }
 
     /// Titel-Suche (Teilstring) über den aniworld.to-Katalog.
@@ -149,7 +176,7 @@ impl Backend {
             return Ok((hits, true));
         }
         let needle = keyword.to_lowercase();
-        let entries = site::aniworld::fetch_catalog(&self.client).await?;
+        let entries = site::aniworld::fetch_catalog(&self.client()).await?;
         let live = entries
             .into_iter()
             .filter(|e| e.title.to_lowercase().contains(&needle))
@@ -175,7 +202,7 @@ impl Backend {
         }
         let live = match portal {
             "aniworld" => {
-                let entries = site::aniworld::fetch_catalog(&self.client)
+                let entries = site::aniworld::fetch_catalog(&self.client())
                     .await
                     .map_err(|e| core::error::Error::Parse(e.to_string()))?;
                 Ok(entries
@@ -188,7 +215,7 @@ impl Backend {
             }
             "serienstream" => {
                 let entries =
-                    site::serienstream::fetch_catalog(&self.client, core::model::BASE_STO).await?;
+                    site::serienstream::fetch_catalog(&self.client(), core::model::BASE_STO).await?;
                 Ok(entries
                     .into_iter()
                     .map(|e| SearchHit {
@@ -206,7 +233,7 @@ impl Backend {
                 let batches: Vec<Vec<core::model::CatalogEntry>> =
                     futures::stream::iter(1..=MAX_PAGES)
                         .map(|p| {
-                            let client = self.client.clone();
+                            let client = self.client();
                             async move {
                                 site::filmo::fetch_catalog(&client, p)
                                     .await
@@ -306,7 +333,7 @@ impl Backend {
                     Some(g) => format!("{base}/genre/{g}"),
                     None => format!("{base}/animes/jahr/{}", year.unwrap()),
                 };
-                let entries = site::aniworld::fetch_listing(&self.client, &url)
+                let entries = site::aniworld::fetch_listing(&self.client(), &url)
                     .await
                     .map_err(|e| core::error::Error::Parse(e.to_string()))?;
                 Ok(entries
@@ -323,7 +350,7 @@ impl Backend {
                     Some(g) => format!("{base}/genre/{g}"),
                     None => format!("{base}/jahr/{}", year.unwrap()),
                 };
-                let entries = site::serienstream::fetch_listing(&self.client, &url).await?;
+                let entries = site::serienstream::fetch_listing(&self.client(), &url).await?;
                 Ok(entries
                     .into_iter()
                     .map(|e| SearchHit {
@@ -340,7 +367,7 @@ impl Backend {
                 };
                 let base = site::filmo::BASE;
                 let url = format!("{base}/genres/{g}");
-                let entries = site::filmo::fetch_listing(&self.client, &url).await?;
+                let entries = site::filmo::fetch_listing(&self.client(), &url).await?;
                 Ok(entries
                     .into_iter()
                     .map(|e| SearchHit {
@@ -373,7 +400,7 @@ impl Backend {
                 .collect())
         } else {
             let base = site::base_for_url(url);
-            let links = site::serienstream::provider_links(&self.client, base, url).await?;
+            let links = site::serienstream::provider_links(&self.client(), base, url).await?;
             Ok(Language::ALL
                 .into_iter()
                 .filter(|l| links.by_language.contains_key(l))
@@ -396,7 +423,7 @@ impl Backend {
         let base = site::base_for_url(url);
         let slug = site::slug_from_url(url)
             .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
-        site::serienstream::list_seasons(&self.client, base, &slug).await
+        site::serienstream::list_seasons(&self.client(), base, &slug).await
     }
 
     /// Episoden einer Staffel (lazy pro Staffel geladen).
@@ -413,7 +440,7 @@ impl Backend {
         let base = site::base_for_url(url);
         let slug = site::slug_from_url(url)
             .ok_or_else(|| core::error::Error::Parse("keine Titel-Slug in der URL".into()))?;
-        site::serienstream::list_episodes(&self.client, base, &slug, season).await
+        site::serienstream::list_episodes(&self.client(), base, &slug, season).await
     }
 
     /// Reiche Titel-Metadaten der Detailseite (Poster, Beschreibung, Jahr, FSK,
@@ -423,7 +450,7 @@ impl Backend {
         if let Some(m) = index::title_meta(url) {
             return Ok(m);
         }
-        site::title_meta(&self.client, url).await
+        site::title_meta(&self.client(), url).await
     }
 
     /// Nur das Poster-Cover eines Titels (für das Grid, lazy pro Karte).
@@ -432,7 +459,7 @@ impl Backend {
         if let Some(poster) = index::cover(url) {
             return Ok(poster);
         }
-        Ok(site::og_meta(&self.client, url).await?.0)
+        Ok(site::og_meta(&self.client(), url).await?.0)
     }
 
     /// AniSkip-Intervalle (Intro/Outro) für eine Episode. Braucht die MAL-ID
@@ -443,10 +470,10 @@ impl Backend {
         let Some(slug) = site::slug_from_url(url) else {
             return Ok(vec![]);
         };
-        let Some(mal_id) = core::aniskip::resolve_mal_id(&self.client, &slug, season).await? else {
+        let Some(mal_id) = core::aniskip::resolve_mal_id(&self.client(), &slug, season).await? else {
             return Ok(vec![]);
         };
-        let intervals = core::aniskip::skip_times(&self.client, mal_id, episode).await?;
+        let intervals = core::aniskip::skip_times(&self.client(), mal_id, episode).await?;
         Ok(intervals
             .into_iter()
             .map(|i| Skip {
@@ -466,7 +493,7 @@ impl Backend {
         // SSRF-Schutz: nur die unterstützten Portale als Quell-URL zulassen.
         site::validate_source_url(episode_url).map_err(core::error::Error::Parse)?;
         let base = site::base_for_url(episode_url);
-        site::serienstream::provider_links(&self.client, base, episode_url).await
+        site::serienstream::provider_links(&self.client(), base, episode_url).await
     }
 
     /// Lädt die effektiven Laufzeit-Einstellungen (`VINDEX_*`-ENV + `.env`).
@@ -483,7 +510,7 @@ impl Backend {
     /// Löst einen Hoster + Embed-URL zur direkten Stream-URL auf
     /// (Durchreichung auf `core::hoster::resolve`).
     pub async fn resolve_stream(&self, hoster: Hoster, embed_url: &str) -> Result<Resolved> {
-        core::hoster::resolve(&self.client, hoster, embed_url).await
+        core::hoster::resolve(&self.client(), hoster, embed_url).await
     }
 
     /// Löst eine Episoden-/Film-URL zum ersten spielbaren Stream auf — exakt der
@@ -492,7 +519,7 @@ impl Backend {
     /// des Frontends an den Player.
     pub async fn resolve_playback(&self, url: &str, prefs: &DownloadPrefs) -> Result<Resolved> {
         site::validate_source_url(url).map_err(core::error::Error::Parse)?;
-        core::download::resolve_playable(&self.client, url, prefs).await
+        core::download::resolve_playable(&self.client(), url, prefs).await
     }
 
     /// Lädt eine Episode/einen Film anhand fertiger [`DownloadPrefs`] herunter
@@ -504,7 +531,7 @@ impl Backend {
         prefs: &DownloadPrefs,
         cancel: Option<CancellationToken>,
     ) -> Result<PathBuf> {
-        core::download::download_url(&self.client, url, prefs, cancel, None).await
+        core::download::download_url(&self.client(), url, prefs, cancel, None).await
     }
 
     /// Wie [`Backend::download`], meldet den Fortschritt aber an eine Senke — das
@@ -517,7 +544,7 @@ impl Backend {
         cancel: Option<CancellationToken>,
         progress: Option<&ProgressSink>,
     ) -> Result<PathBuf> {
-        core::download::download_url(&self.client, url, prefs, cancel, progress).await
+        core::download::download_url(&self.client(), url, prefs, cancel, progress).await
     }
 
     /// Wie [`Backend::download_with_progress`], aber mit voller Live-Steuerung
@@ -529,7 +556,7 @@ impl Backend {
         ctl: DownloadControl,
         progress: Option<&ProgressSink>,
     ) -> Result<PathBuf> {
-        core::download::download_url_ctl(&self.client, url, prefs, ctl, progress).await
+        core::download::download_url_ctl(&self.client(), url, prefs, ctl, progress).await
     }
 
     /// Bequemlichkeits-Variante: baut aus [`Settings`] + [`DownloadOverrides`]

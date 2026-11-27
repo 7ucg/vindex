@@ -68,39 +68,65 @@ pub fn proxy_string_ok(s: &str) -> bool {
     !entries.is_empty() && entries.iter().all(|e| proxy_entry_ok(e))
 }
 
-/// Proxy-Pool aus `VINDEX_PROXY` (komma-getrennt). Ungültige Einträge werden
-/// verworfen; leer/ungesetzt → kein Proxy. Werden Einträge verworfen, wird das
-/// geloggt — so sieht der Operator, dass Traffic ggf. ungeproxt läuft.
-fn proxy_pool() -> &'static [String] {
-    static POOL: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+/// Prozessweiter Proxy-Pool. Beim ersten Zugriff aus `VINDEX_PROXY` befüllt,
+/// danach zur Laufzeit über [`set_proxy_pool`] austauschbar — darum ein
+/// `RwLock` statt `OnceLock` (ein Proxy-Wechsel soll ohne Neustart wirken).
+fn proxy_pool_lock() -> &'static std::sync::RwLock<Vec<String>> {
+    static POOL: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
-        let raw = std::env::var("VINDEX_PROXY").unwrap_or_default();
-        let total = raw.split(',').filter(|s| !s.trim().is_empty()).count();
-        let pool: Vec<String> = raw
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && proxy_entry_ok(s))
-            .collect();
-        if pool.len() < total {
-            tracing::warn!(
-                "VINDEX_PROXY: {} von {} Einträgen verworfen (ungültig/gesperrt)",
-                total - pool.len(),
-                total
-            );
-        }
-        pool
+        std::sync::RwLock::new(parse_proxy_pool(
+            &std::env::var("VINDEX_PROXY").unwrap_or_default(),
+        ))
     })
+}
+
+/// Parst eine komma-getrennte Proxy-Angabe zu einem Pool. Ungültige/gesperrte
+/// Einträge werden verworfen und geloggt — so sieht der Operator, dass Traffic
+/// ggf. ungeproxt läuft.
+fn parse_proxy_pool(raw: &str) -> Vec<String> {
+    let total = raw.split(',').filter(|s| !s.trim().is_empty()).count();
+    let pool: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && proxy_entry_ok(s))
+        .collect();
+    if pool.len() < total {
+        tracing::warn!(
+            "VINDEX_PROXY: {} von {} Einträgen verworfen (ungültig/gesperrt)",
+            total - pool.len(),
+            total
+        );
+    }
+    pool
+}
+
+/// Setzt den prozessweiten Proxy-Pool zur Laufzeit neu (für Proxy-Wechsel ohne
+/// Neustart). Einträge laufen durch denselben [`proxy_entry_ok`]-Filter wie beim
+/// Start; ein leerer/ungültiger Vec bedeutet „kein Proxy". Damit ein frisch
+/// gebauter Client (z. B. [`browser_client`]) sofort den neuen Pool nutzt.
+pub fn set_proxy_pool(entries: Vec<String>) {
+    let pool: Vec<String> = entries
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && proxy_entry_ok(&s))
+        .collect();
+    if let Ok(mut guard) = proxy_pool_lock().write() {
+        *guard = pool;
+    }
 }
 
 /// True, wenn ein Proxy-Pool (`VINDEX_PROXY`) konfiguriert ist. Dient Stufe 3
 /// (obscura) als Fail-closed-Signal: ihr lokaler 1.1.1.1-Proxy würde einen
 /// konfigurierten Egress-Proxy umgehen, also wird Stufe 3 dann abgelehnt.
 ///
-/// Liest den prozessweiten `OnceLock`-Pool (thread-sicher) — Konsumenten können so
-/// den **effektiven** Proxy-Zustand abfragen, ohne direkt ins (nicht thread-sichere)
+/// Liest den prozessweiten Pool (thread-sicher) — Konsumenten können so den
+/// **effektiven** Proxy-Zustand abfragen, ohne direkt ins (nicht thread-sichere)
 /// Environment zu greifen.
 pub fn proxy_configured() -> bool {
-    !proxy_pool().is_empty()
+    proxy_pool_lock()
+        .read()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false)
 }
 
 /// Round-Robin-Auswahl aus einem Pool (rein, testbar).
@@ -115,7 +141,8 @@ fn rotate(cursor: usize, pool: &[String]) -> Option<&str> {
 /// Nächster Proxy aus dem Pool (round-robin). `None`, wenn keiner konfiguriert ist.
 fn next_proxy() -> Option<String> {
     let i = PROXY_CURSOR.fetch_add(1, Ordering::Relaxed);
-    rotate(i, proxy_pool()).map(str::to_string)
+    let pool = proxy_pool_lock().read().ok()?;
+    rotate(i, &pool).map(str::to_string)
 }
 
 /// Hängt den nächsten Proxy an den reqwest-Builder. Schlägt ein konfigurierter
