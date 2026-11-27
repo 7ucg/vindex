@@ -191,6 +191,7 @@ export function Settings(): JSX.Element {
     schedule_to: null,
     pause_on_battery: null,
     pause_on_metered: null,
+    naming_template: null,
   });
   getConfig()
     .then(setCfg)
@@ -585,6 +586,19 @@ export function Settings(): JSX.Element {
             value={cfg().download_delay_ms ?? ""}
             onChange={(e) => updateDelay(e.currentTarget.value)}
           />
+        </div>
+        <div class="field">
+          <label>Dateinamen-Muster</label>
+          <input
+            class="cfg-input"
+            placeholder="{title} S{s2}E{e2}"
+            value={cfg().naming_template ?? ""}
+            onChange={(e) => update({ naming_template: empty(e.currentTarget.value) })}
+          />
+          <p class="note" style={{ margin: "6px 0 0" }}>
+            Leer = Standard. Platzhalter: {"{title}"} {"{season}"} {"{s2}"} {"{episode}"} {"{e2}"}
+            {" "}(s2/e2 = 2-stellig). Pfadtrenner werden entfernt.
+          </p>
         </div>
         <div class="field">
           <label>{t("settings.downloads.method")}</label>

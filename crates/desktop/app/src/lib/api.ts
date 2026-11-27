@@ -245,6 +245,7 @@ export interface DesktopConfig {
   schedule_to: string | null; // "HH:MM"
   pause_on_battery: boolean | null;
   pause_on_metered: boolean | null;
+  naming_template: string | null;
 }
 
 /** Mindestabstand zwischen Download-Starts (ms, 0 = aus). */
@@ -310,6 +311,9 @@ export function startDownload(
   lang?: string,
   hoster?: string,
   maxQuality?: string,
+  season?: number,
+  episode?: number,
+  isFilm?: boolean,
 ): Promise<number> {
   return invoke<number>("start_download", {
     url,
@@ -318,7 +322,21 @@ export function startDownload(
     lang: lang ?? null,
     hoster: hoster || null,
     maxQuality: maxQuality || null,
+    // Gesetzt: der Kern baut den Dateinamen selbst (inkl. Muster); sonst gilt fileName.
+    season: season ?? null,
+    episode: episode ?? null,
+    isFilm: isFilm ?? null,
   });
+}
+
+/** Basisname einer Episode wie der Kern ihn vergibt (fürs Offline-Erkennen). */
+export function episodeBase(
+  title: string,
+  season: number,
+  idx: number,
+  isFilm: boolean,
+): Promise<string> {
+  return invoke<string>("episode_base", { title, season, idx, isFilm });
 }
 
 export function cancelDownload(id: number): Promise<void> {

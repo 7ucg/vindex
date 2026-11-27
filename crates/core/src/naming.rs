@@ -72,6 +72,20 @@ fn fill(template: &str, values: &HashMap<&str, String>) -> String {
     out
 }
 
+/// Füllt ein konfigurierbares Episoden-Muster für die Desktop-Downloads.
+///
+/// Platzhalter: `{title}`, `{season}`, `{s2}` (2-stellig), `{episode}`,
+/// `{e2}` (2-stellig). Das Ergebnis ist noch kein Dateiname — der Aufrufer
+/// entfernt Pfadtrenner und härtet es (flach, traversal-sicher).
+pub fn fill_episode_pattern(template: &str, title: &str, season: u32, episode: u32) -> String {
+    template
+        .replace("{title}", title)
+        .replace("{s2}", &format!("{season:02}"))
+        .replace("{season}", &season.to_string())
+        .replace("{e2}", &format!("{episode:02}"))
+        .replace("{episode}", &episode.to_string())
+}
+
 /// Baut die Standard-Platzhalter-Map.
 pub fn values(
     title: &str,

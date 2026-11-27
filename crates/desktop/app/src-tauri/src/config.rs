@@ -82,6 +82,12 @@ pub struct DesktopConfig {
     /// Downloads bei getakteter (metered) Verbindung pausieren.
     #[serde(default)]
     pub pause_on_metered: Option<bool>,
+    /// Muster für Download-Dateinamen. None/leer = bisheriges Verhalten
+    /// (`{title} S{s2}E{e2}` bzw. `{title} - Film {e2}`). Platzhalter:
+    /// `{title}`, `{season}`, `{s2}` (2-stellig), `{episode}`, `{e2}` (2-stellig).
+    /// Das gefüllte Muster wird flach gemacht (Pfadtrenner raus) und gehärtet.
+    #[serde(default)]
+    pub naming_template: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {

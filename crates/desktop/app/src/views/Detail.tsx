@@ -12,6 +12,7 @@ import {
   resolvePlayback,
   playExternal,
   startDownload,
+  episodeBase,
   titleMeta,
   library,
   localMediaUrl,
@@ -41,9 +42,6 @@ const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const HOSTERS = ["VOE", "Vidoza", "Doodstream", "Filemoon", "Vidmoly", "SpeedFiles"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 
-function pad(n: number): string {
-  return n < 10 ? `0${n}` : `${n}`;
-}
 // Windows-Gerätenamen, die als Dateiname verboten sind.
 const RESERVED_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL",
@@ -203,21 +201,42 @@ export function Detail(): JSX.Element {
     }
   };
 
-  // Dateiname-Basis (ohne Endung) — identisch zur Download-Benennung.
-  const epBase = (e: Episode): string =>
-    e.season === 0
-      ? `${sanitize(sel.title)} - Film ${pad(e.index_in_season)}`
-      : `${sanitize(sel.title)} S${pad(e.season)}E${pad(e.index_in_season)}`;
-
   const enqueue = (e: Episode) => {
+    // Namen baut der Kern aus Staffel/Folge (inkl. Muster) — nicht hier im Frontend.
     const title = `${sel.title} — ${seasonLabel(e.season)} · ${e.index_in_season}`;
-    return startDownload(e.url, epBase(e), title, lang(), hoster(), quality());
+    return startDownload(
+      e.url,
+      "",
+      title,
+      lang(),
+      hoster(),
+      quality(),
+      e.season,
+      e.index_in_season,
+      e.season === 0,
+    );
   };
+
+  // Basisnamen wie der Kern sie vergibt (ggf. gemustert) — fürs Offline-Erkennen,
+  // damit der Abgleich zum tatsächlichen Download-Namen passt.
+  const [epBases] = createResource(
+    () => eps() ?? null,
+    async (list) => {
+      const map = new Map<string, string>();
+      await Promise.all(
+        list.map(async (e) => {
+          map.set(e.url, await episodeBase(sel.title, e.season, e.index_in_season, e.season === 0));
+        }),
+      );
+      return map;
+    },
+  );
 
   // Bereits heruntergeladene Folgen erkennen (Bibliothek) → direktes Offline-Abspielen.
   const [lib] = createResource(library);
   const offlineName = (e: Episode): string | null => {
-    const base = epBase(e);
+    const base = epBases()?.get(e.url);
+    if (!base) return null;
     return (lib() ?? []).find((f) => f.name.startsWith(base))?.name ?? null;
   };
   const playOffline = async (e: Episode, name: string) => {

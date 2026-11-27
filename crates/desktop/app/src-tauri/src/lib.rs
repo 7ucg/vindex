@@ -681,11 +681,24 @@ fn start_download(
     lang: Option<String>,
     hoster: Option<String>,
     max_quality: Option<String>,
+    // Optional ans Ende: sind Staffel/Folge gesetzt, baut der Kern den Namen selbst
+    // (inkl. Muster). Fehlen sie, gilt der vom Frontend übergebene `file_name`.
+    season: Option<u32>,
+    episode: Option<u32>,
+    is_film: Option<bool>,
     state: State<'_, AppState>,
 ) -> u64 {
     use std::str::FromStr;
     let settings = state.backend.settings();
     let mut overrides = state.overrides();
+    // Serverseitiger Dateiname aus dem (ggf. gemusterten) Basisschema.
+    let file_name = if let (Some(s), Some(e)) = (season, episode) {
+        let film = is_film.unwrap_or(false);
+        let template = state.config.lock().unwrap().naming_template.clone();
+        episode_file_base(&title, if film { 0 } else { s }, e, template.as_deref())
+    } else {
+        file_name
+    };
     // Optionale Sprach-Vorwahl aus dem Detail gilt auch für den Download.
     if let Some(l) = lang
         .as_deref()
@@ -1466,13 +1479,45 @@ fn sanitize_title_component(raw: &str) -> String {
 /// (Titel gehärtet, zweistellige Nummern). Die echte Datei bekommt vom Kern noch die
 /// Container-Endung (.mkv/.ts), darum wird beim Abgleich mit der Bibliothek per
 /// Präfix bis zum Punkt (`file_matches_base`) verglichen.
-fn episode_file_base(title: &str, season: u32, index_in_season: u32) -> String {
+fn episode_file_base(
+    title: &str,
+    season: u32,
+    index_in_season: u32,
+    template: Option<&str>,
+) -> String {
+    // Mit konfiguriertem Muster: füllen, Pfadtrenner raus, dann härten — bleibt
+    // ein FLACHER, traversal-sicherer Dateiname (kein '/', '\\' oder '..').
+    if let Some(tpl) = template.map(str::trim).filter(|t| !t.is_empty()) {
+        let raw = core::naming::fill_episode_pattern(tpl, title, season, index_in_season);
+        let flat: String = raw.chars().filter(|c| !matches!(c, '/' | '\\')).collect();
+        return sanitize_title_component(&flat);
+    }
+    // Ohne Muster: exakt das bisherige Ergebnis.
     let t = sanitize_title_component(title);
     if season == 0 {
         format!("{t} - Film {index_in_season:02}")
     } else {
         format!("{t} S{season:02}E{index_in_season:02}")
     }
+}
+
+/// Liefert denselben Basisnamen wie der Download — fürs Frontend, damit die
+/// Offline-Erkennung zum (ggf. gemusterten) Rust-Namen passt.
+#[tauri::command]
+fn episode_base(
+    title: String,
+    season: u32,
+    idx: u32,
+    is_film: bool,
+    state: State<'_, AppState>,
+) -> String {
+    let template = state.config.lock().unwrap().naming_template.clone();
+    episode_file_base(
+        &title,
+        if is_film { 0 } else { season },
+        idx,
+        template.as_deref(),
+    )
 }
 
 /// Gehört die vorhandene Datei zu diesem Basisnamen? Der Rest nach `base` muss mit
@@ -1530,7 +1575,10 @@ fn subscription_overrides(
 /// Gibt die Zahl neu eingereihter Downloads zurück. Fehler werden nur geloggt.
 async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
     let state = app.state::<AppState>();
-    let subs = { state.config.lock().unwrap().subscriptions.clone() };
+    let (subs, naming_template) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.subscriptions.clone(), cfg.naming_template.clone())
+    };
     if subs.is_empty() {
         return 0;
     }
@@ -1580,7 +1628,12 @@ async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
                 if per_sub >= MAX_PER_SUB {
                     continue 'subs;
                 }
-                let base = episode_file_base(&sub.title, ep.season, ep.index_in_season);
+                let base = episode_file_base(
+                    &sub.title,
+                    ep.season,
+                    ep.index_in_season,
+                    naming_template.as_deref(),
+                );
                 // Schon vorhanden (Bibliothek) oder schon in der Queue/laufend?
                 if existing.iter().any(|n| file_matches_base(n, &base)) || active.contains(&base) {
                     continue;
@@ -1900,6 +1953,7 @@ pub fn run() {
             proxy_prefix,
             aniskip,
             start_download,
+            episode_base,
             cancel_download,
             clear_finished_downloads,
             pause_download,
