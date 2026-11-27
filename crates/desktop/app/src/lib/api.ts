@@ -53,6 +53,16 @@ export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }
 
+/** Fenster in die untere rechte Ecke schnappen (Mini-Player). */
+export function snapBottomRight(): Promise<void> {
+  return invoke("snap_bottom_right");
+}
+
+/** System-Locale (z. B. "de-DE") für i18n; null, wenn nicht ermittelbar. */
+export function osLocale(): Promise<string | null> {
+  return invoke<string | null>("os_locale");
+}
+
 export interface UpdateInfo {
   version: string;
   current: string;

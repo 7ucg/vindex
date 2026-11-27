@@ -30,6 +30,14 @@ tauri-plugin-dialog = "2"
 tauri-plugin-window-state = "2"
 # Selbst-Update aus den GitHub-Releases (kein eigener Server; signiert).
 tauri-plugin-updater = "2"
+# Nur eine Instanz; zweiter Start fokussiert das Fenster (+ reicht Deep-Link-Args durch).
+tauri-plugin-single-instance = "2"
+# vindex://-Links aus dem Browser/OS in die App.
+tauri-plugin-deep-link = "2"
+# Fenster an Bildschirmecken schnappen (Mini-Player).
+tauri-plugin-positioner = "2"
+# OS-Infos inkl. System-Locale (für i18n).
+tauri-plugin-os = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

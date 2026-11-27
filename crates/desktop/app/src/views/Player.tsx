@@ -1,5 +1,11 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
-import { resolvePlayback, aniskip, setAlwaysOnTop, type SkipInterval } from "../lib/api";
+import {
+  resolvePlayback,
+  aniskip,
+  setAlwaysOnTop,
+  snapBottomRight,
+  type SkipInterval,
+} from "../lib/api";
 import { getCurrentWindow, LogicalSize, type PhysicalSize } from "@tauri-apps/api/window";
 import { actionForKey } from "../lib/keybindings";
 import {
@@ -205,6 +211,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
         prevSize = await win.innerSize();
         await win.setAlwaysOnTop(true);
         await win.setSize(new LogicalSize(480, 300));
+        await snapBottomRight().catch(() => {});
         setMini(true);
       } else {
         if (prevSize) await win.setSize(prevSize);

@@ -58,6 +58,11 @@
         "https://github.com/7ucg/vindex/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJGQUUwODg0RTI0MThGQzYKUldUR2owSGloQWl1djRxRklxb0R1eEFTNXFhby91Z3hnalVFdTBXUzJmdUxHamNESzNidjNwNjAK"
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["vindex"]
+      }
     }
   }
 }

@@ -313,6 +313,19 @@ fn set_taskbar_progress(window: tauri::WebviewWindow, progress: Option<u32>) {
     let _ = window.set_progress_bar(state);
 }
 
+/// Verschiebt das Fenster in die untere rechte Ecke (für den Mini-Player).
+#[tauri::command]
+fn snap_bottom_right(window: tauri::WebviewWindow) {
+    use tauri_plugin_positioner::{Position, WindowExt};
+    let _ = window.move_window(Position::BottomRight);
+}
+
+/// System-Locale (z. B. „de-DE") für künftige i18n; `None`, wenn nicht ermittelbar.
+#[tauri::command]
+fn os_locale() -> Option<String> {
+    tauri_plugin_os::locale()
+}
+
 /// Verfügbare Update-Info fürs Frontend.
 #[derive(Serialize)]
 struct UpdateInfo {
@@ -1298,6 +1311,16 @@ pub fn run() {
     let _ = core::config::Settings::load();
 
     tauri::Builder::default()
+        // Single-Instance MUSS zuerst kommen: ein zweiter Start fokussiert das
+        // vorhandene Fenster und reicht seine Argumente (ggf. vindex://-URL) weiter.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            let _ = app.emit("deep-link", args);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -1307,8 +1330,23 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_os::init())
         .setup(move |app| {
             build_tray(app.handle())?;
+
+            // Deep-Links (vindex://…): im Dev die Schemes registrieren und eingehende
+            // URLs ans Frontend weiterreichen (Semantik der URLs legt das Frontend fest).
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                    let _ = handle.emit("deep-link", urls);
+                });
+            }
 
             // Mitgelieferte Index-Schnappschüsse in den App-Datenordner entpacken
             // und VINDEX_INDEX_DIR setzen, bevor das Backend das erste Mal liest.
@@ -1346,6 +1384,8 @@ pub fn run() {
             app_info,
             check_update,
             install_update,
+            snap_bottom_right,
+            os_locale,
             search,
             catalog,
             discover,
