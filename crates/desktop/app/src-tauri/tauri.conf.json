@@ -34,7 +34,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "nsis"],
+    "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
       "../../../../index/aniworld.db.zst": "index/aniworld.db.zst",
