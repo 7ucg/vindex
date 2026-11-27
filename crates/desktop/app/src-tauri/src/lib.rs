@@ -198,11 +198,18 @@ async fn discover(
     genre: Option<String>,
     year: Option<u32>,
     language: Option<String>,
+    sort: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchHitDto>, String> {
     let (hits, from_index) = state
         .backend
-        .discover(&portal, genre.as_deref(), year, language.as_deref())
+        .discover(
+            &portal,
+            genre.as_deref(),
+            year,
+            language.as_deref(),
+            sort.as_deref(),
+        )
         .await
         .map_err(|e| e.to_string())?;
     let source = if from_index { "db" } else { "live" };

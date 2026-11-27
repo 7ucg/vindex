@@ -245,8 +245,12 @@ impl Backend {
         genre: Option<&str>,
         year: Option<u32>,
         language: Option<&str>,
+        sort: Option<&str>,
     ) -> Result<(Vec<SearchHit>, bool)> {
-        if genre.is_none() && year.is_none() && language.is_none() {
+        // Echte Umsortierung? Nur year/newest/za ordnen den Katalog um; None/leer/"az"
+        // lassen die bisherige Katalog-Reihenfolge, also kurzschliessen erlaubt.
+        let reorders = matches!(sort, Some(s) if !s.is_empty() && s != "az");
+        if genre.is_none() && year.is_none() && language.is_none() && !reorders {
             return self.catalog(portal).await;
         }
         // Sprache gegen die bekannten Varianten prüfen (geht ohnehin parametrisiert
@@ -277,8 +281,8 @@ impl Backend {
             Some(_) => return Err(core::error::Error::Parse("ungültiges Jahr".into())),
             None => None,
         };
-        // Lokaler Index zuerst (offline gefiltert); nur ohne Index live scrapen.
-        if let Some(hits) = index::discover(portal, genre, year, language) {
+        // Lokaler Index zuerst (offline gefiltert + sortiert); nur ohne Index live.
+        if let Some(hits) = index::discover(portal, genre, year, language, sort) {
             return Ok((hits, true));
         }
         // Der Live-Pfad kann nicht nach Sprache filtern — die braucht den Index.
@@ -287,6 +291,8 @@ impl Backend {
                 "Sprach-Filter braucht den lokalen Index".into(),
             ));
         }
+        // Der Live-Fallback liefert nur die Portal-Reihenfolge der Listing-Seite;
+        // Jahr/crawled_at stehen hier nicht zur Verfügung, darum wird `sort` ignoriert.
         let live = match portal {
             "aniworld" => {
                 let base = core::model::BASE;

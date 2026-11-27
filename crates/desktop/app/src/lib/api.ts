@@ -87,18 +87,21 @@ export function catalog(portal: string): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("catalog", { portal });
 }
 
-/** Nach Genre oder Jahr gefiltert; ohne Filter = voller Katalog. */
+/** Nach Genre oder Jahr gefiltert; ohne Filter = voller Katalog. `sort` optional:
+ * az/za/year_desc/year_asc/newest; leer = bisherige Reihenfolge. */
 export function discover(
   portal: string,
   genre?: string,
   year?: number,
   language?: string,
+  sort?: string,
 ): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("discover", {
     portal,
     genre: genre || null,
     year: year ?? null,
     language: language || null,
+    sort: sort || null,
   });
 }
 

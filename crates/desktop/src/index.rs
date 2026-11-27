@@ -207,16 +207,25 @@ pub fn catalog(portal: &str) -> Option<Vec<SearchHit>> {
 
 /// Discover nach Genre und/oder Jahr. Genre-Slug (`science-fiction`) wird gegen
 /// die als JSON-Text gespeicherten Anzeige-Genres gematcht; Jahr gegen die
-/// (ggf. als Spanne gespeicherte) Jahres-Textspalte. `None` = Portal nicht im Index.
+/// (ggf. als Spanne gespeicherte) Jahres-Textspalte. `sort` wählt die Reihenfolge
+/// (siehe `ORDER BY`-Match unten); `None`/leer = bisheriges `ORDER BY t.name`.
+/// `None` = Portal nicht im Index.
 pub fn discover(
     portal: &str,
     genre: Option<&str>,
     year: Option<u32>,
     language: Option<&str>,
+    sort: Option<&str>,
 ) -> Option<Vec<SearchHit>> {
     let conn = open(portal)?;
     // Sprach-Filter braucht den Join auf die Hoster-Links (Sprache pro Folge).
-    let mut sql = String::from("SELECT DISTINCT t.name, t.url FROM title t");
+    // Sortierspalten (y = Jahr als Zahl, c = crawled_at) wandern in den SELECT,
+    // weil SELECT DISTINCT nur nach Ergebnisspalten sortieren darf. Der Row-Mapper
+    // liest weiter nur r.get(0)/r.get(1).
+    let mut sql = String::from(
+        "SELECT DISTINCT t.name, t.url, \
+         CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, t.crawled_at AS c FROM title t",
+    );
     if language.is_some() {
         sql.push_str(" JOIN episode e ON e.title_id = t.id JOIN link l ON l.episode_id = e.id");
     }
@@ -237,7 +246,17 @@ pub fn discover(
         sql.push_str(" AND l.language = ?");
         args.push(Box::new(l.to_string()));
     }
-    sql.push_str(" ORDER BY t.name");
+    // Nur gedeckte Sortierungen. Beliebtheit/Bewertung/Status fehlen als Spalten
+    // (title.rating/status/popularity) und bräuchten neuen Crawler + Re-Crawl —
+    // hier bewusst ausser Scope, darum keine toten Optionen. (y IS NULL)/(c IS NULL)
+    // schiebt NULL/leer ans Ende; unbekannte Werte fallen still auf Default.
+    sql.push_str(match sort {
+        Some("za") => " ORDER BY t.name DESC",
+        Some("year_desc") => " ORDER BY (y IS NULL), y DESC, t.name",
+        Some("year_asc") => " ORDER BY (y IS NULL), y ASC, t.name",
+        Some("newest") => " ORDER BY (c IS NULL), c DESC, t.name",
+        _ => " ORDER BY t.name",
+    });
     let mut stmt = conn.prepare(&sql).ok()?;
     let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt

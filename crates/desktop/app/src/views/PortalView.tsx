@@ -14,7 +14,7 @@ import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
 
-type Sort = "az" | "za";
+type Sort = "az" | "za" | "year_desc" | "year_asc" | "newest";
 type Layout = "grid" | "list";
 
 // Kuratiertes Genre-Angebot je Portal (ASCII-Slugs — werden roh in die URL gebaut).
@@ -108,13 +108,23 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   const [genre, setGenre] = createSignal("");
   const [year, setYear] = createSignal(0);
   const [flang, setFlang] = createSignal("");
+  const [sort, setSort] = createSignal<Sort>("az");
+  // az/za sortiert der Client (kein Refetch); year_*/newest ordnet das Backend —
+  // nur die lösen ein Neuladen aus. undefined = Server behält Katalog-Reihenfolge.
+  const serverSort = () => (sort() === "az" || sort() === "za" ? undefined : sort());
   const [items] = createResource(
-    () => ({ portal: props.portal, genre: genre(), year: year(), language: flang() }),
-    (q) => discover(q.portal, q.genre || undefined, q.year || undefined, q.language || undefined),
+    () => ({
+      portal: props.portal,
+      genre: genre(),
+      year: year(),
+      language: flang(),
+      sort: serverSort(),
+    }),
+    (q) =>
+      discover(q.portal, q.genre || undefined, q.year || undefined, q.language || undefined, q.sort),
   );
   const [lib] = createResource(library);
   const [onlyLib, setOnlyLib] = createSignal(false);
-  const [sort, setSort] = createSignal<Sort>("az");
   // Beim Portalwechsel die Filter zurücksetzen (filmo hat z. B. kein Jahr).
   createEffect(() => {
     void props.portal;
@@ -230,9 +240,10 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
     const f = filter().trim().toLowerCase();
     let out = f ? all.filter((h) => h.title.toLowerCase().includes(f)) : all.slice();
     if (onlyLib()) out = out.filter((h) => inLibrary(h.title));
-    out.sort((a, b) =>
-      sort() === "az" ? a.title.localeCompare(b.title) : b.title.localeCompare(a.title),
-    );
+    // Nur az/za clientseitig sortieren; bei den Server-Sorts (year_*/newest) die
+    // Backend-Reihenfolge unverändert lassen — nicht doppelt sortieren.
+    if (sort() === "az") out.sort((a, b) => a.title.localeCompare(b.title));
+    else if (sort() === "za") out.sort((a, b) => b.title.localeCompare(a.title));
     return out;
   });
 
@@ -252,6 +263,29 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           </button>
           <button class="chip" classList={{ on: sort() === "za" }} onClick={() => setSort("za")}>
             Z–A
+          </button>
+          {/* Nur durch Index-Daten gedeckte Sortierungen. Beliebtheit/Bewertung/Status
+              fehlen als Spalten (neue Crawler-Spalten + Re-Crawl nötig) — ausser Scope. */}
+          <button
+            class="chip"
+            classList={{ on: sort() === "year_desc" }}
+            onClick={() => setSort("year_desc")}
+          >
+            Jahr neu
+          </button>
+          <button
+            class="chip"
+            classList={{ on: sort() === "year_asc" }}
+            onClick={() => setSort("year_asc")}
+          >
+            Jahr alt
+          </button>
+          <button
+            class="chip"
+            classList={{ on: sort() === "newest" }}
+            onClick={() => setSort("newest")}
+          >
+            Zuletzt indexiert
           </button>
           <button
             class="chip"
