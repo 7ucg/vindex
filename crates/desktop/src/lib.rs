@@ -291,6 +291,12 @@ impl Backend {
                 "Sprach-Filter braucht den lokalen Index".into(),
             ));
         }
+        // Der Live-Pfad kennt nur Genre- und Jahr-Listen. Eine reine Sortier-Anfrage
+        // (sort ohne Genre/Jahr) hat hier nichts zu filtern und darf nicht in die
+        // Jahr-URL mit year.unwrap() laufen — unsortierten Katalog liefern.
+        if genre.is_none() && year.is_none() {
+            return self.catalog(portal).await;
+        }
         // Der Live-Fallback liefert nur die Portal-Reihenfolge der Listing-Seite;
         // Jahr/crawled_at stehen hier nicht zur Verfügung, darum wird `sort` ignoriert.
         let live = match portal {
