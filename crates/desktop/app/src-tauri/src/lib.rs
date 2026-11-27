@@ -305,6 +305,44 @@ fn set_taskbar_progress(window: tauri::WebviewWindow, progress: Option<u32>) {
     let _ = window.set_progress_bar(state);
 }
 
+/// Verfügbare Update-Info fürs Frontend.
+#[derive(Serialize)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+}
+
+/// Prüft die GitHub-Releases auf ein neueres, signiertes Build. `None` = aktuell.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(u) => Ok(Some(UpdateInfo {
+            version: u.version.clone(),
+            current: u.current_version.clone(),
+            notes: u.body.clone(),
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Lädt das Update, installiert es (Signatur wird geprüft) und startet neu.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("kein Update verfügbar".into());
+    };
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 /// Letzte Log-Zeilen fürs Diagnose-Panel (redigiert durch die Logging-Disziplin).
 #[tauri::command]
 fn recent_logs(state: State<'_, AppState>) -> Vec<String> {
@@ -1236,6 +1274,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             build_tray(app.handle())?;
 
@@ -1273,6 +1312,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            check_update,
+            install_update,
             search,
             catalog,
             discover,

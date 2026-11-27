@@ -56,9 +56,9 @@ jobs:
         working-directory: crates/desktop/app
         run: pnpm install --frozen-lockfile
 
-      - name: Bundle bauen
+      - name: Bundle bauen (ohne Signierung/Updater-Artefakte)
         working-directory: crates/desktop/app
-        run: pnpm tauri build
+        run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - uses: actions/upload-artifact@v4
         with:

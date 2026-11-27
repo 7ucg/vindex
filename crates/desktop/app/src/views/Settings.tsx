@@ -15,6 +15,8 @@ import {
   setObscura,
   setProxy,
   indexInfo,
+  checkUpdate,
+  installUpdate,
   type DesktopConfig,
   type NetworkStatus,
 } from "../lib/api";
@@ -121,6 +123,29 @@ export function Settings(): JSX.Element {
   const resetKeys = () => {
     resetBindings();
     setBindVer((n) => n + 1);
+  };
+
+  // Manuelle Update-Prüfung (zusätzlich zum Start-Check).
+  const [updateMsg, setUpdateMsg] = createSignal<string | null>(null);
+  const [pendingUpd, setPendingUpd] = createSignal(false);
+  const checkForUpdate = async () => {
+    setUpdateMsg("Suche …");
+    setPendingUpd(false);
+    try {
+      const u = await checkUpdate();
+      if (!u) {
+        setUpdateMsg("Du bist aktuell.");
+        return;
+      }
+      setUpdateMsg(`Update ${u.version} verfügbar (aktuell ${u.current}).`);
+      setPendingUpd(true);
+    } catch {
+      setUpdateMsg("Keine Updates abrufbar (Signatur/Netz prüfen).");
+    }
+  };
+  const doUpdate = () => {
+    setUpdateMsg("Installiere & starte neu …");
+    void installUpdate().catch((e) => setUpdateMsg(`Fehler: ${String(e)}`));
   };
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
@@ -381,13 +406,25 @@ export function Settings(): JSX.Element {
 
       </Section>
 
-      <Section title="System" desc="Beim Login automatisch starten.">
+      <Section title="System" desc="Autostart beim Login und Updates aus den GitHub-Releases.">
         <div class="controls">
-        <button class="chip" classList={{ on: autostart() }} onClick={toggleAutostart}>
-          {autostart() ? "★ Autostart an" : "☆ Beim Login starten"}
-        </button>
-      </div>
-
+          <button class="chip" classList={{ on: autostart() }} onClick={toggleAutostart}>
+            {autostart() ? "★ Autostart an" : "☆ Beim Login starten"}
+          </button>
+          <button class="chip" onClick={() => void checkForUpdate()}>
+            Nach Updates suchen
+          </button>
+          <Show when={pendingUpd()}>
+            <button class="chip" onClick={doUpdate}>
+              Installieren & neu starten
+            </button>
+          </Show>
+        </div>
+        <Show when={updateMsg()}>
+          <p class="note" style={{ margin: "8px 0 0" }}>
+            {updateMsg()}
+          </p>
+        </Show>
       </Section>
 
       <Section

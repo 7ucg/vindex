@@ -53,6 +53,22 @@ export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }
 
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+}
+
+/** Prüft die GitHub-Releases auf ein neueres Build (null = aktuell). */
+export function checkUpdate(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("check_update");
+}
+
+/** Lädt + installiert das Update und startet die App neu. */
+export function installUpdate(): Promise<void> {
+  return invoke("install_update");
+}
+
 export function search(keyword: string): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { keyword });
 }
