@@ -7,6 +7,24 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Ein Serien-Abo: Titel-URL plus die beim automatischen Nachladen genutzten
+/// Vorwahlen (Sprache/Hoster/Höchstqualität). Die Feldnamen gehen camelCase ans
+/// Frontend (`maxQuality` ↔ `max_quality`), damit sie zum TS-Interface passen.
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscription {
+    /// Portal-URL des Titels (Serie/Anime).
+    pub url: String,
+    /// Anzeigename, zugleich Basis für die Dateinamen der Folgen.
+    pub title: String,
+    /// Sprach-Vorwahl (z. B. „German Dub"). None = Settings-Default.
+    pub lang: Option<String>,
+    /// Hoster-Vorwahl (z. B. „VOE"). None = Default-Reihenfolge.
+    pub hoster: Option<String>,
+    /// Höchste Qualität (z. B. „1080p"). None = Settings-Default.
+    pub max_quality: Option<String>,
+}
+
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct DesktopConfig {
     /// Zielordner für Downloads (sonst der Kern-Default).
@@ -46,6 +64,24 @@ pub struct DesktopConfig {
     /// None = aus.
     #[serde(default)]
     pub anime4k: Option<String>,
+    /// Serien-Abos: fehlende Folgen werden automatisch nachgeladen.
+    #[serde(default)]
+    pub subscriptions: Vec<Subscription>,
+    /// Nächtliches Zeitfenster für Downloads aktiv. None/false = jederzeit.
+    #[serde(default)]
+    pub schedule_enabled: Option<bool>,
+    /// Fensterbeginn „HH:MM" (Ortszeit).
+    #[serde(default)]
+    pub schedule_from: Option<String>,
+    /// Fensterende „HH:MM" (Ortszeit; kleiner als `from` = über Mitternacht).
+    #[serde(default)]
+    pub schedule_to: Option<String>,
+    /// Downloads im Akkubetrieb pausieren.
+    #[serde(default)]
+    pub pause_on_battery: Option<bool>,
+    /// Downloads bei getakteter (metered) Verbindung pausieren.
+    #[serde(default)]
+    pub pause_on_metered: Option<bool>,
 }
 
 fn config_path() -> Option<PathBuf> {

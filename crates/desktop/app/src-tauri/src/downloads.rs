@@ -5,7 +5,7 @@
 //! `download:update`-Event ans Frontend. Die eigentliche Download-/Remux-Logik
 //! lebt komplett im Kern — hier ist nur Orchestrierung.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -58,6 +58,43 @@ struct Sched {
     running: usize,
 }
 
+/// Download-Gate: entscheidet, ob der Scheduler gerade einen **neuen** Job starten
+/// darf. Bereits laufende Downloads bleiben unberührt — nur das Nachrücken aus der
+/// Warteschlange wird gehalten. Zeiten sind Minuten seit Mitternacht (Ortszeit).
+#[derive(Default)]
+struct Gate {
+    /// Nächtliches Zeitfenster aktiv?
+    schedule_enabled: bool,
+    /// Fensterbeginn/-ende in Minuten seit Mitternacht (None = kein Fenster).
+    from_min: Option<u32>,
+    to_min: Option<u32>,
+    pause_on_battery: bool,
+    pause_on_metered: bool,
+    /// Zuletzt ermittelter Strom-/Verbindungszustand (periodisch aktualisiert).
+    on_battery: bool,
+    metered: bool,
+}
+
+/// Aktuelle Ortszeit als Minuten seit Mitternacht.
+fn local_now_min() -> u32 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    now.hour() * 60 + now.minute()
+}
+
+/// Liegt `now` im Fenster `[from, to)`? `from == to` gilt als „immer offen" (24 h),
+/// `from > to` ist ein Fenster über Mitternacht (z. B. 22:00–06:00).
+fn in_window(now: u32, from: u32, to: u32) -> bool {
+    if from == to {
+        return true;
+    }
+    if from < to {
+        now >= from && now < to
+    } else {
+        now >= from || now < to
+    }
+}
+
 pub struct Downloads {
     jobs: Mutex<HashMap<u64, Job>>,
     next: AtomicU64,
@@ -70,6 +107,8 @@ pub struct Downloads {
     start_delay_ms: AtomicU64,
     /// Nächster frühester Start-Zeitpunkt (staffelt die Starts).
     last_start: Mutex<Instant>,
+    /// Download-Gate (Zeitfenster/Akku/Metered). Hält das Nachrücken der Queue.
+    gate: Mutex<Gate>,
 }
 
 impl Default for Downloads {
@@ -84,6 +123,7 @@ impl Default for Downloads {
             global_rate: Arc::new(RateLimiter::new(0)),
             start_delay_ms: AtomicU64::new(0),
             last_start: Mutex::new(Instant::now()),
+            gate: Mutex::new(Gate::default()),
         }
     }
 }
@@ -192,6 +232,68 @@ impl Downloads {
                 s.queue.swap(pos, t);
             }
         }
+    }
+
+    /// Zeitfenster/Pausen-Einstellungen des Gates setzen (Minuten seit Mitternacht).
+    pub fn set_schedule(
+        &self,
+        enabled: bool,
+        from_min: Option<u32>,
+        to_min: Option<u32>,
+        pause_on_battery: bool,
+        pause_on_metered: bool,
+    ) {
+        let mut g = self.gate.lock().unwrap();
+        g.schedule_enabled = enabled;
+        g.from_min = from_min;
+        g.to_min = to_min;
+        g.pause_on_battery = pause_on_battery;
+        g.pause_on_metered = pause_on_metered;
+    }
+
+    /// Zuletzt gemessenen Strom-/Verbindungszustand ins Gate schreiben.
+    pub fn set_power(&self, on_battery: bool, metered: bool) {
+        let mut g = self.gate.lock().unwrap();
+        g.on_battery = on_battery;
+        g.metered = metered;
+    }
+
+    /// Gate-Zustand fürs Frontend: (im Zeitfenster, Akku, metered, Haltegrund).
+    pub fn gate_status(&self) -> (bool, bool, bool, Option<&'static str>) {
+        let g = self.gate.lock().unwrap();
+        let now = local_now_min();
+        let within = match (g.schedule_enabled, g.from_min, g.to_min) {
+            (true, Some(f), Some(t)) => in_window(now, f, t),
+            // Ohne aktives/gültiges Fenster gilt der Download-Zeitraum als offen.
+            _ => true,
+        };
+        let held = if g.schedule_enabled && !within {
+            Some("Zeitfenster")
+        } else if g.pause_on_battery && g.on_battery {
+            Some("Akkubetrieb")
+        } else if g.pause_on_metered && g.metered {
+            Some("Getaktete Verbindung")
+        } else {
+            None
+        };
+        (within, g.on_battery, g.metered, held)
+    }
+
+    /// Warum hält das Gate gerade? `None` = frei, es darf gestartet werden.
+    fn held_reason(&self) -> Option<&'static str> {
+        self.gate_status().3
+    }
+
+    /// Dateinamen aller noch nicht abgeschlossenen Jobs (queued/laufend/pausiert)
+    /// — für die Abo-Prüfung, damit keine Folge doppelt eingereiht wird.
+    pub fn active_file_names(&self) -> HashSet<String> {
+        self.jobs
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|j| !matches!(j.view.status.as_str(), "done" | "error" | "cancelled"))
+            .map(|j| j.file_name.clone())
+            .collect()
     }
 
     /// Original-Parameter eines Jobs (für Retry): (url, file_name, title).
@@ -363,9 +465,23 @@ pub fn start(
     id
 }
 
+/// Stößt das Nachrücken der Warteschlange von außen an (z. B. nachdem das Gate
+/// wieder geöffnet hat). Startet nur, wenn das Gate es erlaubt.
+pub fn pump_queue(d: &Arc<Downloads>) {
+    pump(d);
+}
+
 /// Füllt freie Slots: zieht so lange Jobs von der Queue-Front und öffnet ihr Gate,
 /// bis `MAX_CONCURRENT` erreicht ist oder die Warteschlange leer ist.
+///
+/// Das Download-Gate (Zeitfenster/Akku/Metered) wird hier geprüft: hält es, wird
+/// KEIN neuer Job gestartet — die Queue bleibt stehen. Bereits laufende Jobs sind
+/// nicht betroffen (kein Mid-Download-Abbruch). Sobald das Gate öffnet, bringt ein
+/// erneuter `pump`-Aufruf (periodischer Task / `release_slot`) die Queue weiter.
 fn pump(d: &Arc<Downloads>) {
+    if d.held_reason().is_some() {
+        return;
+    }
     let mut to_signal = Vec::new();
     {
         let mut s = d.sched.lock().unwrap();

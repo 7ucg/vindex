@@ -9,7 +9,9 @@ import {
   setDownloadRate,
   moveDownload,
   onDownloadUpdate,
+  downloadGateStatus,
   type JobView,
+  type GateStatus,
 } from "../lib/api";
 import { getHistory, recordHistory, clearHistory, type HistItem } from "../lib/history";
 
@@ -48,10 +50,18 @@ export function Downloads(): JSX.Element {
   // Tempo (Bytes/s) und Rest-Zeit (s) je Job, aus Byte-Deltas zwischen Events.
   const [rate, setRate] = createSignal<Record<number, { speed: number; eta: number }>>({});
   const [hist, setHist] = createSignal<HistItem[]>(getHistory());
+  // Warum hält die Queue? (Zeitfenster/Akku/Metered) — für den Hinweis-Banner.
+  const [gate, setGate] = createSignal<GateStatus | null>(null);
   const prev = new Map<number, { bytes: number; ts: number }>();
   // Jede Fertig-/Fehler-Meldung nur einmal in den Verlauf schreiben.
   const logged = new Set<number>();
   let unlisten: (() => void) | undefined;
+  let gateTimer: ReturnType<typeof setInterval> | undefined;
+  const pollGate = () => {
+    void downloadGateStatus()
+      .then(setGate)
+      .catch(() => {});
+  };
 
   onMount(async () => {
     try {
@@ -95,7 +105,14 @@ export function Downloads(): JSX.Element {
       });
     });
   });
-  onCleanup(() => unlisten?.());
+  onMount(() => {
+    pollGate();
+    gateTimer = setInterval(pollGate, 15000);
+  });
+  onCleanup(() => {
+    unlisten?.();
+    if (gateTimer) clearInterval(gateTimer);
+  });
 
   const speedOf = (id: number): string => {
     const r = rate()[id];
@@ -218,6 +235,14 @@ export function Downloads(): JSX.Element {
           </div>
         </Show>
       </div>
+
+      <Show when={gate()?.held_reason && jobs().some((j) => j.status === "queued")}>
+        <div class="note" style={{ "margin-bottom": "10px" }}>
+          Warteschlange pausiert: {gate()?.held_reason} — laufende Downloads laufen zu Ende, neue
+          starten erst wieder, wenn die Bedingung erfüllt ist (in den Einstellungen unter „Zeitplan
+          &amp; Abos").
+        </div>
+      </Show>
 
       <Show when={jobs().length === 0}>
         <div class="empty">

@@ -17,8 +17,14 @@ import {
   indexInfo,
   checkUpdate,
   installUpdate,
+  listSubscriptions,
+  unsubscribe,
+  checkSubscriptionsNow,
+  downloadGateStatus,
   type DesktopConfig,
   type NetworkStatus,
+  type Subscription,
+  type GateStatus,
 } from "../lib/api";
 
 import { exportState, importState } from "../lib/backup";
@@ -177,6 +183,11 @@ export function Settings(): JSX.Element {
     no_ffmpeg: null,
     external_player: null,
     anime4k: null,
+    schedule_enabled: null,
+    schedule_from: null,
+    schedule_to: null,
+    pause_on_battery: null,
+    pause_on_metered: null,
   });
   getConfig()
     .then(setCfg)
@@ -233,6 +244,38 @@ export function Settings(): JSX.Element {
     void setProxy(proxyInput().trim() || null)
       .then(reloadNet)
       .catch(() => {});
+  };
+
+  // Zeitplan & Abos: Abo-Liste, manueller Durchlauf, Gate-Status (warum es wartet).
+  const [subs, setSubs] = createSignal<Subscription[]>([]);
+  const [gate, setGate] = createSignal<GateStatus | null>(null);
+  const [checkMsg, setCheckMsg] = createSignal<string | null>(null);
+  const reloadSubs = () => {
+    listSubscriptions()
+      .then(setSubs)
+      .catch(() => {});
+  };
+  const reloadGate = () => {
+    downloadGateStatus()
+      .then(setGate)
+      .catch(() => {});
+  };
+  reloadSubs();
+  reloadGate();
+  const removeSub = (url: string) => {
+    void unsubscribe(url)
+      .then(reloadSubs)
+      .catch(() => {});
+  };
+  const checkNow = async () => {
+    setCheckMsg("Suche …");
+    try {
+      const n = await checkSubscriptionsNow();
+      setCheckMsg(n === 0 ? "Keine neuen Folgen gefunden." : `${n} neue Folge(n) eingereiht.`);
+      reloadGate();
+    } catch (e) {
+      setCheckMsg(`Fehler: ${String(e)}`);
+    }
   };
 
   let fileInput: HTMLInputElement | undefined;
@@ -561,6 +604,110 @@ export function Settings(): JSX.Element {
         </div>
       </div>
 
+      </Section>
+
+      <Section
+        title="Zeitplan & Abos"
+        desc="Abonnierte Serien laden fehlende Folgen automatisch — nachts und nur, wenn die Bedingungen passen."
+      >
+        <div class="controls" style={{ "margin-bottom": "12px" }}>
+          <button
+            class="chip"
+            classList={{ on: cfg().schedule_enabled ?? false }}
+            onClick={() => update({ schedule_enabled: !(cfg().schedule_enabled ?? false) })}
+          >
+            {(cfg().schedule_enabled ?? false) ? "● Zeitplan aktiv" : "○ Zeitplan aus"}
+          </button>
+        </div>
+        <div class="set-fields">
+          <div class="field">
+            <label>Zeitfenster von</label>
+            <input
+              class="cfg-input"
+              type="time"
+              style={{ "max-width": "140px" }}
+              value={cfg().schedule_from ?? ""}
+              onChange={(e) => update({ schedule_from: empty(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="field">
+            <label>Zeitfenster bis</label>
+            <input
+              class="cfg-input"
+              type="time"
+              style={{ "max-width": "140px" }}
+              value={cfg().schedule_to ?? ""}
+              onChange={(e) => update({ schedule_to: empty(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="field">
+            <label>Pausieren</label>
+            <div class="controls">
+              <button
+                class="chip"
+                classList={{ on: cfg().pause_on_battery ?? false }}
+                onClick={() => update({ pause_on_battery: !(cfg().pause_on_battery ?? false) })}
+              >
+                {(cfg().pause_on_battery ?? false) ? "● bei Akku" : "○ bei Akku"}
+              </button>
+              <button
+                class="chip"
+                classList={{ on: cfg().pause_on_metered ?? false }}
+                onClick={() => update({ pause_on_metered: !(cfg().pause_on_metered ?? false) })}
+              >
+                {(cfg().pause_on_metered ?? false)
+                  ? "● bei getakteter Verbindung"
+                  : "○ bei getakteter Verbindung"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls" style={{ margin: "12px 0" }}>
+          <button class="chip" onClick={() => void checkNow()}>
+            Jetzt nach neuen Folgen suchen
+          </button>
+          <Show when={checkMsg()}>
+            <span class="sleep-label">{checkMsg()}</span>
+          </Show>
+        </div>
+
+        <Show when={gate()?.held_reason}>
+          {(reason) => (
+            <p class="note" style={{ margin: "0 0 12px" }}>
+              Downloads warten gerade: {reason()}
+            </p>
+          )}
+        </Show>
+
+        <Show
+          when={subs().length > 0}
+          fallback={
+            <p class="note" style={{ margin: 0 }}>
+              Noch keine Abos. In der Titelansicht auf „Abonnieren" tippen.
+            </p>
+          }
+        >
+          <div class="panel">
+            <For each={subs()}>
+              {(s) => (
+                <div class="dl" title={s.url}>
+                  <div class="info">
+                    <div class="n">{s.title}</div>
+                    <div class="sub">
+                      {[s.lang, s.hoster, s.maxQuality].filter(Boolean).join(" · ") || "Standardvorwahl"}
+                    </div>
+                  </div>
+                  <div class="act">
+                    <button class="chip" onClick={() => removeSub(s.url)}>
+                      Entfernen
+                    </button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
       </Section>
 
       <Section

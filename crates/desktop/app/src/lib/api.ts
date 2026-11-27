@@ -239,6 +239,12 @@ export interface DesktopConfig {
   no_ffmpeg: boolean | null;
   external_player: string | null;
   anime4k: string | null;
+  // Zeitplan & Abos (alle optional, serde default im Kern).
+  schedule_enabled: boolean | null;
+  schedule_from: string | null; // "HH:MM"
+  schedule_to: string | null; // "HH:MM"
+  pause_on_battery: boolean | null;
+  pause_on_metered: boolean | null;
 }
 
 /** Mindestabstand zwischen Download-Starts (ms, 0 = aus). */
@@ -398,4 +404,58 @@ export function revealLibraryItem(name: string): Promise<void> {
 /** Lokale Datei → asset://-URL fürs <video>-Element. */
 export function localFileUrl(path: string): string {
   return convertFileSrc(path);
+}
+
+// --- Serien-Abos & Download-Zeitfenster -----------------------------------
+// Ein Abo merkt sich einen Titel samt Sprach-/Hoster-/Qualitäts-Vorwahl; der
+// Kern-Scheduler prüft index-first auf fehlende Folgen und reiht sie ein.
+export interface Subscription {
+  url: string;
+  title: string;
+  lang?: string;
+  hoster?: string;
+  maxQuality?: string;
+}
+
+/** Warum Downloads gerade warten (Zeitfenster/Akku/getaktet). */
+export interface GateStatus {
+  within_window: boolean;
+  on_battery: boolean;
+  metered: boolean;
+  held_reason: string | null;
+}
+
+/** Titel abonnieren (Vorwahlen optional, "" wird zu null). */
+export function subscribe(
+  url: string,
+  title: string,
+  lang?: string,
+  hoster?: string,
+  maxQuality?: string,
+): Promise<void> {
+  return invoke("subscribe", {
+    url,
+    title,
+    lang: lang || null,
+    hoster: hoster || null,
+    maxQuality: maxQuality || null,
+  });
+}
+
+/** Abo wieder entfernen. */
+export function unsubscribe(url: string): Promise<void> {
+  return invoke("unsubscribe", { url });
+}
+
+export function listSubscriptions(): Promise<Subscription[]> {
+  return invoke<Subscription[]>("list_subscriptions");
+}
+
+/** Sofortiger Durchlauf; liefert die Zahl neu eingereihter Downloads. */
+export function checkSubscriptionsNow(): Promise<number> {
+  return invoke<number>("check_subscriptions_now");
+}
+
+export function downloadGateStatus(): Promise<GateStatus> {
+  return invoke<GateStatus>("download_gate_status");
 }

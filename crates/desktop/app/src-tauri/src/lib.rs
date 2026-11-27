@@ -1349,9 +1349,16 @@ fn get_config(state: State<'_, AppState>) -> config::DesktopConfig {
 
 /// Bearbeitbare Desktop-Einstellungen speichern (persistent) und übernehmen.
 #[tauri::command]
-fn set_config(cfg: config::DesktopConfig, state: State<'_, AppState>) -> Result<(), String> {
+fn set_config(mut cfg: config::DesktopConfig, state: State<'_, AppState>) -> Result<(), String> {
+    // Abos nur über subscribe/unsubscribe pflegen — nie aus der (evtl. veralteten)
+    // Frontend-Kopie überschreiben, sonst tauchen gelöschte Abos wieder auf oder
+    // neue gehen verloren.
+    cfg.subscriptions = state.config.lock().unwrap().subscriptions.clone();
     config::save(&cfg)?;
+    // Geändertes Zeitfenster/Pausen sofort ins Gate; Queue danach neu bewerten.
+    apply_schedule(&state.downloads, &cfg);
     *state.config.lock().unwrap() = cfg;
+    downloads::pump_queue(&state.downloads);
     Ok(())
 }
 
@@ -1371,6 +1378,309 @@ fn app_settings(state: State<'_, AppState>) -> SettingsDto {
         native_hls: s.native_hls,
         no_ffmpeg: s.no_ffmpeg,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Serien-Abos + Download-Zeitfenster/Pausen
+// ---------------------------------------------------------------------------
+
+/// Gate-Zustand fürs Frontend. `held_reason` = Grund, warum gerade nichts Neues
+/// startet (`null` = frei): "Zeitfenster" / "Akkubetrieb" / "Getaktete Verbindung".
+#[derive(Serialize)]
+struct GateStatusDto {
+    within_window: bool,
+    on_battery: bool,
+    metered: bool,
+    held_reason: Option<String>,
+}
+
+/// Leert einen optionalen String (trim) und verwirft Leeres.
+fn norm_opt(s: Option<String>) -> Option<String> {
+    s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// "HH:MM" → Minuten seit Mitternacht (0–1439). Ungültiges → None.
+fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.trim().split_once(':')?;
+    let h: u32 = h.parse().ok()?;
+    let m: u32 = m.parse().ok()?;
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+/// Spiegelt die Zeitfenster-/Pausen-Config ins Download-Gate.
+fn apply_schedule(downloads: &downloads::Downloads, cfg: &config::DesktopConfig) {
+    downloads.set_schedule(
+        cfg.schedule_enabled.unwrap_or(false),
+        cfg.schedule_from.as_deref().and_then(parse_hhmm),
+        cfg.schedule_to.as_deref().and_then(parse_hhmm),
+        cfg.pause_on_battery.unwrap_or(false),
+        cfg.pause_on_metered.unwrap_or(false),
+    );
+}
+
+/// Datei-Basisname einer Episode — identisch zur Benennung im Detail-Frontend
+/// (problematische Zeichen entfernt, zweistellige Nummern). Die echte Datei
+/// bekommt vom Kern noch die Container-Endung (.mkv/.ts), darum wird beim Abgleich
+/// mit der Bibliothek per Präfix (`starts_with`) verglichen.
+fn episode_file_base(title: &str, season: u32, index_in_season: u32) -> String {
+    let t: String = title
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if season == 0 {
+        format!("{t} - Film {index_in_season:02}")
+    } else {
+        format!("{t} S{season:02}E{index_in_season:02}")
+    }
+}
+
+/// Gehört die vorhandene Datei zu diesem Basisnamen? Der Rest nach `base` muss mit
+/// einem Punkt (Endung) beginnen — sonst passte „…S01E100.mkv" fälschlich zu
+/// „…S01E10" (Staffeln mit ≥ 100 Folgen).
+fn file_matches_base(name: &str, base: &str) -> bool {
+    name.strip_prefix(base)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// Baut die Download-Overrides eines Abos (Sprache/Hoster/Höchstqualität) auf der
+/// Basis der normalen Desktop-Overrides — gleicher Weg wie `start_download`.
+fn subscription_overrides(
+    sub: &config::Subscription,
+    settings: &core::config::Settings,
+    state: &AppState,
+) -> vindex_desktop::DownloadOverrides {
+    use std::str::FromStr;
+    let mut overrides = state.overrides();
+    if let Some(l) = sub
+        .lang
+        .as_deref()
+        .filter(|l| !l.is_empty())
+        .and_then(|l| core::model::Language::from_str(l).ok())
+    {
+        overrides.language = Some(l);
+    }
+    if let Some(h) = sub
+        .hoster
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(vindex_desktop::Backend::hoster_by_name)
+    {
+        let mut order = vec![h];
+        for d in settings.effective_hosters() {
+            if d != h {
+                order.push(d);
+            }
+        }
+        overrides.hosters = Some(order);
+    }
+    if let Some(q) = sub
+        .max_quality
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|q| core::model::Quality::from_str(q).ok())
+    {
+        overrides.max_quality = Some(q);
+    }
+    overrides
+}
+
+/// Ein Durchlauf der Abo-Prüfung: für jedes Abo die Folgen (index-first über die
+/// Facade) ermitteln, fehlende gegen die Bibliothek abgleichen und einreihen.
+/// Gibt die Zahl neu eingereihter Downloads zurück. Fehler werden nur geloggt.
+async fn run_subscription_pass(app: &tauri::AppHandle) -> usize {
+    let state = app.state::<AppState>();
+    let subs = { state.config.lock().unwrap().subscriptions.clone() };
+    if subs.is_empty() {
+        return 0;
+    }
+    // Vorhandene Bibliotheksdateien (Präfix-Abgleich) + schon aktive Jobs.
+    let dir = state.download_dir();
+    let existing: Vec<String> = core::library::list(&dir)
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    let mut active = state.downloads.active_file_names();
+    let settings = state.backend.settings();
+
+    let mut queued = 0usize;
+    for sub in subs {
+        // Nur Serien/Anime mit Staffeln. filmo-Filme liefern hier `Err` → überspringen.
+        let seasons = match state.backend.seasons(&sub.url).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Abo {}: Staffeln nicht ladbar: {e}", sub.title);
+                continue;
+            }
+        };
+        for season in seasons {
+            let eps = match state.backend.episodes(&sub.url, season).await {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("Abo {}: Episoden (S{season}) nicht ladbar: {e}", sub.title);
+                    continue;
+                }
+            };
+            for ep in eps {
+                let base = episode_file_base(&sub.title, ep.season, ep.index_in_season);
+                // Schon vorhanden (Bibliothek) oder schon in der Queue/laufend?
+                if existing.iter().any(|n| file_matches_base(n, &base)) || active.contains(&base) {
+                    continue;
+                }
+                let overrides = subscription_overrides(&sub, &settings, &state);
+                downloads::start(
+                    state.downloads.clone(),
+                    app.clone(),
+                    ep.url.clone(),
+                    base.clone(),
+                    sub.title.clone(),
+                    settings.clone(),
+                    overrides,
+                );
+                active.insert(base);
+                queued += 1;
+            }
+        }
+    }
+    queued
+}
+
+/// Läuft das System gerade auf Akku? True, wenn mindestens eine Batterie entlädt.
+/// Keine Batterie / Fehler → false (am Netz). Sync (battery-Crate) → via spawn_blocking.
+fn detect_on_battery() -> bool {
+    let Ok(manager) = battery::Manager::new() else {
+        return false;
+    };
+    let Ok(batteries) = manager.batteries() else {
+        return false;
+    };
+    for maybe in batteries {
+        if let Ok(b) = maybe {
+            if matches!(b.state(), battery::State::Discharging) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Getaktete (metered) Verbindung? Best-effort, NUR unter Linux/NetworkManager
+/// über `nmcli` (kurzer Timeout, keine Shell). Nicht ermittelbar → false.
+async fn detect_metered() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use tokio::process::Command;
+        let fut = Command::new("nmcli")
+            .args(["-t", "-g", "GENERAL.METERED", "dev", "show"])
+            .kill_on_drop(true)
+            .output();
+        match tokio::time::timeout(std::time::Duration::from_secs(3), fut).await {
+            Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|l| l.trim().to_ascii_lowercase().starts_with("yes")),
+            _ => false,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Abonniert einen Titel (fehlende Folgen werden automatisch nachgeladen).
+/// Ein erneutes Abonnieren derselben URL aktualisiert die Vorwahlen.
+#[tauri::command]
+fn subscribe(
+    url: String,
+    title: String,
+    lang: Option<String>,
+    hoster: Option<String>,
+    max_quality: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // SSRF-Schutz: nur unterstützte Portale.
+    vindex_desktop::Backend::validate_url(&url)?;
+    let sub = config::Subscription {
+        url: url.clone(),
+        title: title.trim().to_string(),
+        lang: norm_opt(lang),
+        hoster: norm_opt(hoster),
+        max_quality: norm_opt(max_quality),
+    };
+    let mut cfg = state.config.lock().unwrap();
+    match cfg.subscriptions.iter_mut().find(|s| s.url == url) {
+        Some(existing) => *existing = sub,
+        None => cfg.subscriptions.push(sub),
+    }
+    config::save(&cfg)
+}
+
+/// Hebt ein Abo auf.
+#[tauri::command]
+fn unsubscribe(url: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.subscriptions.retain(|s| s.url != url);
+    config::save(&cfg)
+}
+
+/// Alle Abos auflisten.
+#[tauri::command]
+fn list_subscriptions(state: State<'_, AppState>) -> Vec<config::Subscription> {
+    state.config.lock().unwrap().subscriptions.clone()
+}
+
+/// Sofortiger Abo-Durchlauf; gibt die Zahl neu eingereihter Downloads zurück.
+#[tauri::command]
+async fn check_subscriptions_now(app: tauri::AppHandle) -> Result<usize, String> {
+    Ok(run_subscription_pass(&app).await)
+}
+
+/// Aktueller Gate-Zustand (Zeitfenster/Akku/Metered) fürs Frontend.
+#[tauri::command]
+fn download_gate_status(state: State<'_, AppState>) -> GateStatusDto {
+    let (within_window, on_battery, metered, held) = state.downloads.gate_status();
+    GateStatusDto {
+        within_window,
+        on_battery,
+        metered,
+        held_reason: held.map(|s| s.to_string()),
+    }
+}
+
+/// Hintergrund-Task: hält Strom-/Verbindungszustand aktuell, lässt die Queue nach
+/// Gate-Öffnung weiterlaufen und prüft periodisch die Abos. Bewusst sparsam
+/// (Anti-Bot): Abo-Prüfung alle 30 Minuten, index-first über die Facade.
+fn spawn_background(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // 60-s-Takt fürs Gate; alle 30 Ticks (~30 min) zusätzlich die Abo-Prüfung.
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut counter: u64 = 0;
+        loop {
+            tick.tick().await;
+            counter += 1;
+
+            // Strom-/Verbindungszustand messen und ins Gate schreiben.
+            let on_battery = tauri::async_runtime::spawn_blocking(detect_on_battery)
+                .await
+                .unwrap_or(false);
+            let metered = detect_metered().await;
+            {
+                let state = app.state::<AppState>();
+                state.downloads.set_power(on_battery, metered);
+                // Gate evtl. wieder offen → Warteschlange weiterlaufen lassen.
+                downloads::pump_queue(&state.downloads);
+            }
+
+            // Erster Tick (Start) und danach alle 30 Minuten: Abos prüfen.
+            if counter == 1 || counter % 30 == 0 {
+                let n = run_subscription_pass(&app).await;
+                if n > 0 {
+                    tracing::info!("Abo-Prüfung: {n} Folge(n) eingereiht");
+                }
+            }
+        }
+    });
 }
 
 /// Tray-Icon mit Menü (Öffnen/Beenden) — Downloads laufen im Hintergrund weiter.
@@ -1494,6 +1804,8 @@ pub fn run() {
             if let Some(ms) = cfg.download_delay_ms {
                 downloads.set_start_delay(ms);
             }
+            // Zeitfenster/Pausen-Config ins Download-Gate übernehmen.
+            apply_schedule(&downloads, &cfg);
             app.manage(AppState {
                 backend,
                 proxy,
@@ -1501,6 +1813,8 @@ pub fn run() {
                 config: Mutex::new(cfg),
                 logs: logs_for_state.clone(),
             });
+            // Hintergrund-Task: Gate-Zustand aktuell halten + Abos periodisch prüfen.
+            spawn_background(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1556,7 +1870,12 @@ pub fn run() {
             set_autostart,
             get_config,
             set_config,
-            app_settings
+            app_settings,
+            subscribe,
+            unsubscribe,
+            list_subscriptions,
+            check_subscriptions_now,
+            download_gate_status
         ])
         .run(tauri::generate_context!())
         .expect("Fehler beim Start der vindex-Desktop-App");

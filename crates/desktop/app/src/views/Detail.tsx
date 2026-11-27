@@ -18,6 +18,9 @@ import {
   openExternal,
   availableLanguages,
   dataSource,
+  subscribe,
+  unsubscribe,
+  listSubscriptions,
   type Episode,
   type LangOption,
 } from "../lib/api";
@@ -145,6 +148,27 @@ export function Detail(): JSX.Element {
   const [bulk, setBulk] = createSignal(false);
   const [saved, setSaved] = createSignal(inWatchlist(sel.url));
   const toggleSave = () => setSaved(toggleWatchlist({ url: sel.url, title: sel.title }));
+
+  // Serien-Abo: lädt fehlende Folgen automatisch nach (Scheduler im Kern).
+  // Zustand beim Öffnen aus der Abo-Liste des Kerns prüfen.
+  const [subbed, setSubbed] = createSignal(false);
+  const [subBusy, setSubBusy] = createSignal(false);
+  listSubscriptions()
+    .then((list) => setSubbed(list.some((s) => s.url === sel.url)))
+    .catch(() => {});
+  const toggleSub = async () => {
+    setSubBusy(true);
+    const next = !subbed();
+    try {
+      if (next) await subscribe(sel.url, sel.title, lang(), hoster(), quality());
+      else await unsubscribe(sel.url);
+      setSubbed(next);
+    } catch (e) {
+      setPlayErr(String(e));
+    } finally {
+      setSubBusy(false);
+    }
+  };
 
   // Sammlungen: Menü zum Zuordnen des aktuellen Titels.
   const [collMenu, setCollMenu] = createSignal(false);
@@ -296,6 +320,17 @@ export function Detail(): JSX.Element {
         <button class="chip" classList={{ on: saved() }} onClick={toggleSave}>
           {saved() ? "★ Gemerkt" : "☆ Merken"}
         </button>
+        <Show when={!isMovie}>
+          <button
+            class="chip"
+            classList={{ on: subbed() }}
+            disabled={subBusy()}
+            title="Fehlende Folgen automatisch im Zeitfenster laden"
+            onClick={() => void toggleSub()}
+          >
+            {subbed() ? "🔔 Abonniert" : "＋ Abonnieren"}
+          </button>
+        </Show>
       </div>
 
       <Show when={meta()} keyed>

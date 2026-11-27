@@ -54,6 +54,10 @@ base64 = "0.22"
 getrandom = "0.2"
 # DNS über 1.1.1.1 (nie System-DNS) — wie der Kern.
 hickory-resolver = "0.24"
+# Ortszeit fürs nächtliche Download-Zeitfenster.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Akku-Erkennung (Auto-Pause im Akkubetrieb).
+battery = "0.7"
 # Die headless-testbare Facade — der ganze Scraper/Download-Kern lebt dort.
 vindex-desktop = { path = "../../" }
 
