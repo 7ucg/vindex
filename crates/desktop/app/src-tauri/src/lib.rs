@@ -484,6 +484,123 @@ async fn resolve_playback(
     })
 }
 
+/// Löst den `--glsl-shaders`-Wert für Anime4K auf, falls in der Config ein gültiger
+/// Modus steht. Das Shader-Verzeichnis kommt aus `VINDEX_ANIME4K_DIR`; fehlt es oder
+/// liegt ein Shader nicht vor, wird Anime4K still übersprungen (die Wiedergabe läuft
+/// trotzdem). Pfade werden wie im CLI-Pfad validiert, bevor sie an mpv gehen.
+fn resolve_anime4k_value(cfg: &config::DesktopConfig) -> Option<String> {
+    let name = cfg
+        .anime4k
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let mode = core::mpv::Anime4kMode::from_name(name)?;
+    let dir = std::env::var("VINDEX_ANIME4K_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let canonical = std::path::Path::new(&dir).canonicalize().ok()?;
+    if !canonical.is_dir() {
+        return None;
+    }
+    // Jeder erwartete Shader muss wirklich im Verzeichnis liegen, sonst zeigt mpv
+    // auf fremde GLSL-Dateien.
+    if mode.shaders().iter().any(|s| !canonical.join(s).is_file()) {
+        return None;
+    }
+    core::mpv::anime4k_glsl_value(mode, &canonical)
+}
+
+/// Spielt eine Episoden-/Film-URL im externen Player (mpv) ab. Löst über die Facade
+/// zur ROHEN Stream-URL + Referer auf (nicht durch den WebView-Proxy), baut die
+/// mpv-Argumente über `core::mpv` (inkl. Referer und optional Anime4K) und startet den
+/// Player abgekoppelt — keine Shell. Sprach-/Hoster-/Qualitäts-Vorwahl wie beim
+/// Download.
+#[tauri::command]
+async fn play_external(
+    url: String,
+    lang: Option<String>,
+    hoster: Option<String>,
+    max_quality: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use std::str::FromStr;
+    let s = state.backend.settings();
+    let mut ov = state.overrides();
+    // Sprach-Vorwahl gewinnt für diese Wiedergabe.
+    if let Some(l) = lang
+        .as_deref()
+        .filter(|l| !l.is_empty())
+        .and_then(|l| core::model::Language::from_str(l).ok())
+    {
+        ov.language = Some(l);
+    }
+    // Optionale Hoster-Vorwahl: Wunsch zuerst, dann die Default-Reihenfolge als Fallback.
+    if let Some(h) = hoster
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .and_then(vindex_desktop::Backend::hoster_by_name)
+    {
+        let mut order = vec![h];
+        for d in s.effective_hosters() {
+            if d != h {
+                order.push(d);
+            }
+        }
+        ov.hosters = Some(order);
+    }
+    // Optionale Qualitäts-Obergrenze.
+    if let Some(q) = max_quality
+        .as_deref()
+        .filter(|q| !q.is_empty())
+        .and_then(|q| core::model::Quality::from_str(q).ok())
+    {
+        ov.max_quality = Some(q);
+    }
+    let mut prefs = vindex_desktop::prefs_from_settings(&s, "stream", &ov);
+    vindex_desktop::with_language_fallback(&mut prefs);
+
+    let resolved = state
+        .backend
+        .resolve_playback(&url, &prefs)
+        .await
+        .map_err(|e| {
+            tracing::warn!("play_external: Auflösen fehlgeschlagen: {e}");
+            e.to_string()
+        })?;
+
+    // Player + Anime4K aus der Config (Fallback mpv).
+    let (player, anime4k) = {
+        let cfg = state.config.lock().unwrap();
+        let player = cfg
+            .external_player
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .and_then(core::mpv::Player::from_name)
+            .unwrap_or(core::mpv::Player::Mpv);
+        (player, resolve_anime4k_value(&cfg))
+    };
+
+    let args = core::mpv::build_player_args(
+        player,
+        &resolved.url,
+        resolved.referer.as_deref(),
+        None,
+        None,
+        anime4k.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Abgekoppelt starten: der Player läuft in einem eigenen Fenster, die App bleibt
+    // bedienbar. Fehler (z. B. mpv fehlt) landen im Log, nicht im UI-Thread.
+    let bin = player.binary();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = core::mpv::play_with(player, &args).await {
+            tracing::warn!("{bin}-Wiedergabe fehlgeschlagen: {e}");
+        }
+    });
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct TitleMetaDto {
     poster: Option<String>,
@@ -1402,6 +1519,7 @@ pub fn run() {
             seasons,
             episodes,
             resolve_playback,
+            play_external,
             set_always_on_top,
             set_taskbar_progress,
             recent_logs,

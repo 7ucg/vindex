@@ -121,6 +121,21 @@ export function resolvePlayback(url: string, lang?: string): Promise<PlaybackSou
   return invoke<PlaybackSource>("resolve_playback", { url, lang: lang ?? null });
 }
 
+/** Spielt die URL im externen Player (mpv) ab statt im Fenster. mpv muss installiert sein. */
+export function playExternal(
+  url: string,
+  lang?: string,
+  hoster?: string,
+  maxQuality?: string,
+): Promise<void> {
+  return invoke("play_external", {
+    url,
+    lang: lang || null,
+    hoster: hoster || null,
+    maxQuality: maxQuality || null,
+  });
+}
+
 export interface LangOption {
   value: string;
   label: string;
@@ -222,6 +237,8 @@ export interface DesktopConfig {
   download_delay_ms: number | null;
   native_hls: boolean | null;
   no_ffmpeg: boolean | null;
+  external_player: string | null;
+  anime4k: string | null;
 }
 
 /** Mindestabstand zwischen Download-Starts (ms, 0 = aus). */

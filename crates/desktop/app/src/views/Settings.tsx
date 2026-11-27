@@ -34,6 +34,8 @@ import { incognito, setIncognito } from "../lib/private";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
+// Anime4K-Modi (offizielle Shader-Ketten), wie im Kern geparst.
+const ANIME4K_MODES = ["A", "B", "C", "A+A", "B+B", "C+A"];
 import {
   applyTheme,
   getTheme,
@@ -173,6 +175,8 @@ export function Settings(): JSX.Element {
     download_delay_ms: null,
     native_hls: null,
     no_ffmpeg: null,
+    external_player: null,
+    anime4k: null,
   });
   getConfig()
     .then(setCfg)
@@ -557,6 +561,43 @@ export function Settings(): JSX.Element {
         </div>
       </div>
 
+      </Section>
+
+      <Section
+        title="Wiedergabe"
+        desc="Externer Player (mpv) statt des eingebauten Fenster-Players, optional mit Anime4K."
+      >
+        <div class="controls" style={{ "margin-bottom": "12px" }}>
+          <span class="sleep-label">Player</span>
+          <button
+            class="chip"
+            classList={{ on: (cfg().external_player ?? "") === "mpv" }}
+            onClick={() =>
+              update({ external_player: (cfg().external_player ?? "") === "mpv" ? null : "mpv" })
+            }
+          >
+            {(cfg().external_player ?? "") === "mpv"
+              ? "● mpv statt eingebautem Player"
+              : "○ mpv statt eingebautem Player"}
+          </button>
+        </div>
+        <div class="field">
+          <label>Anime4K-Upscaling (nur externer Player)</label>
+          <select
+            class="cfg-input"
+            style={{ "max-width": "220px" }}
+            value={cfg().anime4k ?? ""}
+            onChange={(e) => update({ anime4k: empty(e.currentTarget.value) })}
+          >
+            <option value="">Aus</option>
+            <For each={ANIME4K_MODES}>{(m) => <option value={m}>{m}</option>}</For>
+          </select>
+        </div>
+        <p class="note" style={{ margin: "6px 0 0" }}>
+          mpv muss installiert und im PATH sein. Der externe Player öffnet in einem eigenen
+          Fenster. Anime4K braucht ein Shader-Verzeichnis in <code>VINDEX_ANIME4K_DIR</code>; fehlt
+          es, spielt mpv ohne Upscaling.
+        </p>
       </Section>
 
       <Section title="Netzwerk" desc="DNS fest auf 1.1.1.1; Anti-Bot-Stufen und Egress-Proxy.">

@@ -38,6 +38,14 @@ pub struct DesktopConfig {
     /// Ohne ffmpeg muxen (nativer TS→MKV-Remux). None = Standard (an).
     #[serde(default)]
     pub no_ffmpeg: Option<bool>,
+    /// Externer Player statt des eingebauten WebView-Players (`"mpv"`).
+    /// None/leer = eingebauter Player (Standard).
+    #[serde(default)]
+    pub external_player: Option<String>,
+    /// Anime4K-Modus (Name wie `A`, `B`, `C`, `A+A`, …) für den externen Player.
+    /// None = aus.
+    #[serde(default)]
+    pub anime4k: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {

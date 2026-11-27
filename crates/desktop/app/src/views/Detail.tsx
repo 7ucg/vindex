@@ -10,6 +10,7 @@ import {
   seasons,
   episodes,
   resolvePlayback,
+  playExternal,
   startDownload,
   titleMeta,
   library,
@@ -114,6 +115,18 @@ export function Detail(): JSX.Element {
     try {
       const src = await resolvePlayback(sel.url, lang());
       openPlayer({ title: sel.title, url: src.url, isHls: src.is_hls });
+    } catch (e) {
+      setPlayErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Im externen Player (mpv) öffnen — mit denselben Sprach-/Hoster-/Qualitäts-Vorwahlen.
+  const watchExternal = async (url: string) => {
+    setBusy(url);
+    setPlayErr(null);
+    try {
+      await playExternal(url, lang(), hoster(), quality());
     } catch (e) {
       setPlayErr(String(e));
     } finally {
@@ -402,6 +415,13 @@ export function Detail(): JSX.Element {
           <button class="chip on" disabled={busy() === sel.url} onClick={watchMovie}>
             {busy() === sel.url ? "löst auf …" : "▶ Ansehen"}
           </button>
+          <button
+            class="chip"
+            disabled={busy() === sel.url}
+            onClick={() => void watchExternal(sel.url)}
+          >
+            In mpv öffnen
+          </button>
           <button class="chip" onClick={loadMovie}>
             Laden
           </button>
@@ -492,6 +512,13 @@ export function Detail(): JSX.Element {
                     onClick={() => watch(e)}
                   >
                     {busy() === e.url ? "löst auf …" : epPct(e.url) > 0 && !epSeen(e.url) ? "Fortsetzen" : "Ansehen"}
+                  </button>
+                  <button
+                    class="chip"
+                    disabled={busy() === e.url}
+                    onClick={() => void watchExternal(e.url)}
+                  >
+                    mpv
                   </button>
                   <Show when={offlineName(e)}>
                     {(name) => (
