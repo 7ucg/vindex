@@ -46,10 +46,7 @@ impl AppState {
         // aushebeln. Der Gate liest den **effektiven** Zustand über thread-sichere
         // Accessors (`proxy_configured()` = OnceLock-Pool, `obscura_enabled()` = RwLock)
         // plus die Config-Absicht — **nie** direkt aus dem (nicht thread-sicheren) Env.
-        let has = |o: &Option<String>| o.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
-        let proxy_set = core::http::proxy_configured() || has(&cfg.proxy);
-        let obscura_set = core::browser::obscura_enabled() || has(&cfg.obscura);
-        let locked = proxy_set || obscura_set;
+        let locked = egress_locked(&cfg);
         let native_hls = locked || cfg.native_hls.unwrap_or(true);
         let no_ffmpeg = locked || cfg.no_ffmpeg.unwrap_or(true);
         vindex_desktop::DownloadOverrides {
@@ -75,6 +72,17 @@ impl AppState {
             hosters: None,
         }
     }
+}
+
+/// Ist Egress-Schutz gewollt oder aktiv? Effektiver Zustand (Proxy-Pool/obscura)
+/// ODER Config-Absicht (`cfg.proxy`/`cfg.obscura`, greift erst nach Neustart). Gemeinsame
+/// Basis für die Download-Overrides und das Update-Gate — nie fail-open bei gesetzter Absicht.
+fn egress_locked(cfg: &config::DesktopConfig) -> bool {
+    let has = |o: &Option<String>| o.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+    core::http::proxy_configured()
+        || core::browser::obscura_enabled()
+        || has(&cfg.proxy)
+        || has(&cfg.obscura)
 }
 
 /// Ein Suchtreffer fürs Frontend (serialisierbare Spiegelung von `SearchHit`).
@@ -313,19 +321,16 @@ struct UpdateInfo {
     notes: Option<String>,
 }
 
-/// Ist gerade eine Egress-Schutzschicht aktiv (Proxy oder obscura)? Dann geht die
-/// Update-Prüfung NICHT direkt raus — sie würde die echte IP an GitHub leaken und
-/// so die über Proxy/obscura hergestellte Anonymität aushebeln.
-fn egress_protected() -> bool {
-    core::http::proxy_configured() || core::browser::obscura_enabled()
-}
-
 /// Prüft die GitHub-Releases auf ein neueres, signiertes Build. `None` = aktuell.
-/// Bei aktivem Proxy/obscura wird die Prüfung abgelehnt (fail-closed, Privatsphäre).
+/// Bei gesetztem/aktivem Proxy/obscura wird die Prüfung abgelehnt (fail-closed, Privatsphäre).
 #[tauri::command]
-async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+async fn check_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateInfo>, String> {
     use tauri_plugin_updater::UpdaterExt;
-    if egress_protected() {
+    // Guard vor jedem await auswerten und den Lock sofort wieder freigeben.
+    if egress_locked(&state.config.lock().unwrap()) {
         return Err("Update-Prüfung unter Proxy/obscura deaktiviert (Privatsphäre)".into());
     }
     let updater = app.updater().map_err(|e| e.to_string())?;
@@ -342,9 +347,13 @@ async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, Strin
 /// Lädt das zuvor geprüfte Update (muss der bestätigten Version entsprechen),
 /// installiert es (Signatur wird geprüft) und startet neu.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
+async fn install_update(
+    app: tauri::AppHandle,
+    version: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
-    if egress_protected() {
+    if egress_locked(&state.config.lock().unwrap()) {
         return Err("Update unter Proxy/obscura deaktiviert (Privatsphäre)".into());
     }
     let updater = app.updater().map_err(|e| e.to_string())?;
