@@ -67,9 +67,11 @@ export default function App(): JSX.Element {
       .catch(() => {});
   });
   const doInstall = () => {
+    const u = update();
+    if (!u) return;
     setInstalling(true);
     // installUpdate startet die App neu — kehrt im Erfolgsfall nicht zurück.
-    void installUpdate().catch(() => setInstalling(false));
+    void installUpdate(u.version).catch(() => setInstalling(false));
   };
 
   return (

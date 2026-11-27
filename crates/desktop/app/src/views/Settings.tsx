@@ -127,10 +127,10 @@ export function Settings(): JSX.Element {
 
   // Manuelle Update-Prüfung (zusätzlich zum Start-Check).
   const [updateMsg, setUpdateMsg] = createSignal<string | null>(null);
-  const [pendingUpd, setPendingUpd] = createSignal(false);
+  const [pendingVer, setPendingVer] = createSignal<string | null>(null);
   const checkForUpdate = async () => {
     setUpdateMsg("Suche …");
-    setPendingUpd(false);
+    setPendingVer(null);
     try {
       const u = await checkUpdate();
       if (!u) {
@@ -138,14 +138,16 @@ export function Settings(): JSX.Element {
         return;
       }
       setUpdateMsg(`Update ${u.version} verfügbar (aktuell ${u.current}).`);
-      setPendingUpd(true);
+      setPendingVer(u.version);
     } catch {
-      setUpdateMsg("Keine Updates abrufbar (Signatur/Netz prüfen).");
+      setUpdateMsg("Keine Updates abrufbar (Proxy/obscura, Signatur oder Netz).");
     }
   };
   const doUpdate = () => {
+    const v = pendingVer();
+    if (!v) return;
     setUpdateMsg("Installiere & starte neu …");
-    void installUpdate().catch((e) => setUpdateMsg(`Fehler: ${String(e)}`));
+    void installUpdate(v).catch((e) => setUpdateMsg(`Fehler: ${String(e)}`));
   };
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
@@ -414,7 +416,7 @@ export function Settings(): JSX.Element {
           <button class="chip" onClick={() => void checkForUpdate()}>
             Nach Updates suchen
           </button>
-          <Show when={pendingUpd()}>
+          <Show when={pendingVer()}>
             <button class="chip" onClick={doUpdate}>
               Installieren & neu starten
             </button>

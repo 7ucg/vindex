@@ -64,9 +64,9 @@ export function checkUpdate(): Promise<UpdateInfo | null> {
   return invoke<UpdateInfo | null>("check_update");
 }
 
-/** Lädt + installiert das Update und startet die App neu. */
-export function installUpdate(): Promise<void> {
-  return invoke("install_update");
+/** Lädt + installiert die bestätigte Update-Version und startet die App neu. */
+export function installUpdate(version: string): Promise<void> {
+  return invoke("install_update", { version });
 }
 
 export function search(keyword: string): Promise<SearchHit[]> {

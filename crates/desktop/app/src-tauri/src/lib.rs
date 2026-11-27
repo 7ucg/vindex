@@ -313,10 +313,21 @@ struct UpdateInfo {
     notes: Option<String>,
 }
 
+/// Ist gerade eine Egress-Schutzschicht aktiv (Proxy oder obscura)? Dann geht die
+/// Update-Prüfung NICHT direkt raus — sie würde die echte IP an GitHub leaken und
+/// so die über Proxy/obscura hergestellte Anonymität aushebeln.
+fn egress_protected() -> bool {
+    core::http::proxy_configured() || core::browser::obscura_enabled()
+}
+
 /// Prüft die GitHub-Releases auf ein neueres, signiertes Build. `None` = aktuell.
+/// Bei aktivem Proxy/obscura wird die Prüfung abgelehnt (fail-closed, Privatsphäre).
 #[tauri::command]
 async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
     use tauri_plugin_updater::UpdaterExt;
+    if egress_protected() {
+        return Err("Update-Prüfung unter Proxy/obscura deaktiviert (Privatsphäre)".into());
+    }
     let updater = app.updater().map_err(|e| e.to_string())?;
     match updater.check().await.map_err(|e| e.to_string())? {
         Some(u) => Ok(Some(UpdateInfo {
@@ -328,14 +339,26 @@ async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, Strin
     }
 }
 
-/// Lädt das Update, installiert es (Signatur wird geprüft) und startet neu.
+/// Lädt das zuvor geprüfte Update (muss der bestätigten Version entsprechen),
+/// installiert es (Signatur wird geprüft) und startet neu.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn install_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
+    if egress_protected() {
+        return Err("Update unter Proxy/obscura deaktiviert (Privatsphäre)".into());
+    }
     let updater = app.updater().map_err(|e| e.to_string())?;
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Err("kein Update verfügbar".into());
     };
+    // Consent-Abgleich: nur die Version installieren, die der Nutzer bestätigt hat
+    // (schützt vor einem Release, das zwischen Prüfen und Installieren erscheint).
+    if update.version != version {
+        return Err(format!(
+            "Version hat sich geändert ({} statt {}) — abgebrochen",
+            update.version, version
+        ));
+    }
     update
         .download_and_install(|_chunk, _total| {}, || {})
         .await
