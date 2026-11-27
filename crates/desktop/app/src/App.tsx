@@ -20,6 +20,7 @@ import { Library } from "./views/Library";
 import { Player } from "./views/Player";
 import { CommandPalette } from "./views/CommandPalette";
 import { view, playback, openTitle } from "./lib/store";
+import { t, initLangFromSystem } from "./lib/i18n";
 
 // Erlaubte Portal-Hosts für Deep-Links (spiegelt PORTAL_HOSTS in lib/backup.ts —
 // bewusst lokal dupliziert, damit nichts Fremdes als Fetch-Ziel reinkommt).
@@ -126,6 +127,7 @@ export default function App(): JSX.Element {
   const [installing, setInstalling] = createSignal(false);
   const [showNotes, setShowNotes] = createSignal(false);
   onMount(() => {
+    initLangFromSystem();
     checkUpdate()
       .then((u) => u && setUpdate(u))
       .catch(() => {});
@@ -153,19 +155,19 @@ export default function App(): JSX.Element {
         {(u) => (
           <div class="update-banner">
             <span>
-              Update <b>{u().version}</b> verfügbar (aktuell {u().current}).
+              {t("app.update.prefix")} <b>{u().version}</b> {t("app.update.suffix", { current: u().current })}
             </span>
             <button class="chip" disabled={installing()} onClick={doInstall}>
-              {installing() ? "Installiere …" : "Installieren & neu starten"}
+              {installing() ? t("app.update.installing") : t("app.update.install")}
             </button>
             <button class="chip" disabled={installing()} onClick={() => setUpdate(null)}>
-              Später
+              {t("app.update.later")}
             </button>
             <Show when={(u().notes ?? "").trim()}>
               {(notes) => (
                 <>
                   <button class="chip" onClick={() => setShowNotes((v) => !v)}>
-                    {showNotes() ? "Changelog ausblenden" : "Was ist neu"}
+                    {showNotes() ? t("app.update.hideChangelog") : t("app.update.whatsNew")}
                   </button>
                   <Show when={showNotes()}>
                     <div

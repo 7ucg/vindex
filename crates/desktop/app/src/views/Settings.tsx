@@ -37,6 +37,7 @@ import {
   type Action,
 } from "../lib/keybindings";
 import { incognito, setIncognito } from "../lib/private";
+import { t, lang, setLang } from "../lib/i18n";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
@@ -57,21 +58,22 @@ import {
   type Scale,
 } from "../lib/theme";
 
+// label ist ein i18n-Schlüssel, der zur Render-Zeit über t() aufgelöst wird (reaktiv auf Sprachwechsel).
 const THEMES: { id: Theme; label: string }[] = [
-  { id: "dark", label: "Dunkel" },
-  { id: "light", label: "Hell" },
-  { id: "amoled", label: "AMOLED" },
+  { id: "dark", label: "settings.theme.dark" },
+  { id: "light", label: "settings.theme.light" },
+  { id: "amoled", label: "settings.theme.amoled" },
 ];
 const ACCENTS: { id: Accent; label: string }[] = [
-  { id: "violett", label: "Violett" },
-  { id: "cyan", label: "Cyan" },
-  { id: "gruen", label: "Grün" },
-  { id: "pink", label: "Pink" },
-  { id: "bernstein", label: "Bernstein" },
+  { id: "violett", label: "settings.accent.violett" },
+  { id: "cyan", label: "settings.accent.cyan" },
+  { id: "gruen", label: "settings.accent.gruen" },
+  { id: "pink", label: "settings.accent.pink" },
+  { id: "bernstein", label: "settings.accent.bernstein" },
 ];
 const DENSITIES: { id: Density; label: string }[] = [
-  { id: "normal", label: "Normal" },
-  { id: "kompakt", label: "Kompakt" },
+  { id: "normal", label: "settings.density.normal" },
+  { id: "kompakt", label: "settings.density.kompakt" },
 ];
 const SCALES: { id: Scale; label: string }[] = [
   { id: "90", label: "90 %" },
@@ -112,7 +114,8 @@ export function Settings(): JSX.Element {
     bindVer();
     return bindings();
   };
-  const keyLabel = (k: string) => (k === " " ? "Leertaste" : k === "" ? "–" : k.toUpperCase());
+  const keyLabel = (k: string) =>
+    k === " " ? t("settings.keys.space") : k === "" ? "–" : k.toUpperCase();
   const startCapture = (action: Action) => {
     setCapturing(action);
     const onKey = (e: KeyboardEvent) => {
@@ -137,25 +140,25 @@ export function Settings(): JSX.Element {
   const [updateMsg, setUpdateMsg] = createSignal<string | null>(null);
   const [pendingVer, setPendingVer] = createSignal<string | null>(null);
   const checkForUpdate = async () => {
-    setUpdateMsg("Suche …");
+    setUpdateMsg(t("settings.system.searching"));
     setPendingVer(null);
     try {
       const u = await checkUpdate();
       if (!u) {
-        setUpdateMsg("Du bist aktuell.");
+        setUpdateMsg(t("settings.system.upToDate"));
         return;
       }
-      setUpdateMsg(`Update ${u.version} verfügbar (aktuell ${u.current}).`);
+      setUpdateMsg(t("settings.system.updateAvail", { version: u.version, current: u.current }));
       setPendingVer(u.version);
     } catch {
-      setUpdateMsg("Keine Updates abrufbar (Proxy/obscura, Signatur oder Netz).");
+      setUpdateMsg(t("settings.system.updateFail"));
     }
   };
   const doUpdate = () => {
     const v = pendingVer();
     if (!v) return;
-    setUpdateMsg("Installiere & starte neu …");
-    void installUpdate(v).catch((e) => setUpdateMsg(`Fehler: ${String(e)}`));
+    setUpdateMsg(t("settings.system.installing"));
+    void installUpdate(v).catch((e) => setUpdateMsg(t("settings.system.error", { e: String(e) })));
   };
   const [theme, setTheme] = createSignal<Theme>(getTheme());
   const [accent, setAccent] = createSignal<Accent>(getAccent());
@@ -268,13 +271,17 @@ export function Settings(): JSX.Element {
       .catch(() => {});
   };
   const checkNow = async () => {
-    setCheckMsg("Suche …");
+    setCheckMsg(t("settings.schedule.searching"));
     try {
       const n = await checkSubscriptionsNow();
-      setCheckMsg(n === 0 ? "Keine neuen Folgen gefunden." : `${n} neue Folge(n) eingereiht.`);
+      setCheckMsg(
+        n === 0
+          ? t("settings.schedule.noneFound")
+          : t("settings.schedule.queued", { n }),
+      );
       reloadGate();
     } catch (e) {
-      setCheckMsg(`Fehler: ${String(e)}`);
+      setCheckMsg(t("settings.schedule.error", { e: String(e) }));
     }
   };
 
@@ -327,29 +334,26 @@ export function Settings(): JSX.Element {
   return (
     <div class="wrap settings">
       <div class="row-h">
-        <h2>Einstellungen</h2>
+        <h2>{t("settings.title")}</h2>
       </div>
 
-      <Section
-        title="Erscheinungsbild"
-        desc="Thema, Akzentfarbe, Dichte und Darstellungsgröße der App."
-      >
+      <Section title={t("settings.appearance.title")} desc={t("settings.appearance.desc")}>
         <div class="controls">
-          <span class="sleep-label">Thema</span>
+          <span class="sleep-label">{t("settings.appearance.theme")}</span>
           <For each={THEMES}>
-          {(t) => (
+          {(th) => (
             <button
               class="chip"
-              classList={{ on: theme() === t.id }}
-              onClick={() => pickTheme(t.id)}
+              classList={{ on: theme() === th.id }}
+              onClick={() => pickTheme(th.id)}
             >
-              {t.label}
+              {t(th.label)}
             </button>
           )}
         </For>
       </div>
       <div class="controls" style={{ "margin-bottom": "12px" }}>
-        <span class="sleep-label">Akzent</span>
+        <span class="sleep-label">{t("settings.appearance.accent")}</span>
         <For each={ACCENTS}>
           {(a) => (
             <button
@@ -357,13 +361,13 @@ export function Settings(): JSX.Element {
               classList={{ on: accent() === a.id }}
               onClick={() => pickAccent(a.id)}
             >
-              {a.label}
+              {t(a.label)}
             </button>
           )}
         </For>
       </div>
       <div class="controls" style={{ "margin-bottom": "12px" }}>
-        <span class="sleep-label">Dichte</span>
+        <span class="sleep-label">{t("settings.appearance.density")}</span>
         <For each={DENSITIES}>
           {(d) => (
             <button
@@ -371,13 +375,13 @@ export function Settings(): JSX.Element {
               classList={{ on: density() === d.id }}
               onClick={() => pickDensity(d.id)}
             >
-              {d.label}
+              {t(d.label)}
             </button>
           )}
         </For>
       </div>
-      <div class="controls" style={{ "margin-bottom": "18px" }}>
-        <span class="sleep-label">Größe</span>
+      <div class="controls" style={{ "margin-bottom": "12px" }}>
+        <span class="sleep-label">{t("settings.appearance.scale")}</span>
         <For each={SCALES}>
           {(s) => (
             <button
@@ -390,16 +394,25 @@ export function Settings(): JSX.Element {
           )}
         </For>
       </div>
+      <div class="controls" style={{ "margin-bottom": "18px" }}>
+        <span class="sleep-label">{t("settings.appearance.language")}</span>
+        <button class="chip" classList={{ on: lang() === "de" }} onClick={() => setLang("de")}>
+          Deutsch
+        </button>
+        <button class="chip" classList={{ on: lang() === "en" }} onClick={() => setLang("en")}>
+          English
+        </button>
+      </div>
 
       </Section>
 
-      <Section title="Daten" desc="Einstellungen und Merklisten sichern oder wiederherstellen.">
+      <Section title={t("settings.data.title")} desc={t("settings.data.desc")}>
         <div class="controls">
         <button class="chip" onClick={exportState}>
-          Sichern (Export)
+          {t("settings.data.backup")}
         </button>
         <button class="chip" onClick={() => fileInput?.click()}>
-          Wiederherstellen (Import)
+          {t("settings.data.restore")}
         </button>
         <input
           ref={fileInput}
@@ -412,15 +425,12 @@ export function Settings(): JSX.Element {
 
       </Section>
 
-      <Section
-        title="Index"
-        desc="Lokale Katalog-DBs (offline). Werden beim Start entpackt und von hier gelesen."
-      >
+      <Section title={t("settings.index.title")} desc={t("settings.index.desc")}>
         <Show when={idx()} fallback={<div class="spinner" />}>
           {(i) => (
             <>
               <div class="field">
-                <label>Ordner</label>
+                <label>{t("settings.index.folder")}</label>
                 <input class="cfg-input" value={i().dir} readonly />
               </div>
               <dl class="kv">
@@ -428,7 +438,11 @@ export function Settings(): JSX.Element {
                   {(p) => (
                     <>
                       <dt>{PORTAL_LABEL[p.portal] ?? p.portal}</dt>
-                      <dd>{p.titles === null ? "nicht vorhanden" : `${p.titles} Titel`}</dd>
+                      <dd>
+                        {p.titles === null
+                          ? t("settings.index.missing")
+                          : t("settings.index.titles", { n: p.titles })}
+                      </dd>
                     </>
                   )}
                 </For>
@@ -438,34 +452,33 @@ export function Settings(): JSX.Element {
         </Show>
       </Section>
 
-      <Section title="Privatsphäre" desc="Inkognito schreibt in dieser Sitzung nichts mit.">
+      <Section title={t("settings.privacy.title")} desc={t("settings.privacy.desc")}>
         <div class="controls" style={{ "margin-bottom": "6px" }}>
         <button
           class="chip"
           classList={{ on: incognito() }}
           onClick={() => setIncognito(!incognito())}
         >
-          {incognito() ? "● Inkognito an" : "○ Inkognito"}
+          {incognito() ? t("settings.privacy.on") : t("settings.privacy.off")}
         </button>
       </div>
       <p class="note" style={{ "margin-bottom": "18px" }}>
-        Inkognito schreibt für diese Sitzung nichts mit (kein Fortschritt/„Weiterschauen", kein
-        Download-Verlauf). Gilt nur bis zum nächsten Start; Merken bleibt möglich.
+        {t("settings.privacy.note")}
       </p>
 
       </Section>
 
-      <Section title="System" desc="Autostart beim Login und Updates aus den GitHub-Releases.">
+      <Section title={t("settings.system.title")} desc={t("settings.system.desc")}>
         <div class="controls">
           <button class="chip" classList={{ on: autostart() }} onClick={toggleAutostart}>
-            {autostart() ? "★ Autostart an" : "☆ Beim Login starten"}
+            {autostart() ? t("settings.system.autostartOn") : t("settings.system.autostartOff")}
           </button>
           <button class="chip" onClick={() => void checkForUpdate()}>
-            Nach Updates suchen
+            {t("settings.system.checkUpdate")}
           </button>
           <Show when={pendingVer()}>
             <button class="chip" onClick={doUpdate}>
-              Installieren & neu starten
+              {t("settings.system.installRestart")}
             </button>
           </Show>
         </div>
@@ -476,13 +489,10 @@ export function Settings(): JSX.Element {
         </Show>
       </Section>
 
-      <Section
-        title="Tastenkürzel"
-        desc="Player-Tasten umbelegen. Pfeile (±5/±30 s), Ziffern (springen) und Esc bleiben fest."
-      >
+      <Section title={t("settings.keys.title")} desc={t("settings.keys.desc")}>
         <div class="controls" style={{ "margin-bottom": "10px" }}>
           <button class="chip" onClick={resetKeys}>
-            Auf Standard zurücksetzen
+            {t("settings.keys.reset")}
           </button>
         </div>
         <div class="set-keys">
@@ -495,7 +505,7 @@ export function Settings(): JSX.Element {
                   classList={{ on: capturing() === a }}
                   onClick={() => startCapture(a)}
                 >
-                  {capturing() === a ? "Taste drücken …" : keyLabel(binds()[a])}
+                  {capturing() === a ? t("settings.keys.press") : keyLabel(binds()[a])}
                 </button>
               </div>
             )}
@@ -503,60 +513,57 @@ export function Settings(): JSX.Element {
         </div>
       </Section>
 
-      <Section
-        title="Downloads"
-        desc="Zielordner, Sprache, Qualität, Tempolimit und Lade-Verfahren."
-      >
+      <Section title={t("settings.downloads.title")} desc={t("settings.downloads.desc")}>
         <div class="set-fields">
         <div class="field">
-          <label>Ordner</label>
+          <label>{t("settings.downloads.folder")}</label>
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               class="cfg-input"
-              placeholder="Standard (~/Downloads)"
+              placeholder={t("settings.downloads.folderPlaceholder")}
               value={cfg().download_path ?? ""}
               onChange={(e) => update({ download_path: empty(e.currentTarget.value) })}
             />
             <button class="chip" onClick={() => void browseFolder()}>
-              Durchsuchen …
+              {t("settings.downloads.browse")}
             </button>
           </div>
         </div>
         <div class="field">
-          <label>Sprache</label>
+          <label>{t("settings.downloads.language")}</label>
           <select
             class="cfg-input"
             value={cfg().language ?? ""}
             onChange={(e) => update({ language: empty(e.currentTarget.value) })}
           >
-            <option value="">Standard</option>
+            <option value="">{t("settings.downloads.default")}</option>
             <For each={LANGUAGES}>{(l) => <option value={l}>{l}</option>}</For>
           </select>
         </div>
         <div class="field">
-          <label>Max. Qualität</label>
+          <label>{t("settings.downloads.maxQuality")}</label>
           <select
             class="cfg-input"
             value={cfg().max_quality ?? ""}
             onChange={(e) => update({ max_quality: empty(e.currentTarget.value) })}
           >
-            <option value="">Standard</option>
+            <option value="">{t("settings.downloads.default")}</option>
             <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
           </select>
         </div>
         <div class="field">
-          <label>Min. Qualität</label>
+          <label>{t("settings.downloads.minQuality")}</label>
           <select
             class="cfg-input"
             value={cfg().min_quality ?? ""}
             onChange={(e) => update({ min_quality: empty(e.currentTarget.value) })}
           >
-            <option value="">Standard</option>
+            <option value="">{t("settings.downloads.default")}</option>
             <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
           </select>
         </div>
         <div class="field">
-          <label>Tempolimit (KiB/s, 0 = unbegrenzt)</label>
+          <label>{t("settings.downloads.bandwidth")}</label>
           <input
             class="cfg-input"
             type="number"
@@ -568,7 +575,7 @@ export function Settings(): JSX.Element {
           />
         </div>
         <div class="field">
-          <label>Abstand zwischen Download-Starts (ms, 0 = aus)</label>
+          <label>{t("settings.downloads.delay")}</label>
           <input
             class="cfg-input"
             type="number"
@@ -580,48 +587,48 @@ export function Settings(): JSX.Element {
           />
         </div>
         <div class="field">
-          <label>Lade-Verfahren</label>
+          <label>{t("settings.downloads.method")}</label>
           <div class="controls">
             <button
               class="chip"
               classList={{ on: cfg().native_hls ?? true }}
               onClick={() => update({ native_hls: !(cfg().native_hls ?? true) })}
             >
-              {(cfg().native_hls ?? true) ? "● Nativer HLS-Download" : "○ Nativer HLS-Download"}
+              {((cfg().native_hls ?? true) ? "● " : "○ ") + t("settings.downloads.nativeHls")}
             </button>
             <button
               class="chip"
               classList={{ on: cfg().no_ffmpeg ?? true }}
               onClick={() => update({ no_ffmpeg: !(cfg().no_ffmpeg ?? true) })}
             >
-              {(cfg().no_ffmpeg ?? true) ? "● Ohne ffmpeg (MKV-Remux)" : "○ ffmpeg zum Muxen"}
+              {(cfg().no_ffmpeg ?? true)
+                ? "● " + t("settings.downloads.noFfmpegOn")
+                : "○ " + t("settings.downloads.noFfmpegOff")}
             </button>
           </div>
           <p class="note" style={{ margin: "6px 0 0" }}>
-            Der ffmpeg-Pfad lädt direkt über das System-Netz (kein 1.1.1.1, kein Proxy, keine
-            Drosselung). Bei gesetztem Proxy/obscura bleibt der native Pfad erzwungen.
+            {t("settings.downloads.note")}
           </p>
         </div>
       </div>
 
       </Section>
 
-      <Section
-        title="Zeitplan & Abos"
-        desc="Abonnierte Serien laden fehlende Folgen automatisch — nachts und nur, wenn die Bedingungen passen."
-      >
+      <Section title={t("settings.schedule.title")} desc={t("settings.schedule.desc")}>
         <div class="controls" style={{ "margin-bottom": "12px" }}>
           <button
             class="chip"
             classList={{ on: cfg().schedule_enabled ?? false }}
             onClick={() => update({ schedule_enabled: !(cfg().schedule_enabled ?? false) })}
           >
-            {(cfg().schedule_enabled ?? false) ? "● Zeitplan aktiv" : "○ Zeitplan aus"}
+            {(cfg().schedule_enabled ?? false)
+              ? t("settings.schedule.on")
+              : t("settings.schedule.off")}
           </button>
         </div>
         <div class="set-fields">
           <div class="field">
-            <label>Zeitfenster von</label>
+            <label>{t("settings.schedule.from")}</label>
             <input
               class="cfg-input"
               type="time"
@@ -631,7 +638,7 @@ export function Settings(): JSX.Element {
             />
           </div>
           <div class="field">
-            <label>Zeitfenster bis</label>
+            <label>{t("settings.schedule.to")}</label>
             <input
               class="cfg-input"
               type="time"
@@ -641,23 +648,21 @@ export function Settings(): JSX.Element {
             />
           </div>
           <div class="field">
-            <label>Pausieren</label>
+            <label>{t("settings.schedule.pause")}</label>
             <div class="controls">
               <button
                 class="chip"
                 classList={{ on: cfg().pause_on_battery ?? false }}
                 onClick={() => update({ pause_on_battery: !(cfg().pause_on_battery ?? false) })}
               >
-                {(cfg().pause_on_battery ?? false) ? "● bei Akku" : "○ bei Akku"}
+                {((cfg().pause_on_battery ?? false) ? "● " : "○ ") + t("settings.schedule.onBattery")}
               </button>
               <button
                 class="chip"
                 classList={{ on: cfg().pause_on_metered ?? false }}
                 onClick={() => update({ pause_on_metered: !(cfg().pause_on_metered ?? false) })}
               >
-                {(cfg().pause_on_metered ?? false)
-                  ? "● bei getakteter Verbindung"
-                  : "○ bei getakteter Verbindung"}
+                {((cfg().pause_on_metered ?? false) ? "● " : "○ ") + t("settings.schedule.onMetered")}
               </button>
             </div>
           </div>
@@ -665,7 +670,7 @@ export function Settings(): JSX.Element {
 
         <div class="controls" style={{ margin: "12px 0" }}>
           <button class="chip" onClick={() => void checkNow()}>
-            Jetzt nach neuen Folgen suchen
+            {t("settings.schedule.checkNow")}
           </button>
           <Show when={checkMsg()}>
             <span class="sleep-label">{checkMsg()}</span>
@@ -675,7 +680,7 @@ export function Settings(): JSX.Element {
         <Show when={gate()?.held_reason}>
           {(reason) => (
             <p class="note" style={{ margin: "0 0 12px" }}>
-              Downloads warten gerade: {reason()}
+              {t("settings.schedule.waiting", { reason: reason() })}
             </p>
           )}
         </Show>
@@ -684,7 +689,7 @@ export function Settings(): JSX.Element {
           when={subs().length > 0}
           fallback={
             <p class="note" style={{ margin: 0 }}>
-              Noch keine Abos. In der Titelansicht auf „Abonnieren" tippen.
+              {t("settings.schedule.noSubs")}
             </p>
           }
         >
@@ -695,12 +700,13 @@ export function Settings(): JSX.Element {
                   <div class="info">
                     <div class="n">{s.title}</div>
                     <div class="sub">
-                      {[s.lang, s.hoster, s.maxQuality].filter(Boolean).join(" · ") || "Standardvorwahl"}
+                      {[s.lang, s.hoster, s.maxQuality].filter(Boolean).join(" · ") ||
+                        t("settings.schedule.defaultSelection")}
                     </div>
                   </div>
                   <div class="act">
                     <button class="chip" onClick={() => removeSub(s.url)}>
-                      Entfernen
+                      {t("common.remove")}
                     </button>
                   </div>
                 </div>
@@ -710,12 +716,9 @@ export function Settings(): JSX.Element {
         </Show>
       </Section>
 
-      <Section
-        title="Wiedergabe"
-        desc="Externer Player (mpv) statt des eingebauten Fenster-Players, optional mit Anime4K."
-      >
+      <Section title={t("settings.playback.title")} desc={t("settings.playback.desc")}>
         <div class="controls" style={{ "margin-bottom": "12px" }}>
-          <span class="sleep-label">Player</span>
+          <span class="sleep-label">{t("settings.playback.player")}</span>
           <button
             class="chip"
             classList={{ on: (cfg().external_player ?? "") === "mpv" }}
@@ -723,61 +726,62 @@ export function Settings(): JSX.Element {
               update({ external_player: (cfg().external_player ?? "") === "mpv" ? null : "mpv" })
             }
           >
-            {(cfg().external_player ?? "") === "mpv"
-              ? "● mpv statt eingebautem Player"
-              : "○ mpv statt eingebautem Player"}
+            {((cfg().external_player ?? "") === "mpv" ? "● " : "○ ") + t("settings.playback.mpv")}
           </button>
         </div>
         <div class="field">
-          <label>Anime4K-Upscaling (nur externer Player)</label>
+          <label>{t("settings.playback.anime4k")}</label>
           <select
             class="cfg-input"
             style={{ "max-width": "220px" }}
             value={cfg().anime4k ?? ""}
             onChange={(e) => update({ anime4k: empty(e.currentTarget.value) })}
           >
-            <option value="">Aus</option>
+            <option value="">{t("settings.playback.off")}</option>
             <For each={ANIME4K_MODES}>{(m) => <option value={m}>{m}</option>}</For>
           </select>
         </div>
         <p class="note" style={{ margin: "6px 0 0" }}>
-          mpv muss installiert und im PATH sein. Der externe Player öffnet in einem eigenen
-          Fenster. Anime4K braucht ein Shader-Verzeichnis in <code>VINDEX_ANIME4K_DIR</code>; fehlt
-          es, spielt mpv ohne Upscaling.
+          {t("settings.playback.note1")} <code>VINDEX_ANIME4K_DIR</code>
+          {t("settings.playback.note2")}
         </p>
       </Section>
 
-      <Section title="Netzwerk" desc="DNS fest auf 1.1.1.1; Anti-Bot-Stufen und Egress-Proxy.">
+      <Section title={t("settings.network.title")} desc={t("settings.network.desc")}>
         <div class="set-fields">
         <div class="field">
-          <label>DNS</label>
-          <input class="cfg-input" value="1.1.1.1 (fest)" disabled />
+          <label>{t("settings.network.dns")}</label>
+          <input class="cfg-input" value={t("settings.network.dnsValue")} disabled />
         </div>
         <div class="controls" style={{ margin: "4px 0 12px" }}>
-          <span class="sleep-label">Anti-Bot</span>
+          <span class="sleep-label">{t("settings.network.antibot")}</span>
           <button class="chip" classList={{ on: net()?.impersonate }} onClick={toggleImpersonate}>
-            {net()?.impersonate ? "● Stufe 2 (Impersonate) an" : "○ Stufe 2 (Impersonate)"}
+            {net()?.impersonate
+              ? t("settings.network.impersonateOn")
+              : t("settings.network.impersonateOff")}
           </button>
           <span class="sleep-label">
-            {net()?.obscura ? "● Stufe 3 (obscura) aktiv" : "○ Stufe 3 aus"}
+            {net()?.obscura
+              ? t("settings.network.obscuraOn")
+              : t("settings.network.obscuraOff")}
           </span>
         </div>
         <div class="field">
-          <label>obscura-Pfad (Stufe 3, leer = aus)</label>
+          <label>{t("settings.network.obscuraPath")}</label>
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               class="cfg-input"
-              placeholder="/pfad/zu/obscura"
+              placeholder={t("settings.network.obscuraPlaceholder")}
               value={obscuraInput()}
               onInput={(e) => setObscuraInput(e.currentTarget.value)}
             />
             <button class="chip" onClick={saveObscura}>
-              Speichern
+              {t("common.save")}
             </button>
           </div>
         </div>
         <div class="field">
-          <label>Egress-Proxy (wirkt nach Neustart, leer = keiner)</label>
+          <label>{t("settings.network.proxy")}</label>
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               class="cfg-input"
@@ -786,79 +790,77 @@ export function Settings(): JSX.Element {
               onInput={(e) => setProxyInput(e.currentTarget.value)}
             />
             <button class="chip" onClick={saveProxy}>
-              Speichern
+              {t("common.save")}
             </button>
           </div>
         </div>
       </div>
       <p class="note" style={{ "margin-bottom": "18px" }}>
-        DNS ist fest auf 1.1.1.1 (nicht abschaltbar). Impersonate und obscura wirken sofort; ein
-        Egress-Proxy wird beim nächsten Start übernommen. Mit gesetztem Proxy ist Stufe 3 (obscura)
-        aus Sicherheitsgründen deaktiviert.
+        {t("settings.network.note")}
       </p>
 
       </Section>
 
-      <Section title="Diagnose" desc="App-Logs ansehen (URLs sind redigiert).">
+      <Section title={t("settings.diag.title")} desc={t("settings.diag.desc")}>
         <div class="controls" style={{ "margin-bottom": logsShown() ? "10px" : "18px" }}>
         <button class="chip" onClick={() => void loadLogs()}>
-          {logsShown() ? "Aktualisieren" : "Logs anzeigen"}
+          {logsShown() ? t("settings.diag.refresh") : t("settings.diag.showLogs")}
         </button>
         <Show when={logsShown()}>
           <button class="chip" onClick={copyLogs}>
-            Kopieren
+            {t("common.copy")}
           </button>
           <button class="chip" onClick={exportLogs}>
-            Exportieren
+            {t("common.export")}
           </button>
           <button class="chip" onClick={() => setLogsShown(false)}>
-            Ausblenden
+            {t("common.hide")}
           </button>
         </Show>
       </div>
       <Show when={logsShown()}>
-        <pre class="logbox">{logs().length ? logs().join("\n") : "Keine Log-Zeilen."}</pre>
+        <pre class="logbox">{logs().length ? logs().join("\n") : t("settings.diag.noLogs")}</pre>
       </Show>
 
       </Section>
 
-      <Section title="Übersicht" desc="Aktuell wirksame Download-Einstellungen.">
+      <Section title={t("settings.overview.title")} desc={t("settings.overview.desc")}>
       <Show when={settings()} fallback={<div class="spinner" />}>
         {(s) => (
           <div class="panel">
             <dl class="kv">
-              <dt>Version</dt>
+              <dt>{t("settings.overview.version")}</dt>
               <dd>{info()?.version ?? "–"}</dd>
-              <dt>Download-Ordner</dt>
+              <dt>{t("settings.overview.downloadFolder")}</dt>
               <dd>{s().download_path}</dd>
-              <dt>Sprache</dt>
+              <dt>{t("settings.overview.language")}</dt>
               <dd>{s().language}</dd>
-              <dt>Qualität</dt>
+              <dt>{t("settings.overview.quality")}</dt>
               <dd>
                 {s().min_quality} – {s().max_quality}
               </dd>
-              <dt>Hoster-Reihenfolge</dt>
+              <dt>{t("settings.overview.hosterOrder")}</dt>
               <dd>{s().hosters.join(", ")}</dd>
-              <dt>Nativer HLS-Download</dt>
-              <dd>{s().native_hls ? "an" : "aus"}</dd>
-              <dt>ffmpeg-frei (MKV-Remux)</dt>
-              <dd>{s().no_ffmpeg ? "an" : "aus"}</dd>
+              <dt>{t("settings.overview.nativeHls")}</dt>
+              <dd>{s().native_hls ? t("settings.overview.on") : t("settings.overview.off")}</dd>
+              <dt>{t("settings.overview.noFfmpeg")}</dt>
+              <dd>{s().no_ffmpeg ? t("settings.overview.on") : t("settings.overview.off")}</dd>
             </dl>
           </div>
         )}
       </Show>
 
       <p class="note">
-        Die Werte oben (Ordner, Sprache, Qualität) überschreiben die Defaults und werden
-        gespeichert. Hoster-Reihenfolge und die weiteren Werte stammen aus den{" "}
-        <code>VINDEX_*</code>-Variablen und <code>.env</code>.
+        {t("settings.overview.note1")} <code>VINDEX_*</code>
+        {t("settings.overview.note2")} <code>.env</code>
+        {t("settings.overview.note3")}
       </p>
 
       </Section>
 
       <Show when={settings.error}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>
-          Fehler: {String(settings.error)}
+          {t("settings.loadError", { e: String(settings.error) })}
         </div>
       </Show>
     </div>

@@ -11,13 +11,15 @@ import {
 } from "../lib/icons";
 import { view, setView, setPaletteOpen, type View } from "../lib/store";
 import { incognito } from "../lib/private";
+import { t } from "../lib/i18n";
 
-type Item = { id: View; label: string; icon: () => JSX.Element; accent?: string };
+// label ist entweder ein Übersetzungsschlüssel (t()) oder ein fester Portalname.
+type Item = { id: View; label: string; translate?: boolean; icon: () => JSX.Element; accent?: string };
 
 const primary: Item[] = [
-  { id: "home", label: "Start", icon: IconHome },
-  { id: "library", label: "Bibliothek", icon: IconLibrary },
-  { id: "downloads", label: "Downloads", icon: IconDownload },
+  { id: "home", label: "sidebar.home", translate: true, icon: IconHome },
+  { id: "library", label: "sidebar.library", translate: true, icon: IconLibrary },
+  { id: "downloads", label: "sidebar.downloads", translate: true, icon: IconDownload },
 ];
 
 const portals: Item[] = [
@@ -35,7 +37,7 @@ function NavButton(props: { item: Item }): JSX.Element {
       onClick={() => setView(item.id)}
     >
       {item.icon()}
-      {item.label}
+      {item.translate ? t(item.label) : item.label}
       {item.accent && <span class="dot" style={{ background: item.accent }} />}
     </button>
   );
@@ -51,7 +53,7 @@ export function Sidebar(): JSX.Element {
 
       <button class="nav" onClick={() => setPaletteOpen(true)}>
         <IconSearch />
-        Suchen
+        {t("sidebar.search")}
         <span class="kbd" style={{ "margin-left": "auto" }}>
           Ctrl K
         </span>
@@ -59,20 +61,20 @@ export function Sidebar(): JSX.Element {
 
       <For each={primary}>{(it) => <NavButton item={it} />}</For>
 
-      <div class="nav-h">Portale</div>
+      <div class="nav-h">{t("sidebar.portals")}</div>
       <For each={portals}>{(it) => <NavButton item={it} />}</For>
 
-      <div class="nav-h">System</div>
+      <div class="nav-h">{t("sidebar.system")}</div>
       <button
         class="nav"
         classList={{ active: view() === "settings" }}
         onClick={() => setView("settings")}
       >
         <IconSettings />
-        Einstellungen
+        {t("sidebar.settings")}
       </button>
 
-      <div class="foot">{incognito() ? "● Inkognito · nichts wird gemerkt" : "lokal · keine Telemetrie"}</div>
+      <div class="foot">{incognito() ? t("sidebar.footIncognito") : t("sidebar.footLocal")}</div>
     </aside>
   );
 }

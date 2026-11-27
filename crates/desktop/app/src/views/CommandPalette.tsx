@@ -1,5 +1,6 @@
 import { createSignal, createEffect, For, Show, onMount, onCleanup, type JSX } from "solid-js";
 import { IconSearch } from "../lib/icons";
+import { t } from "../lib/i18n";
 import { openTitle, paletteOpen, setPaletteOpen, type Portal } from "../lib/store";
 import { loadAll, filterHits, type PaletteHit } from "../lib/palette";
 
@@ -85,7 +86,7 @@ export function CommandPalette(): JSX.Element {
             <IconSearch />
             <input
               ref={input}
-              placeholder="Alle Portale durchsuchen …"
+              placeholder={t("palette.placeholder")}
               value={query()}
               onInput={(e) => {
                 setQuery(e.currentTarget.value);
@@ -95,13 +96,13 @@ export function CommandPalette(): JSX.Element {
             <span class="cmdk-esc">Esc</span>
           </div>
           <Show when={loading()}>
-            <div class="cmdk-note">Kataloge werden geladen …</div>
+            <div class="cmdk-note">{t("palette.loading")}</div>
           </Show>
           <Show when={!loading() && query().trim() !== "" && results().length === 0}>
-            <div class="cmdk-note">Keine Treffer.</div>
+            <div class="cmdk-note">{t("palette.noHits")}</div>
           </Show>
           <Show when={query().trim() === "" && !loading()}>
-            <div class="cmdk-note">Tippe, um über aniworld, serienstream und filmo zu suchen.</div>
+            <div class="cmdk-note">{t("palette.hint")}</div>
           </Show>
           <div class="cmdk-list">
             <For each={results()}>

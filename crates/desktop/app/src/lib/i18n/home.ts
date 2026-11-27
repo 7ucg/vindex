@@ -1,0 +1,43 @@
+// Übersetzungen für home (DE/EN). Schlüssel werden in i18n.ts zusammengeführt.
+export const de: Record<string, string> = {
+  "home.welcome": "Willkommen bei vindex",
+  "home.searchPlaceholder": "Katalog durchsuchen (aniworld) …",
+  "home.continue": "Weiterschauen",
+  "home.pctWatched": "{pct}% gesehen",
+  "home.keepWatching": "weiterschauen",
+  "home.newEpisodes": "Neue Folgen",
+  "home.watchlist": "Merkliste",
+  "home.saved": "gemerkt",
+  "home.deleteCollection": "Sammlung löschen",
+  "home.deleteCollectionConfirm": "Sammlung „{name}“ löschen?",
+  "home.recentlyAdded": "Zuletzt hinzugefügt",
+  "home.inLibrary": "in der Bibliothek",
+  "home.noHits": "Keine Treffer für „{q}“.",
+  "home.hits": "Treffer",
+  "home.hitsFound": "{n} gefunden",
+  "home.emptyHint":
+    "Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links zeigen den Katalog als Grid.",
+  "home.filme": "Filme",
+  "home.season": "Staffel {n}",
+};
+export const en: Record<string, string> = {
+  "home.welcome": "Welcome to vindex",
+  "home.searchPlaceholder": "Search the catalog (aniworld) …",
+  "home.continue": "Keep watching",
+  "home.pctWatched": "{pct}% watched",
+  "home.keepWatching": "keep watching",
+  "home.newEpisodes": "New episodes",
+  "home.watchlist": "Watchlist",
+  "home.saved": "saved",
+  "home.deleteCollection": "Delete collection",
+  "home.deleteCollectionConfirm": "Delete collection “{name}”?",
+  "home.recentlyAdded": "Recently added",
+  "home.inLibrary": "in the library",
+  "home.noHits": "No matches for “{q}”.",
+  "home.hits": "Matches",
+  "home.hitsFound": "{n} found",
+  "home.emptyHint":
+    "Type a title to search the aniworld catalog. The portal tabs on the left show the catalog as a grid.",
+  "home.filme": "Movies",
+  "home.season": "Season {n}",
+};

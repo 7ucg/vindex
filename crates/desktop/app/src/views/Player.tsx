@@ -16,9 +16,10 @@ import {
   type Playback,
 } from "../lib/store";
 import { saveProgress, getProgress, clearProgress } from "../lib/progress";
+import { t } from "../lib/i18n";
 
 function epLabel(show: string, season: number, idx: number): string {
-  const s = season === 0 ? "Filme" : `Staffel ${season}`;
+  const s = season === 0 ? t("player.movies") : t("player.season", { n: season });
   return `${show} — ${s} · ${idx}`;
 }
 
@@ -438,7 +439,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
         queue: { ...c, index: c.index + 1 },
       });
     } catch (e) {
-      setErr(`Nächste Folge: ${String(e)}`);
+      setErr(t("player.errNext", { err: String(e) }));
       setGoingNext(false);
     }
   };
@@ -597,19 +598,21 @@ export function Player(props: { playback: Playback }): JSX.Element {
     el.addEventListener("error", () => {
       if (!props.playback.isHls) {
         setLoading(false);
-        setErr("Diese Datei spielt das Fenster nicht ab — nutze Extern (mpv / System-Player).");
+        setErr(t("player.errUnplayable"));
       }
     });
     el.addEventListener("ended", onEnded);
     el.addEventListener("timeupdate", () => {
       // Läuft die Zeit, wird nichts mehr geladen — Spinner sicher ausblenden.
       setLoading(false);
-      const t = el.currentTime;
-      const hit = skips().find((s) => t >= s.start && t < s.end - 0.3);
-      setSkipTarget(hit ? { end: hit.end, label: hit.kind === "ed" ? "Outro" : "Intro" } : null);
+      const ct = el.currentTime;
+      const hit = skips().find((s) => ct >= s.start && ct < s.end - 0.3);
+      setSkipTarget(
+        hit ? { end: hit.end, label: hit.kind === "ed" ? t("player.outro") : t("player.intro") } : null,
+      );
       const a = loopA();
       const b = loopB();
-      if (a !== null && b !== null && t >= b) el.currentTime = a;
+      if (a !== null && b !== null && ct >= b) el.currentTime = a;
       saveNow(el);
     });
     // An die zuletzt gesehene Stelle springen (wenn sinnvoll).
@@ -653,7 +656,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
         const body = (await r.text()).slice(0, 200).replace(/\s+/g, " ");
         setErr(`Proxy ${r.status} ${r.statusText} · ${body}`);
       } catch (e) {
-        setErr(`Proxy nicht erreichbar: ${String(e)}`);
+        setErr(t("player.errProxyUnreachable", { err: String(e) }));
       }
     };
 
@@ -665,7 +668,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
           hls.on(Hls.Events.ERROR, (_e, data) => {
             if (!data.fatal) return;
             setLoading(false);
-            setErr(`Wiedergabefehler: ${data.type} / ${data.details} — prüfe Proxy …`);
+            setErr(t("player.errPlayback", { type: data.type, details: data.details }));
             void probe(src);
           });
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -730,19 +733,19 @@ export function Player(props: { playback: Playback }): JSX.Element {
     <div class="player-overlay" classList={{ "cursor-hidden": !ui() }} onMouseMove={poke}>
       <div class="player-top" classList={{ "chrome-hidden": !ui() }}>
         <button class="chip" onClick={closePlayer}>
-          ‹ Schließen
+          ‹ {t("common.close")}
         </button>
         <span class="player-title">{props.playback.title}</span>
 
         <div class="player-tools">
-          <button class="chip" onClick={() => setSpeed(rate() - 0.25)} aria-label="Langsamer">−</button>
+          <button class="chip" onClick={() => setSpeed(rate() - 0.25)} aria-label={t("player.slower")}>−</button>
           <span class="sleep-label">{rate().toFixed(2)}×</span>
-          <button class="chip" onClick={() => setSpeed(rate() + 0.25)} aria-label="Schneller">+</button>
+          <button class="chip" onClick={() => setSpeed(rate() + 0.25)} aria-label={t("player.faster")}>+</button>
           <button
             class="chip"
             classList={{ on: loopA() !== null }}
             onClick={markLoop}
-            title="A-B-Loop (A setzen, B setzen, löschen)"
+            title={t("player.abLoopTitle")}
           >
             A-B
           </button>
@@ -750,8 +753,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
             class="chip"
             classList={{ on: mini() }}
             onClick={() => void togglePip()}
-            title="Bild-in-Bild"
-            aria-label="Bild-in-Bild"
+            title={t("player.pip")}
+            aria-label={t("player.pip")}
           >
             PiP
           </button>
@@ -759,24 +762,24 @@ export function Player(props: { playback: Playback }): JSX.Element {
             class="chip"
             classList={{ on: onTop() }}
             onClick={toggleOnTop}
-            title="Fenster immer im Vordergrund"
-            aria-label="Immer im Vordergrund"
+            title={t("player.onTopTitle")}
+            aria-label={t("player.onTop")}
           >
-            Oben
+            {t("player.onTopShort")}
           </button>
-          <button class="chip" onClick={screenshot} title="Screenshot" aria-label="Screenshot">
-            Foto
+          <button class="chip" onClick={screenshot} title={t("player.screenshot")} aria-label={t("player.screenshot")}>
+            {t("player.screenshotShort")}
           </button>
           <button
             class="chip"
             classList={{ on: !!extSub() }}
             onClick={() => (extSub() ? clearSub() : subInput?.click())}
             title={
-              extSub() ? `Untertitel: ${extSub()} (entfernen)` : "Untertitel laden (.srt/.vtt/.ass)"
+              extSub() ? t("player.subLoadedTitle", { name: extSub()! }) : t("player.subLoadTitle")
             }
-            aria-label="Externe Untertitel"
+            aria-label={t("player.extSub")}
           >
-            UT
+            {t("player.subShort")}
           </button>
           <input
             ref={subInput}
@@ -789,18 +792,18 @@ export function Player(props: { playback: Playback }): JSX.Element {
             class="chip"
             classList={{ on: menuOpen() }}
             onClick={() => setMenuOpen(!menuOpen())}
-            title="Qualität, Audio, Untertitel, Darstellung"
-            aria-label="Qualität, Audio, Untertitel, Darstellung"
+            title={t("player.menuTitle")}
+            aria-label={t("player.menuTitle")}
           >
             ⚙
           </button>
           <Show when={hasNext()}>
             <button class="chip" disabled={goingNext()} onClick={() => void next()}>
-              {goingNext() ? "lädt …" : "Nächste ›"}
+              {goingNext() ? t("player.loadingShort") : t("player.nextEp")}
             </button>
           </Show>
           <div class="sleep">
-            <span class="sleep-label">Sleep</span>
+            <span class="sleep-label">{t("player.sleep")}</span>
             <For each={SLEEP_OPTIONS}>
               {(m) => (
                 <button
@@ -817,9 +820,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
                 class="chip"
                 classList={{ on: stopAfter() }}
                 onClick={toggleStopAfter}
-                title="Nach dieser Folge stoppen"
+                title={t("player.stopAfterTitle")}
               >
-                Ende Folge
+                {t("player.stopAfter")}
               </button>
             </Show>
           </div>
@@ -829,10 +832,10 @@ export function Player(props: { playback: Playback }): JSX.Element {
       <Show when={menuOpen()}>
         <div class="player-menu">
           <Show when={levels().length > 1}>
-            <div class="pm-sec">Qualität</div>
+            <div class="pm-sec">{t("player.quality")}</div>
             <div class="pm-row">
               <button class="chip" classList={{ on: curLevel() === -1 }} onClick={() => pickLevel(-1)}>
-                Auto
+                {t("player.auto")}
               </button>
               <For each={levels()}>
                 {(l) => (
@@ -844,7 +847,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
             </div>
           </Show>
           <Show when={audios().length > 1}>
-            <div class="pm-sec">Audio</div>
+            <div class="pm-sec">{t("player.audio")}</div>
             <div class="pm-row">
               <For each={audios()}>
                 {(t) => (
@@ -856,10 +859,10 @@ export function Player(props: { playback: Playback }): JSX.Element {
             </div>
           </Show>
           <Show when={subs().length > 0}>
-            <div class="pm-sec">Untertitel</div>
+            <div class="pm-sec">{t("player.subtitles")}</div>
             <div class="pm-row">
               <button class="chip" classList={{ on: curSub() === -1 }} onClick={() => pickSub(-1)}>
-                Aus
+                {t("player.off")}
               </button>
               <For each={subs()}>
                 {(t) => (
@@ -870,21 +873,22 @@ export function Player(props: { playback: Playback }): JSX.Element {
               </For>
             </div>
           </Show>
-          <div class="pm-sec">Bild</div>
+          <div class="pm-sec">{t("player.picture")}</div>
           <div class="pm-row">
             <button
               class="chip"
               classList={{ on: fitCover() }}
               onClick={() => setFitCover(!fitCover())}
             >
-              {fitCover() ? "● Vollbild-Zuschnitt" : "○ Vollbild-Zuschnitt"}
+              {fitCover() ? "● " : "○ "}
+              {t("player.fillCrop")}
             </button>
             <button class="chip" onClick={() => setBrightness(1)}>
-              Helligkeit zurücksetzen
+              {t("player.resetBrightness")}
             </button>
           </div>
           <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
-            <span class="sleep-label">Helligkeit</span>
+            <span class="sleep-label">{t("player.brightness")}</span>
             <input
               type="range"
               min="0.3"
@@ -896,9 +900,9 @@ export function Player(props: { playback: Playback }): JSX.Element {
             <span class="sleep-label">{Math.round(brightness() * 100)}%</span>
           </div>
 
-          <div class="pm-sec">Untertitel-Darstellung</div>
+          <div class="pm-sec">{t("player.subDisplay")}</div>
           <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
-            <span class="sleep-label">Größe</span>
+            <span class="sleep-label">{t("player.size")}</span>
             <input
               type="range"
               min="16"
@@ -910,13 +914,13 @@ export function Player(props: { playback: Playback }): JSX.Element {
             <span class="sleep-label">{subStyle().size}px</span>
           </div>
           <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
-            <span class="sleep-label">Farbe</span>
+            <span class="sleep-label">{t("player.color")}</span>
             <input
               type="color"
               value={subStyle().color}
               onInput={(e) => setSubStyle({ ...subStyle(), color: e.currentTarget.value })}
             />
-            <span class="sleep-label">Deckkraft BG</span>
+            <span class="sleep-label">{t("player.bgOpacity")}</span>
             <input
               type="range"
               min="0"
@@ -929,7 +933,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
             />
           </div>
           <div class="pm-row" style={{ "align-items": "center", gap: "8px" }}>
-            <span class="sleep-label">Position</span>
+            <span class="sleep-label">{t("player.position")}</span>
             <input
               type="range"
               min="0"
@@ -943,7 +947,7 @@ export function Player(props: { playback: Playback }): JSX.Element {
             <span class="sleep-label">{subStyle().bottom}%</span>
           </div>
 
-          <div class="pm-sec">Ton</div>
+          <div class="pm-sec">{t("player.sound")}</div>
           <div class="pm-row">
             <button
               class="chip"
@@ -954,7 +958,8 @@ export function Player(props: { playback: Playback }): JSX.Element {
                 applyNormalize(n);
               }}
             >
-              {normalize() ? "● Lautstärke angleichen" : "○ Lautstärke angleichen"}
+              {normalize() ? "● " : "○ "}
+              {t("player.normalize")}
             </button>
           </div>
         </div>
@@ -998,24 +1003,22 @@ export function Player(props: { playback: Playback }): JSX.Element {
       </Show>
 
       <Show when={skipTarget()}>
-        {(t) => (
+        {(target) => (
           <button class="skip-btn" onClick={doSkip}>
-            {t().label} überspringen <span class="skip-key">S</span>
+            {t("player.skip", { label: target().label })} <span class="skip-key">S</span>
           </button>
         )}
       </Show>
 
       <Show when={subDelay() !== 0}>
         <div class="sub-delay-badge" classList={{ "chrome-hidden": !ui() }}>
-          Untertitel {subDelay() > 0 ? "+" : ""}
+          {t("player.subtitle")} {subDelay() > 0 ? "+" : ""}
           {subDelay()}s
         </div>
       </Show>
 
       <div class="player-hint" classList={{ "chrome-hidden": !ui() }}>
-        Space Play · ←/→ 5s · ⇧←/→ 30s · J/L 10s · ↑/↓ oder Scroll Lautstärke · M stumm · F
-        Vollbild · P PiP · S skip · N nächste · [ ] Tempo · , . Frame · A A-B-Loop · G/H UT-Delay ·
-        Z Zuschnitt · 0–9 springen · Esc schließen
+        {t("player.hint")}
       </div>
     </div>
   );

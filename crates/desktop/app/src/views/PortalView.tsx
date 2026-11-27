@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { discover, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
+import { t } from "../lib/i18n";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
@@ -252,17 +253,17 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       <div class="row-h">
         <h2>{LABEL[props.portal]}</h2>
         <Show when={ready()}>
-          <span class="link">{visible().length} Titel</span>
+          <span class="link">{t("portal.titles", { n: visible().length })}</span>
         </Show>
       </div>
 
       <Show when={ready()}>
         <div class="controls" style={{ "margin-bottom": "16px" }}>
           <button class="chip" classList={{ on: sort() === "az" }} onClick={() => setSort("az")}>
-            A–Z
+            {t("portal.sort_az")}
           </button>
           <button class="chip" classList={{ on: sort() === "za" }} onClick={() => setSort("za")}>
-            Z–A
+            {t("portal.sort_za")}
           </button>
           {/* Nur durch Index-Daten gedeckte Sortierungen. Beliebtheit/Bewertung/Status
               fehlen als Spalten (neue Crawler-Spalten + Re-Crawl nötig) — ausser Scope. */}
@@ -271,28 +272,28 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
             classList={{ on: sort() === "year_desc" }}
             onClick={() => setSort("year_desc")}
           >
-            Jahr neu
+            {t("portal.sort_year_desc")}
           </button>
           <button
             class="chip"
             classList={{ on: sort() === "year_asc" }}
             onClick={() => setSort("year_asc")}
           >
-            Jahr alt
+            {t("portal.sort_year_asc")}
           </button>
           <button
             class="chip"
             classList={{ on: sort() === "newest" }}
             onClick={() => setSort("newest")}
           >
-            Zuletzt indexiert
+            {t("portal.sort_newest")}
           </button>
           <button
             class="chip"
             classList={{ on: layout() === "grid" }}
             onClick={() => setLayout("grid")}
-            title="Raster"
-            aria-label="Raster"
+            title={t("portal.grid")}
+            aria-label={t("portal.grid")}
           >
             ▦
           </button>
@@ -300,8 +301,8 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
             class="chip"
             classList={{ on: layout() === "list" }}
             onClick={() => setLayout("list")}
-            title="Liste"
-            aria-label="Liste"
+            title={t("portal.list")}
+            aria-label={t("portal.list")}
           >
             ☰
           </button>
@@ -314,7 +315,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               if (e.currentTarget.value) setYear(0);
             }}
           >
-            <option value="">Alle Genres</option>
+            <option value="">{t("portal.all_genres")}</option>
             <For each={GENRES[props.portal]}>
               {(g) => <option value={g.slug}>{g.label}</option>}
             </For>
@@ -329,7 +330,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               if (y) setGenre("");
             }}
           >
-            <option value="">Alle Jahre</option>
+            <option value="">{t("portal.all_years")}</option>
             <For each={YEARS}>{(y) => <option value={y}>{y}</option>}</For>
           </select>
           <select
@@ -338,7 +339,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
             value={flang()}
             onChange={(e) => setFlang(e.currentTarget.value)}
           >
-            <option value="">Alle Sprachen</option>
+            <option value="">{t("portal.all_langs")}</option>
             <For each={FILTER_LANGS}>{(l) => <option value={l}>{l}</option>}</For>
           </select>
           <Show when={(lib() ?? []).length > 0}>
@@ -346,15 +347,15 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               class="chip"
               classList={{ on: onlyLib() }}
               onClick={() => setOnlyLib(!onlyLib())}
-              title="Nur Titel mit heruntergeladenen Dateien"
+              title={t("portal.only_lib_title")}
             >
-              In Bibliothek
+              {t("portal.only_lib")}
             </button>
           </Show>
           <div class="search" style={{ "margin-left": "auto", "min-width": "200px" }}>
             <IconSearch />
             <input
-              placeholder="Im Katalog filtern …"
+              placeholder={t("portal.filter_ph")}
               value={filter()}
               onInput={(e) => setFilter(e.currentTarget.value)}
             />
@@ -367,11 +368,11 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
               setPicked(new Map());
             }}
           >
-            {selectMode() ? "Fertig" : "Auswählen"}
+            {selectMode() ? t("common.done") : t("portal.select")}
           </button>
           <Show when={selectMode() && picked().size > 0}>
             <button class="chip" disabled={bulkBusy()} onClick={() => void bulkLoad()}>
-              {bulkBusy() ? "reiht ein …" : `${picked().size} laden`}
+              {bulkBusy() ? t("portal.enqueuing") : t("portal.load_n", { n: picked().size })}
             </button>
           </Show>
         </div>
@@ -382,14 +383,11 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
       </Show>
 
       <Show when={items.error}>
-        <div class="empty">
-          Katalog für {LABEL[props.portal]} ist noch nicht angebunden. Discover-Endpunkt und
-          Poster für dieses Portal kommen als nächster Schritt im Kern.
-        </div>
+        <div class="empty">{t("portal.not_connected", { portal: LABEL[props.portal] })}</div>
       </Show>
 
       <Show when={ready() && visible().length === 0}>
-        <div class="empty">Keine Treffer.</div>
+        <div class="empty">{t("portal.no_hits")}</div>
       </Show>
 
       <Show when={visible().length > 0}>
@@ -439,11 +437,11 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
                         classList={{ live: h.source === "live" }}
                         title={
                           h.source === "db"
-                            ? "Aus lokalem Index"
-                            : "Live vom Portal geladen"
+                            ? t("portal.src_db_title")
+                            : t("portal.src_live_title")
                         }
                       >
-                        {h.source === "db" ? "Index" : "Live"}
+                        {h.source === "db" ? t("portal.src_db") : t("portal.src_live")}
                       </div>
                     </Show>
                     <div class="play-ov" aria-hidden="true">
@@ -462,7 +460,7 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
         <div ref={sentinel} style={{ height: "1px" }} />
         <Show when={shown() < visible().length}>
           <p class="note">
-            {shown()} von {visible().length} gezeigt — scrolle für mehr.
+            {t("portal.shown_of", { n: shown(), total: visible().length })}
           </p>
         </Show>
       </Show>

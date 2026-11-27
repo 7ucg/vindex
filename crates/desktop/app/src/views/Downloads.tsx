@@ -14,16 +14,18 @@ import {
   type GateStatus,
 } from "../lib/api";
 import { getHistory, recordHistory, clearHistory, type HistItem } from "../lib/history";
+import { t } from "../lib/i18n";
 
+// status → i18n-Schlüssel; über t() aufgelöst (reagiert auf Sprachwechsel).
 const STATUS: Record<string, string> = {
-  queued: "in Warteschlange",
-  resolving: "löst auf …",
-  running: "lädt",
-  paused: "pausiert",
-  muxing: "muxt",
-  done: "fertig",
-  error: "Fehler",
-  cancelled: "abgebrochen",
+  queued: "downloads.status.queued",
+  resolving: "downloads.status.resolving",
+  running: "downloads.status.running",
+  paused: "downloads.status.paused",
+  muxing: "downloads.status.muxing",
+  done: "downloads.status.done",
+  error: "downloads.status.error",
+  cancelled: "downloads.status.cancelled",
 };
 
 function mb(bytes: number): string {
@@ -197,7 +199,7 @@ export function Downloads(): JSX.Element {
   return (
     <div class="wrap">
       <div class="row-h">
-        <h2>Downloads</h2>
+        <h2>{t("downloads.title")}</h2>
         <Show when={jobs().length > 0}>
           <div
             style={{
@@ -208,28 +210,28 @@ export function Downloads(): JSX.Element {
             }}
           >
             <span class="link">
-              {active().length} aktiv
-              <Show when={totalSpeed() > 0}> · {fmtSpeed(totalSpeed())}</Show> · {jobs().length}{" "}
-              gesamt
+              {t("downloads.active", { n: active().length })}
+              <Show when={totalSpeed() > 0}> · {fmtSpeed(totalSpeed())}</Show> ·{" "}
+              {t("downloads.total", { n: jobs().length })}
             </span>
             <Show when={active().filter((j) => pausable(j.status)).length > 1}>
               <button class="chip" onClick={pauseAll}>
-                Alle pausieren
+                {t("downloads.pauseAll")}
               </button>
             </Show>
             <Show when={jobs().some((j) => j.status === "paused")}>
               <button class="chip" onClick={resumeAll}>
-                Alle fortsetzen
+                {t("downloads.resumeAll")}
               </button>
             </Show>
             <Show when={active().length > 0}>
               <button class="chip" onClick={cancelAll}>
-                Alle abbrechen
+                {t("downloads.cancelAll")}
               </button>
             </Show>
             <Show when={anyFinished()}>
               <button class="chip" onClick={() => void clearDone()}>
-                Erledigte leeren
+                {t("downloads.clearDone")}
               </button>
             </Show>
           </div>
@@ -238,16 +240,12 @@ export function Downloads(): JSX.Element {
 
       <Show when={gate()?.held_reason && jobs().some((j) => j.status === "queued")}>
         <div class="note" style={{ "margin-bottom": "10px" }}>
-          Warteschlange pausiert: {gate()?.held_reason} — laufende Downloads laufen zu Ende, neue
-          starten erst wieder, wenn die Bedingung erfüllt ist (in den Einstellungen unter „Zeitplan
-          &amp; Abos").
+          {t("downloads.gateBanner", { reason: gate()?.held_reason ?? "" })}
         </div>
       </Show>
 
       <Show when={jobs().length === 0}>
-        <div class="empty">
-          Noch keine Downloads. In einer Folge auf „Laden" tippen — der Fortschritt läuft hier auf.
-        </div>
+        <div class="empty">{t("downloads.empty")}</div>
       </Show>
 
       <Show when={jobs().length > 0}>
@@ -269,7 +267,7 @@ export function Downloads(): JSX.Element {
                 <div class="info">
                   <div class="n">{j.title}</div>
                   <div class="sub">
-                    {STATUS[j.status] ?? j.status}
+                    {STATUS[j.status] ? t(STATUS[j.status]) : j.status}
                     <Show when={j.total > 0}>
                       {" "}· {j.done}/{j.total}
                     </Show>
@@ -278,7 +276,7 @@ export function Downloads(): JSX.Element {
                       {" "}· {speedOf(j.id)}
                     </Show>
                     <Show when={j.status === "running" && etaOf(j.id)}>
-                      {" "}· noch {etaOf(j.id)}
+                      {" "}· {t("downloads.etaRemaining", { eta: etaOf(j.id) })}
                     </Show>
                     <Show when={j.error}> · {j.error}</Show>
                   </div>
@@ -290,14 +288,14 @@ export function Downloads(): JSX.Element {
                   <Show when={j.status === "queued"}>
                     <button
                       class="chip"
-                      title="In der Warteschlange nach oben"
+                      title={t("downloads.moveUp")}
                       onClick={() => void moveJob(j.id, true)}
                     >
                       ↑
                     </button>
                     <button
                       class="chip"
-                      title="In der Warteschlange nach unten"
+                      title={t("downloads.moveDown")}
                       onClick={() => void moveJob(j.id, false)}
                     >
                       ↓
@@ -311,28 +309,28 @@ export function Downloads(): JSX.Element {
                       min="0"
                       step="256"
                       placeholder="KiB/s"
-                      title="Tempolimit nur für diesen Download (KiB/s, 0 = unbegrenzt)"
+                      title={t("downloads.rateLimitTitle")}
                       onChange={(e) => setJobRate(j.id, e.currentTarget.value)}
                     />
                   </Show>
                   <Show when={["running", "resolving", "queued"].includes(j.status)}>
                     <button class="chip" onClick={() => pauseDownload(j.id)}>
-                      Pause
+                      {t("common.pause")}
                     </button>
                   </Show>
                   <Show when={j.status === "paused"}>
                     <button class="chip" onClick={() => resumeDownload(j.id)}>
-                      Fortsetzen
+                      {t("common.resume")}
                     </button>
                   </Show>
                   <Show when={!["done", "error", "cancelled"].includes(j.status)}>
                     <button class="chip" onClick={() => cancelDownload(j.id)}>
-                      Abbrechen
+                      {t("common.cancel")}
                     </button>
                   </Show>
                   <Show when={["error", "cancelled"].includes(j.status)}>
                     <button class="chip" onClick={() => retry(j.id)}>
-                      Erneut
+                      {t("common.retry")}
                     </button>
                   </Show>
                 </div>
@@ -344,9 +342,9 @@ export function Downloads(): JSX.Element {
 
       <Show when={hist().length > 0}>
         <div class="row-h" style={{ margin: "22px 2px 10px" }}>
-          <h2 style={{ "font-size": "14px" }}>Verlauf</h2>
+          <h2 style={{ "font-size": "14px" }}>{t("downloads.history")}</h2>
           <button class="chip" onClick={emptyHist}>
-            Leeren
+            {t("downloads.clear")}
           </button>
         </div>
         <div class="panel">
@@ -357,7 +355,7 @@ export function Downloads(): JSX.Element {
                 <div class="info">
                   <div class="n">{h.title}</div>
                   <div class="sub">
-                    {h.ok ? "fertig" : "Fehler"} · {when(h.ts)}
+                    {h.ok ? t("downloads.status.done") : t("downloads.status.error")} · {when(h.ts)}
                     <Show when={h.bytes > 0}> · {mb(h.bytes)}</Show>
                   </div>
                 </div>
@@ -367,10 +365,7 @@ export function Downloads(): JSX.Element {
         </div>
       </Show>
 
-      <p class="note">
-        Download-Engine, Remux und Naming laufen im Kern. Der Verlauf merkt sich abgeschlossene
-        Downloads lokal. Bandbreitenlimit und Prioritäten folgen.
-      </p>
+      <p class="note">{t("downloads.note")}</p>
     </div>
   );
 }

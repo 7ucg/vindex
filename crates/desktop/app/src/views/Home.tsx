@@ -9,6 +9,7 @@ import {
   type SearchHit,
 } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
+import { t } from "../lib/i18n";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
 import { getTitleUrl } from "../lib/titlemap";
@@ -59,7 +60,7 @@ export function Home(): JSX.Element {
   // --- „Neue Folgen": nächste ungesehene Folge je gerade geschauter Serie ---
   // Dateiname-Bereinigung wie in Detail/Library, damit getTitleUrl den gemerkten Schlüssel trifft.
   const clean = (s: string) => s.replace(/[\\/:*?"<>|]/g, "").trim();
-  const sLabel = (n: number) => (n === 0 ? "Filme" : `Staffel ${n}`);
+  const sLabel = (n: number) => (n === 0 ? t("home.filme") : t("home.season", { n }));
 
   interface NextCard {
     epUrl: string;
@@ -163,11 +164,11 @@ export function Home(): JSX.Element {
   return (
     <div class="wrap">
       <div class="topbar" style={{ position: "static", padding: "0 0 18px", "border-bottom": "0", "backdrop-filter": "none", background: "none" }}>
-        <h2 style={{ margin: 0, "font-size": "20px" }}>Willkommen bei vindex</h2>
+        <h2 style={{ margin: 0, "font-size": "20px" }}>{t("home.welcome")}</h2>
         <div class="search" style={{ "min-width": "320px" }}>
           <IconSearch />
           <input
-            placeholder="Katalog durchsuchen (aniworld) …"
+            placeholder={t("home.searchPlaceholder")}
             value={keyword()}
             onInput={(e) => onInput(e.currentTarget.value)}
             onKeyDown={(e) => e.key === "Enter" && run()}
@@ -177,7 +178,7 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && recent().length > 0}>
         <div class="row-h">
-          <h2>Weiterschauen</h2>
+          <h2>{t("home.continue")}</h2>
         </div>
         <div class="grid">
           <For each={recent()}>
@@ -201,8 +202,8 @@ export function Home(): JSX.Element {
                 <div class="t">{it.r.title}</div>
                 <div class="s">
                   {it.r.dur
-                    ? `${Math.round((it.r.pos / it.r.dur) * 100)}% gesehen`
-                    : "weiterschauen"}
+                    ? t("home.pctWatched", { pct: Math.round((it.r.pos / it.r.dur) * 100) })
+                    : t("home.keepWatching")}
                 </div>
               </div>
             )}
@@ -212,7 +213,7 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && nextEps().length > 0}>
         <div class="row-h">
-          <h2>Neue Folgen</h2>
+          <h2>{t("home.newEpisodes")}</h2>
         </div>
         <div class="grid">
           <For each={nextEps()}>
@@ -236,7 +237,7 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && saved().length > 0}>
         <div class="row-h">
-          <h2>Merkliste</h2>
+          <h2>{t("home.watchlist")}</h2>
         </div>
         <div class="grid">
           <For each={saved()}>
@@ -251,7 +252,7 @@ export function Home(): JSX.Element {
                   </div>
                 </div>
                 <div class="t">{it.title}</div>
-                <div class="s">gemerkt</div>
+                <div class="s">{t("home.saved")}</div>
               </div>
             )}
           </For>
@@ -266,12 +267,13 @@ export function Home(): JSX.Element {
                 <h2>{c.name}</h2>
                 <button
                   class="chip"
-                  title="Sammlung löschen"
+                  title={t("home.deleteCollection")}
                   onClick={() => {
-                    if (confirm(`Sammlung „${c.name}" löschen?`)) deleteCollection(c.id);
+                    if (confirm(t("home.deleteCollectionConfirm", { name: c.name })))
+                      deleteCollection(c.id);
                   }}
                 >
-                  Löschen
+                  {t("common.delete")}
                 </button>
               </div>
               <div class="grid">
@@ -299,7 +301,7 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && (lib()?.length ?? 0) > 0}>
         <div class="row-h">
-          <h2>Zuletzt hinzugefügt</h2>
+          <h2>{t("home.recentlyAdded")}</h2>
         </div>
         <div class="grid">
           <For each={lib()}>
@@ -314,7 +316,7 @@ export function Home(): JSX.Element {
                   </div>
                 </div>
                 <div class="t">{f.name}</div>
-                <div class="s">in der Bibliothek</div>
+                <div class="s">{t("home.inLibrary")}</div>
               </div>
             )}
           </For>
@@ -323,7 +325,7 @@ export function Home(): JSX.Element {
 
       <Show when={err()}>
         <div class="panel" style={{ padding: "14px 16px", color: "var(--err)" }}>
-          Fehler: {err()}
+          {t("common.error")}: {err()}
         </div>
       </Show>
 
@@ -332,13 +334,13 @@ export function Home(): JSX.Element {
       </Show>
 
       <Show when={!loading() && searched() && hits().length === 0}>
-        <div class="empty">Keine Treffer für „{keyword()}".</div>
+        <div class="empty">{t("home.noHits", { q: keyword() })}</div>
       </Show>
 
       <Show when={hits().length > 0}>
         <div class="row-h">
-          <h2>Treffer</h2>
-          <span class="link">{hits().length} gefunden</span>
+          <h2>{t("home.hits")}</h2>
+          <span class="link">{t("home.hitsFound", { n: hits().length })}</span>
         </div>
         <div class="grid">
           <For each={hits()}>
@@ -369,10 +371,7 @@ export function Home(): JSX.Element {
           (lib()?.length ?? 0) === 0
         }
       >
-        <div class="empty">
-          Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links
-          zeigen den Katalog als Grid.
-        </div>
+        <div class="empty">{t("home.emptyHint")}</div>
       </Show>
     </div>
   );

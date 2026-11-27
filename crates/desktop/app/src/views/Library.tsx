@@ -14,6 +14,7 @@ import {
 import { openPlayer } from "../lib/store";
 import { getTitleUrl } from "../lib/titlemap";
 import { Cover } from "./Cover";
+import { t } from "../lib/i18n";
 
 // Cover einer Bibliotheks-Gruppe: erst die gemerkte Portal-URL, sonst per
 // Titelname im lokalen Index nachschlagen. Ohne Treffer bleibt die Fläche leer.
@@ -50,7 +51,7 @@ function when(unix: number): string {
 function groupKey(name: string): string {
   const m = /^(.*?)\s+S\d+E\d+/i.exec(name);
   if (m && m[1].trim()) return m[1].trim();
-  return "Filme & Einzelnes";
+  return t("library.groupMisc");
 }
 
 interface Group {
@@ -74,15 +75,16 @@ export function Library(): JSX.Element {
   const importFolder = async () => {
     const path = await pickDownloadFolder().catch(() => null);
     if (!path) return;
-    setImportMsg("Importiere …");
+    setImportMsg(t("library.importing"));
     try {
       const r = await importFromFolder(path);
       setImportMsg(
-        `${r.imported} importiert${r.skipped ? `, ${r.skipped} übersprungen` : ""}`,
+        t("library.imported", { n: r.imported }) +
+          (r.skipped ? t("library.skippedSuffix", { n: r.skipped }) : ""),
       );
       await refetch();
     } catch (err) {
-      setImportMsg(`Fehler: ${String(err)}`);
+      setImportMsg(t("library.importError", { err: String(err) }));
     }
   };
   const commitRename = async (e: LibraryEntry) => {
@@ -162,12 +164,12 @@ export function Library(): JSX.Element {
   return (
     <div class="wrap">
       <div class="row-h" style={{ "align-items": "center", gap: "10px" }}>
-        <h2>Bibliothek</h2>
+        <h2>{t("library.title")}</h2>
         <Show when={entries()}>
-          <span class="link">{entries()!.length} Dateien</span>
+          <span class="link">{t("library.fileCount", { n: entries()!.length })}</span>
         </Show>
         <button class="chip" style={{ "margin-left": "auto" }} onClick={() => void importFolder()}>
-          Ordner importieren
+          {t("library.importFolder")}
         </button>
         <Show when={importMsg()}>
           <span class="sleep-label">{importMsg()}</span>
@@ -179,9 +181,7 @@ export function Library(): JSX.Element {
       </Show>
 
       <Show when={entries() && entries()!.length === 0}>
-        <div class="empty">
-          Noch nichts heruntergeladen. Fertige Downloads landen hier und sind offline abspielbar.
-        </div>
+        <div class="empty">{t("library.empty")}</div>
       </Show>
 
       <For each={groups()}>
@@ -232,22 +232,22 @@ export function Library(): JSX.Element {
                     </div>
                     <div class="act">
                       <button class="chip" onClick={() => void play(e)}>
-                        Abspielen
+                        {t("common.play")}
                       </button>
                       <button class="chip" onClick={() => playExternal(e)}>
-                        Extern
+                        {t("library.external")}
                       </button>
                       <button
                         class="chip"
                         onClick={() => void revealLibraryItem(e.name).catch(() => {})}
                       >
-                        Ordner
+                        {t("library.folder")}
                       </button>
                       <Show
                         when={editing() === e.name}
                         fallback={
                           <button class="chip" onClick={() => startRename(e)}>
-                            Umbenennen
+                            {t("common.rename")}
                           </button>
                         }
                       >
@@ -256,7 +256,7 @@ export function Library(): JSX.Element {
                           disabled={busy() === e.name}
                           onClick={() => void commitRename(e)}
                         >
-                          {busy() === e.name ? "…" : "Speichern"}
+                          {busy() === e.name ? "…" : t("common.save")}
                         </button>
                         <button
                           class="chip"
@@ -265,11 +265,11 @@ export function Library(): JSX.Element {
                             setRenameErr(null);
                           }}
                         >
-                          Abbrechen
+                          {t("common.cancel")}
                         </button>
                       </Show>
                       <button class="chip" disabled={busy() === e.name} onClick={() => remove(e)}>
-                        {busy() === e.name ? "…" : "Löschen"}
+                        {busy() === e.name ? "…" : t("common.delete")}
                       </button>
                     </div>
                   </div>
@@ -280,11 +280,7 @@ export function Library(): JSX.Element {
         )}
       </For>
 
-      <p class="note">
-        „Abspielen" läuft im Fenster (über den lokalen Proxy). Spielt das WebView einen Container
-        nicht ab, nutze „Extern" (mpv, sonst System-Player). Löschen entfernt die Datei vom
-        Datenträger.
-      </p>
+      <p class="note">{t("library.note")}</p>
     </div>
   );
 }

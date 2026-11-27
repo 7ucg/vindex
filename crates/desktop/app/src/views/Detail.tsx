@@ -35,6 +35,7 @@ import {
   inCollection,
 } from "../lib/collections";
 import { rememberTitleUrl } from "../lib/titlemap";
+import { t } from "../lib/i18n";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const HOSTERS = ["VOE", "Vidoza", "Doodstream", "Filemoon", "Vidmoly", "SpeedFiles"];
@@ -43,12 +44,30 @@ const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
+// Windows-Gerätenamen, die als Dateiname verboten sind.
+const RESERVED_NAMES = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
+// Härtet einen (gescrapten) Titel zu einer Datei-Namenskomponente. MUSS exakt der
+// Rust-Seite entsprechen (sanitize_title_component in src-tauri/src/lib.rs), sonst
+// weichen Download-Namen und der Abo-Abgleich voneinander ab (Endlos-Re-Download).
 function sanitize(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, "").trim();
+  const filtered = Array.from(s)
+    .map((c) => (/\p{Cc}/u.test(c) ? " " : c))
+    .filter((c) => !/[\\/:*?"<>|]/.test(c))
+    .join("");
+  // Erst auf 120 Codepoints kürzen, dann normalisieren (idempotent, FS-stabil).
+  let out = Array.from(filtered).slice(0, 120).join("");
+  out = out.trim().replace(/^\.+|\.+$/g, "").trim();
+  if (RESERVED_NAMES.has(out.toUpperCase())) out += "_";
+  if (out === "") out = "titel";
+  return out;
 }
 
 function seasonLabel(n: number): string {
-  return n === 0 ? "Filme" : `Staffel ${n}`;
+  return n === 0 ? t("detail.seasonFilms") : t("detail.season", { n });
 }
 
 export function Detail(): JSX.Element {
@@ -177,7 +196,7 @@ export function Detail(): JSX.Element {
     else addToCollection(id, { url: sel.url, title: sel.title });
   };
   const newColl = () => {
-    const name = prompt("Name der neuen Sammlung");
+    const name = prompt(t("detail.newCollectionName"));
     if (name && name.trim()) {
       const id = createCollection(name);
       addToCollection(id, { url: sel.url, title: sel.title });
@@ -285,21 +304,21 @@ export function Detail(): JSX.Element {
     <div class="wrap">
       <div class="row-h" style={{ "align-items": "center" }}>
         <button class="chip" onClick={() => setView(sel.from)}>
-          ‹ Zurück
+          ‹ {t("common.back")}
         </button>
         <h2 style={{ margin: 0 }}>{sel.title}</h2>
         <Show when={src()}>
           <span
             class="src-badge inline"
             classList={{ live: src() === "live" }}
-            title={src() === "db" ? "Aus lokalem Index" : "Live vom Portal geladen"}
+            title={src() === "db" ? t("detail.srcIndexTitle") : t("detail.srcLiveTitle")}
           >
-            {src() === "db" ? "Index" : "Live"}
+            {src() === "db" ? t("detail.srcIndex") : t("detail.srcLive")}
           </span>
         </Show>
         <div class="coll-wrap" style={{ "margin-left": "auto" }}>
           <button class="chip" classList={{ on: collMenu() }} onClick={() => setCollMenu(!collMenu())}>
-            ＋ Sammlung
+            ＋ {t("detail.collection")}
           </button>
           <Show when={collMenu()}>
             <div class="coll-menu">
@@ -312,23 +331,23 @@ export function Detail(): JSX.Element {
                 )}
               </For>
               <button class="coll-opt coll-new" onClick={newColl}>
-                ＋ Neue Sammlung …
+                ＋ {t("detail.newCollection")}
               </button>
             </div>
           </Show>
         </div>
         <button class="chip" classList={{ on: saved() }} onClick={toggleSave}>
-          {saved() ? "★ Gemerkt" : "☆ Merken"}
+          {saved() ? `★ ${t("detail.saved")}` : `☆ ${t("detail.save")}`}
         </button>
         <Show when={!isMovie}>
           <button
             class="chip"
             classList={{ on: subbed() }}
             disabled={subBusy()}
-            title="Fehlende Folgen automatisch im Zeitfenster laden"
+            title={t("detail.subTitle")}
             onClick={() => void toggleSub()}
           >
-            {subbed() ? "🔔 Abonniert" : "＋ Abonnieren"}
+            {subbed() ? `🔔 ${t("detail.subscribed")}` : `＋ ${t("detail.subscribe")}`}
           </button>
         </Show>
       </div>
@@ -356,7 +375,7 @@ export function Detail(): JSX.Element {
                       <span class="meta-badge">{m.year}</span>
                     </Show>
                     <Show when={m.fsk != null}>
-                      <span class="meta-badge fsk">Ab {m.fsk}</span>
+                      <span class="meta-badge fsk">{t("detail.fsk", { n: m.fsk! })}</span>
                     </Show>
                     <Show when={m.country}>
                       <span class="meta-dim">{m.country}</span>
@@ -378,17 +397,17 @@ export function Detail(): JSX.Element {
                 </Show>
                 <Show when={m.directors.length > 0}>
                   <p class="meta-people">
-                    <b>Regie:</b> {m.directors.join(", ")}
+                    <b>{t("detail.director")}</b> {m.directors.join(", ")}
                   </p>
                 </Show>
                 <Show when={m.actors.length > 0}>
                   <p class="meta-people">
-                    <b>Besetzung:</b> {m.actors.join(", ")}
+                    <b>{t("detail.cast")}</b> {m.actors.join(", ")}
                   </p>
                 </Show>
                 <Show when={m.producers.length > 0}>
                   <p class="meta-people">
-                    <b>Produktion:</b> {m.producers.join(", ")}
+                    <b>{t("detail.production")}</b> {m.producers.join(", ")}
                   </p>
                 </Show>
               </div>
@@ -398,49 +417,49 @@ export function Detail(): JSX.Element {
       </Show>
 
       <div class="controls" style={{ "margin-bottom": "16px" }}>
-        <span class="sleep-label">Sprache</span>
+        <span class="sleep-label">{t("detail.language")}</span>
         <select
           class="cfg-input"
           style={{ "max-width": "220px" }}
           value={lang()}
           onChange={(e) => setLang(e.currentTarget.value)}
         >
-          <option value="">Standard (automatisch)</option>
+          <option value="">{t("detail.langAuto")}</option>
           <For each={langOptions()}>
             {(o) => (
               <option value={o.value}>
                 {o.label}
-                {o.sub_only ? " · nur UT" : ""}
+                {o.sub_only ? ` · ${t("detail.subOnly")}` : ""}
               </option>
             )}
           </For>
         </select>
         <Show when={langs.loading}>
-          <span class="sleep-label">prüfe Sprachen …</span>
+          <span class="sleep-label">{t("detail.checkingLangs")}</span>
         </Show>
         <Show when={langs() && langs()!.length === 0}>
           <span class="sleep-label" style={{ color: "var(--err)" }}>
-            keine Sprache gefunden
+            {t("detail.noLang")}
           </span>
         </Show>
-        <span class="sleep-label">Hoster</span>
+        <span class="sleep-label">{t("detail.hoster")}</span>
         <select
           class="cfg-input"
           style={{ "max-width": "150px" }}
           value={hoster()}
           onChange={(e) => setHoster(e.currentTarget.value)}
         >
-          <option value="">Automatisch</option>
+          <option value="">{t("detail.auto")}</option>
           <For each={HOSTERS}>{(h) => <option value={h}>{h}</option>}</For>
         </select>
-        <span class="sleep-label">Max. Qualität</span>
+        <span class="sleep-label">{t("detail.maxQuality")}</span>
         <select
           class="cfg-input"
           style={{ "max-width": "120px" }}
           value={quality()}
           onChange={(e) => setQuality(e.currentTarget.value)}
         >
-          <option value="">Standard</option>
+          <option value="">{t("detail.qualityDefault")}</option>
           <For each={QUALITIES}>{(q) => <option value={q}>{q}</option>}</For>
         </select>
       </div>
@@ -448,17 +467,17 @@ export function Detail(): JSX.Element {
       <Show when={isMovie}>
         <div class="controls" style={{ "margin-bottom": "16px" }}>
           <button class="chip on" disabled={busy() === sel.url} onClick={watchMovie}>
-            {busy() === sel.url ? "löst auf …" : "▶ Ansehen"}
+            {busy() === sel.url ? t("detail.resolving") : `▶ ${t("detail.watch")}`}
           </button>
           <button
             class="chip"
             disabled={busy() === sel.url}
             onClick={() => void watchExternal(sel.url)}
           >
-            In mpv öffnen
+            {t("detail.openMpv")}
           </button>
           <button class="chip" onClick={loadMovie}>
-            Laden
+            {t("common.download")}
           </button>
         </div>
       </Show>
@@ -469,7 +488,7 @@ export function Detail(): JSX.Element {
 
       <Show when={seasonList.error}>
         <div class="empty">
-          Konnte Staffeln nicht laden: {String(seasonList.error)}
+          {t("detail.seasonsError", { err: String(seasonList.error) })}
         </div>
       </Show>
 
@@ -488,10 +507,10 @@ export function Detail(): JSX.Element {
           </For>
           <div style={{ "margin-left": "auto", display: "flex", gap: "8px" }}>
             <button class="chip" disabled={bulk()} onClick={loadSeason}>
-              {bulk() ? "reiht ein …" : "Staffel laden"}
+              {bulk() ? t("detail.enqueuing") : t("detail.loadSeason")}
             </button>
             <button class="chip" disabled={bulk()} onClick={loadAll}>
-              Alles laden
+              {t("detail.loadAll")}
             </button>
           </div>
         </div>
@@ -502,7 +521,7 @@ export function Detail(): JSX.Element {
       </Show>
 
       <Show when={eps.error}>
-        <div class="empty">Konnte Episoden nicht laden: {String(eps.error)}</div>
+        <div class="empty">{t("detail.episodesError", { err: String(eps.error) })}</div>
       </Show>
 
       <Show when={eps() && eps()!.length > 0}>
@@ -527,10 +546,10 @@ export function Detail(): JSX.Element {
                   <div class="n">{e.title || `${seasonLabel(e.season)} · ${e.index_in_season}`}</div>
                   <div class="sub">
                     {seasonLabel(e.season)}
-                    <Show when={offlineName(e)}> · ⤓ offline</Show>
-                    <Show when={epSeen(e.url)}> · ✓ gesehen</Show>
+                    <Show when={offlineName(e)}> · ⤓ {t("detail.offlineTag")}</Show>
+                    <Show when={epSeen(e.url)}> · ✓ {t("detail.seen")}</Show>
                     <Show when={!epSeen(e.url) && epPct(e.url) > 0}>
-                      {" "}· {epPct(e.url)} % gesehen
+                      {" "}· {t("detail.pctSeen", { p: epPct(e.url) })}
                     </Show>
                   </div>
                   <Show when={epPct(e.url) > 0}>
@@ -546,7 +565,7 @@ export function Detail(): JSX.Element {
                     disabled={busy() === e.url}
                     onClick={() => watch(e)}
                   >
-                    {busy() === e.url ? "löst auf …" : epPct(e.url) > 0 && !epSeen(e.url) ? "Fortsetzen" : "Ansehen"}
+                    {busy() === e.url ? t("detail.resolving") : epPct(e.url) > 0 && !epSeen(e.url) ? t("common.resume") : t("detail.watch")}
                   </button>
                   <button
                     class="chip"
@@ -558,12 +577,12 @@ export function Detail(): JSX.Element {
                   <Show when={offlineName(e)}>
                     {(name) => (
                       <button class="chip" onClick={() => void playOffline(e, name())}>
-                        Offline
+                        {t("detail.offline")}
                       </button>
                     )}
                   </Show>
                   <button class="chip" onClick={() => load(e)}>
-                    Laden
+                    {t("common.download")}
                   </button>
                 </div>
               </div>
@@ -573,19 +592,16 @@ export function Detail(): JSX.Element {
       </Show>
 
       <Show when={eps() && eps()!.length === 0 && !eps.loading}>
-        <div class="empty">Keine Episoden in {seasonLabel(active() ?? 0)}.</div>
+        <div class="empty">{t("detail.noEpisodes", { label: seasonLabel(active() ?? 0) })}</div>
       </Show>
 
       <Show when={playErr()}>
         <div class="panel" style={{ padding: "12px 16px", color: "var(--err)", "margin-top": "12px" }}>
-          Konnte keinen Stream finden: {playErr()}
+          {t("detail.streamError", { err: playErr()! })}
         </div>
       </Show>
 
-      <p class="note">
-        „Ansehen" spielt den Stream direkt im Fenster (über den Referer-Proxy). „Laden"
-        (Download-Auswahl) wird als nächstes verdrahtet.
-      </p>
+      <p class="note">{t("detail.note")}</p>
     </div>
   );
 }
