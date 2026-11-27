@@ -1,4 +1,5 @@
 import { Switch, Match, createSignal, onMount, onCleanup, type JSX } from "solid-js";
+import { listen } from "@tauri-apps/api/event";
 import {
   listDownloads,
   onDownloadUpdate,
@@ -18,7 +19,69 @@ import { Downloads } from "./views/Downloads";
 import { Library } from "./views/Library";
 import { Player } from "./views/Player";
 import { CommandPalette } from "./views/CommandPalette";
-import { view, playback } from "./lib/store";
+import { view, playback, openTitle } from "./lib/store";
+
+// Erlaubte Portal-Hosts für Deep-Links (spiegelt PORTAL_HOSTS in lib/backup.ts —
+// bewusst lokal dupliziert, damit nichts Fremdes als Fetch-Ziel reinkommt).
+const PORTAL_HOSTS = new Set([
+  "aniworld.to",
+  "www.aniworld.to",
+  "serienstream.to",
+  "www.serienstream.to",
+  "s.to",
+  "www.s.to",
+  "filmo.to",
+  "www.filmo.to",
+]);
+
+// vindex://open/<portal-url> bzw. vindex://open?url=<encoded> → Detailansicht öffnen.
+// Nutzlast kommt als string[] (Prozess-Args) oder String; robust parsen, ungültiges ignorieren.
+function handleDeepLink(payload: unknown): void {
+  const args = Array.isArray(payload) ? payload : typeof payload === "string" ? [payload] : [];
+  const token = args.find((a): a is string => typeof a === "string" && /^vindex:\/\//i.test(a));
+  if (!token) return;
+  if (!/^vindex:\/\/open(\/|\?|$)/i.test(token)) {
+    console.warn("vindex: unbekanntes Deep-Link-Schema:", token);
+    return;
+  }
+  // Portal-URL ziehen: erst ?url=<encoded>, sonst Pfad-Form /open/<url> (new URL geht hier
+  // nicht, da host dann "open" wäre — darum Regex + decodeURIComponent).
+  let portalUrl: string | null = null;
+  try {
+    portalUrl = new URL(token).searchParams.get("url");
+  } catch {
+    /* kein gültiges URL-Objekt — Pfad-Form unten */
+  }
+  if (!portalUrl) {
+    const m = token.match(/^vindex:\/\/open\/(.+)$/i);
+    if (m) {
+      try {
+        portalUrl = decodeURIComponent(m[1]);
+      } catch {
+        portalUrl = m[1];
+      }
+    }
+  }
+  if (!portalUrl) {
+    console.warn("vindex: keine Portal-URL im Deep-Link:", token);
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(portalUrl);
+  } catch {
+    console.warn("vindex: ungültige Portal-URL im Deep-Link:", portalUrl);
+    return;
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !PORTAL_HOSTS.has(parsed.hostname)) {
+    console.warn("vindex: Deep-Link-Host nicht erlaubt:", portalUrl);
+    return;
+  }
+  // Anzeigetitel aus dem letzten Pfadsegment (Bindestriche/Unterstriche → Leerzeichen).
+  const seg = parsed.pathname.split("/").filter(Boolean).pop();
+  const titel = seg ? seg.replace(/[-_]+/g, " ").trim() || parsed.hostname : parsed.hostname;
+  openTitle(titel, portalUrl);
+}
 
 export default function App(): JSX.Element {
   // Gesamt-Download-Fortschritt aufs Taskleisten-Icon spiegeln — global, damit es
@@ -61,10 +124,20 @@ export default function App(): JSX.Element {
   // Beim Start still auf ein Update aus den GitHub-Releases prüfen.
   const [update, setUpdate] = createSignal<UpdateInfo | null>(null);
   const [installing, setInstalling] = createSignal(false);
+  const [showNotes, setShowNotes] = createSignal(false);
   onMount(() => {
     checkUpdate()
       .then((u) => u && setUpdate(u))
       .catch(() => {});
+  });
+
+  // Eingehende vindex://-Deep-Links (single-instance / on_open_url im Rust-Backend).
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    listen("deep-link", (e) => handleDeepLink(e.payload))
+      .then((u) => (unlisten = u))
+      .catch(() => {});
+    onCleanup(() => unlisten?.());
   });
   const doInstall = () => {
     const u = update();
@@ -88,6 +161,31 @@ export default function App(): JSX.Element {
             <button class="chip" disabled={installing()} onClick={() => setUpdate(null)}>
               Später
             </button>
+            <Show when={(u().notes ?? "").trim()}>
+              {(notes) => (
+                <>
+                  <button class="chip" onClick={() => setShowNotes((v) => !v)}>
+                    {showNotes() ? "Changelog ausblenden" : "Was ist neu"}
+                  </button>
+                  <Show when={showNotes()}>
+                    <div
+                      style={{
+                        "flex-basis": "100%",
+                        "white-space": "pre-wrap",
+                        "max-height": "40vh",
+                        overflow: "auto",
+                        "font-size": "0.82em",
+                        "line-height": "1.4",
+                        opacity: "0.9",
+                        "margin-top": "6px",
+                      }}
+                    >
+                      {notes()}
+                    </div>
+                  </Show>
+                </>
+              )}
+            </Show>
           </div>
         )}
       </Show>
