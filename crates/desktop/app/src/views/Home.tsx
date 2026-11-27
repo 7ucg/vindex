@@ -1,14 +1,17 @@
-import { createResource, createSignal, For, Show, type JSX } from "solid-js";
+import { createResource, createSignal, For, Show, onMount, type JSX } from "solid-js";
 import {
   search,
   resolvePlayback,
   library,
   localMediaUrl,
+  seasons,
+  episodes,
   type SearchHit,
 } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, openPlayer } from "../lib/store";
 import { recentProgress, type Resume } from "../lib/progress";
+import { getTitleUrl } from "../lib/titlemap";
 import { watchlist } from "../lib/watchlist";
 import { collections, deleteCollection } from "../lib/collections";
 import { Cover } from "./Cover";
@@ -47,6 +50,83 @@ export function Home(): JSX.Element {
         url: src.url,
         isHls: src.is_hls,
         skipRef: { url, season: r.season, episode: r.episode },
+      });
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  // --- „Neue Folgen": nächste ungesehene Folge je gerade geschauter Serie ---
+  // Dateiname-Bereinigung wie in Detail/Library, damit getTitleUrl den gemerkten Schlüssel trifft.
+  const clean = (s: string) => s.replace(/[\\/:*?"<>|]/g, "").trim();
+  const sLabel = (n: number) => (n === 0 ? "Filme" : `Staffel ${n}`);
+
+  interface NextCard {
+    epUrl: string;
+    titleUrl: string;
+    show: string;
+    season: number;
+    episode: number;
+    epTitle: string;
+  }
+  const [nextEps, setNextEps] = createSignal<NextCard[]>([]);
+
+  onMount(() => {
+    void (async () => {
+      // Serien aus Weiterschauen, nach Serientitel dedupliziert, neueste zuerst.
+      const seen = new Set<string>();
+      const shows: { titleUrl: string; r: Resume }[] = [];
+      for (const it of recent()) {
+        const key = clean(it.r.title).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const titleUrl = getTitleUrl(clean(it.r.title));
+        if (!titleUrl) continue; // ohne gemerkte Serien-URL nicht auflösbar
+        shows.push({ titleUrl, r: it.r });
+        if (shows.length >= 8) break; // API-Last begrenzen
+      }
+      const cards: NextCard[] = [];
+      for (const s of shows) {
+        try {
+          const segs = await seasons(s.titleUrl);
+          const inSeason = await episodes(s.titleUrl, s.r.season);
+          const idx = inSeason.findIndex((e) => e.index_in_season === s.r.episode);
+          let nxt = idx >= 0 ? inSeason[idx + 1] : undefined;
+          if (!nxt) {
+            // Ende der Staffel: erste Folge der nächstgrößeren Staffel.
+            const nextSeason = segs.filter((n) => n > s.r.season).sort((a, b) => a - b)[0];
+            if (nextSeason !== undefined) {
+              const list = await episodes(s.titleUrl, nextSeason);
+              nxt = list[0];
+            }
+          }
+          if (!nxt) continue;
+          cards.push({
+            epUrl: nxt.url,
+            titleUrl: s.titleUrl,
+            show: s.r.title,
+            season: nxt.season,
+            episode: nxt.index_in_season,
+            epTitle: nxt.title,
+          });
+          if (cards.length >= 12) break;
+        } catch {
+          /* Serie still überspringen */
+        }
+      }
+      setNextEps(cards);
+    })();
+  });
+
+  const playNext = async (c: NextCard) => {
+    setErr(null);
+    try {
+      const src = await resolvePlayback(c.epUrl);
+      openPlayer({
+        title: `${c.show} — ${sLabel(c.season)} · ${c.episode}`,
+        url: src.url,
+        isHls: src.is_hls,
+        skipRef: { url: c.epUrl, season: c.season, episode: c.episode },
       });
     } catch (e) {
       setErr(String(e));
@@ -130,6 +210,30 @@ export function Home(): JSX.Element {
         </div>
       </Show>
 
+      <Show when={!searched() && nextEps().length > 0}>
+        <div class="row-h">
+          <h2>Neue Folgen</h2>
+        </div>
+        <div class="grid">
+          <For each={nextEps()}>
+            {(c) => (
+              <div class="card" title={c.epUrl} onClick={() => void playNext(c)}>
+                <div class="poster">
+                  <Cover url={c.titleUrl} title={c.show} />
+                  <div class="play-ov">
+                    <button class="play-btn">
+                      <IconPlay />
+                    </button>
+                  </div>
+                </div>
+                <div class="t">{c.show}</div>
+                <div class="s">{c.epTitle || `${sLabel(c.season)} · ${c.episode}`}</div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <Show when={!searched() && saved().length > 0}>
         <div class="row-h">
           <h2>Merkliste</h2>
@@ -195,7 +299,7 @@ export function Home(): JSX.Element {
 
       <Show when={!searched() && (lib()?.length ?? 0) > 0}>
         <div class="row-h">
-          <h2>Zuletzt geladen</h2>
+          <h2>Zuletzt hinzugefügt</h2>
         </div>
         <div class="grid">
           <For each={lib()}>
