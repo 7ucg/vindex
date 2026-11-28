@@ -12,6 +12,7 @@ import {
 import { discover, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
 import { t } from "../lib/i18n";
 import { computeWindow } from "../lib/vgrid";
+import { sanitizeFilename } from "../lib/sanitize";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
@@ -90,9 +91,10 @@ function readLayout(): Layout {
   }
 }
 
-function sanitize(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, "").trim();
-}
+// Derselbe gehärtete Dateiname wie der Kern (sanitize_title_component). Nötig, damit
+// der Film-Download-Name (filmo, ohne Staffel/Folge) und die „in Bibliothek"-Erkennung
+// zum tatsächlich geschriebenen Dateinamen passen — der Kern härtet NICHT nach.
+const sanitize = sanitizeFilename;
 function pad(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
