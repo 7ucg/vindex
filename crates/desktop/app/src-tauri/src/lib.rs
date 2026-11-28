@@ -892,13 +892,17 @@ fn apply_network_env(cfg: &config::DesktopConfig) {
     if let Some(on) = cfg.impersonate {
         std::env::set_var("VINDEX_IMPERSONATE", if on { "1" } else { "0" });
     }
-    if let Some(p) = cfg
+    // obscura (Stufe 3) ist opt-in: die gespeicherte Config entscheidet, nie ein bloß
+    // vorhandenes/gebündeltes Binary. None/leer => ausdrücklich AUS (überschreibt auch
+    // ein evtl. von außen gesetztes VINDEX_OBSCURA).
+    match cfg
         .obscura
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        std::env::set_var("VINDEX_OBSCURA", p);
+        Some(p) => std::env::set_var("VINDEX_OBSCURA", p),
+        None => std::env::set_var("VINDEX_OBSCURA", ""),
     }
     if let Some(p) = cfg
         .proxy
@@ -1284,15 +1288,14 @@ fn safe_tool_path(path: &std::path::Path) -> bool {
     true
 }
 
-/// Setzt `VINDEX_FFMPEG`/`VINDEX_FFPROBE`/`VINDEX_OBSCURA` auf mitgelieferte Binaries,
-/// falls vorhanden und nicht bereits per ENV vorgegeben. So nutzt der Kern automatisch
-/// die gebündelten Programme (Dev wie Bundle); fehlen sie, bleibt der PATH-Fallback.
+/// Setzt `VINDEX_FFMPEG`/`VINDEX_FFPROBE` auf mitgelieferte Binaries, falls vorhanden
+/// und nicht bereits per ENV vorgegeben. So nutzt der Kern automatisch die gebündelten
+/// Mux-Tools (Dev wie Bundle); fehlen sie, bleibt der PATH-Fallback.
+/// obscura (Stufe 3, Headless-Browser) wird hier BEWUSST nicht verdrahtet: es ist ein
+/// opt-in-Privacy-/Egress-Feature und darf nicht allein dadurch anspringen, dass ein
+/// Binary mitgeliefert wird — das entscheidet die Config (siehe `apply_network_env`).
 fn wire_bundled_binaries() {
-    for (tool, var) in [
-        ("ffmpeg", "VINDEX_FFMPEG"),
-        ("ffprobe", "VINDEX_FFPROBE"),
-        ("obscura", "VINDEX_OBSCURA"),
-    ] {
+    for (tool, var) in [("ffmpeg", "VINDEX_FFMPEG"), ("ffprobe", "VINDEX_FFPROBE")] {
         let already = std::env::var(var).ok().filter(|s| !s.trim().is_empty());
         if already.is_none() {
             if let Some(path) = bundled_tool(tool) {
