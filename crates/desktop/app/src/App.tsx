@@ -1,6 +1,6 @@
 import { Switch, Match, createSignal, onMount, onCleanup, type JSX } from "solid-js";
-import { listen } from "@tauri-apps/api/event";
 import {
+  listen,
   listDownloads,
   onDownloadUpdate,
   setTaskbarProgress,

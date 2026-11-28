@@ -1,8 +1,39 @@
 // Typisierte Brücke zu den Tauri-Commands (crates/desktop/app/src-tauri/src/lib.rs).
 // Jede Funktion mappt 1:1 auf ein #[tauri::command]; das Frontend ruft nie direkt
 // ins Netz, sondern immer über diese Schicht in den Rust-Kern.
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  invoke as tauriInvoke,
+  convertFileSrc as tauriConvertFileSrc,
+  type InvokeArgs,
+} from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn, type EventCallback } from "@tauri-apps/api/event";
+
+// Läuft die Oberfläche im Tauri-Fenster (echter Kern) oder bloß im Browser (Web-Vorschau
+// über `pnpm dev`)? Im Browser fehlt die Brücke; dann dürfen die Aufrufe nicht hart
+// werfen (sonst „Cannot read … invoke"), sondern sauber ins Leere laufen.
+const hasTauri = (): boolean =>
+  typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+
+/** Tauri-Command aufrufen — ohne Backend (Web-Vorschau) kontrolliert abgelehnt statt
+ *  hart zu werfen. Die Views behandeln den Fehler-/Leerzustand ihrer Resource ohnehin. */
+function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+  if (!hasTauri()) {
+    return Promise.reject(new Error("Backend nicht verfügbar (Web-Vorschau ohne Tauri)"));
+  }
+  return tauriInvoke<T>(cmd, args);
+}
+
+/** Event abonnieren — ohne Backend ein No-op mit leerem Unlisten. */
+export function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
+  if (!hasTauri()) return Promise.resolve(() => {});
+  return tauriListen<T>(event, handler);
+}
+
+/** Dateipfad → ladbare URL; ohne Backend unverändert (Web-Vorschau zeigt keine Cover). */
+function convertFileSrc(path: string, protocol?: string): string {
+  if (!hasTauri()) return path;
+  return tauriConvertFileSrc(path, protocol);
+}
 
 export interface AppInfo {
   name: string;
