@@ -89,6 +89,11 @@ pub struct TitleMeta {
     pub directors: Vec<String>,
     pub actors: Vec<String>,
     pub producers: Vec<String>,
+    /// Nutzerbewertung auf 0–10 normiert (aniworld: Schema.org ratingValue/bestRating×10).
+    /// filmo setzt den Wert selbst (eigene „Bewertung"). serienstream liefert keinen.
+    pub rating: Option<f32>,
+    /// Anzahl der Stimmen (Beliebtheits-Proxy, aniworld: ratingCount).
+    pub votes: Option<u32>,
 }
 
 /// Liest [`TitleMeta`] von einer Titel-Detailseite.
@@ -184,6 +189,32 @@ fn parse_title_meta(body: &str, base: Option<&reqwest::Url>) -> TitleMeta {
                 .filter(|s| !s.is_empty())
         });
 
+    // Nutzerbewertung aus Schema.org-AggregateRating (aniworld). ratingValue auf die
+    // 0–10-Skala normiert (bestRating, Standard 5); ratingCount = Stimmenzahl.
+    let itemprop_num = |prop: &str| -> Option<f64> {
+        Selector::parse(&format!(r#"[itemprop="{prop}"]"#))
+            .ok()
+            .and_then(|sel| {
+                doc.select(&sel).next().and_then(|el| {
+                    el.text()
+                        .collect::<String>()
+                        .trim()
+                        .replace(',', ".")
+                        .parse::<f64>()
+                        .ok()
+                })
+            })
+    };
+    let rating = itemprop_num("ratingValue").map(|v| {
+        let best = itemprop_num("bestRating")
+            .filter(|b| *b > 0.0)
+            .unwrap_or(5.0);
+        ((v / best * 10.0) as f32).clamp(0.0, 10.0)
+    });
+    let votes = itemprop_num("ratingCount")
+        .filter(|c| *c >= 0.0)
+        .map(|c| c as u32);
+
     // Jahr(e) aus den „…/jahr/<jahr>"-Links: Min–Max-Spanne.
     let year = Selector::parse(r#"a[href*="/jahr/"]"#)
         .ok()
@@ -216,6 +247,8 @@ fn parse_title_meta(body: &str, base: Option<&reqwest::Url>) -> TitleMeta {
         directors: people("director"),
         actors: people("actor"),
         producers: people("creator"),
+        rating,
+        votes,
     }
 }
 
@@ -382,6 +415,30 @@ mod tests {
         assert_eq!(m.actors, vec!["Jun Fukuyama", "Yukana"]);
         assert_eq!(m.producers, vec!["SUNRISE"]);
         assert!(m.description.as_deref() == Some("Eine Beschreibung."));
+    }
+
+    #[test]
+    fn title_meta_liest_aggregate_rating() {
+        // Echter aniworld-Block: ratingValue 4 von bestRating 5 -> auf 0–10 normiert = 8.0.
+        let html = r#"<html><body>
+            <div class="starRatingResult" itemtype="http://schema.org/AggregateRating"
+                 itemscope itemprop="aggregateRating">
+              <div class="hidden"><span itemprop="worstRating">0</span></div>
+              <strong> <span itemprop="ratingValue">4</span> </strong>
+              <span class="mellow"> / <span itemprop="bestRating">5</span> </span>
+              von <span itemprop="ratingCount">3775</span> Bewertungen
+            </div>
+            </body></html>"#;
+        let m = parse_title_meta(html, None);
+        assert_eq!(m.rating, Some(8.0));
+        assert_eq!(m.votes, Some(3775));
+    }
+
+    #[test]
+    fn title_meta_ohne_rating_bleibt_leer() {
+        let m = parse_title_meta("<html><body>kein rating</body></html>", None);
+        assert_eq!(m.rating, None);
+        assert_eq!(m.votes, None);
     }
 
     #[test]

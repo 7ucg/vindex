@@ -71,6 +71,10 @@ pub struct FilmoMovie {
     pub year: Option<u32>,
     pub csrf: Option<String>,
     pub sources: HashMap<Language, HashMap<Hoster, String>>,
+    /// Eigene Nutzerbewertung (0–10), aus der „Bewertung"-Sektion.
+    pub rating: Option<f32>,
+    /// Stimmenzahl der eigenen Bewertung (Beliebtheits-Proxy).
+    pub votes: Option<u32>,
 }
 
 impl FilmoMovie {
@@ -162,6 +166,7 @@ pub async fn movie(client: &reqwest::Client, url: &str) -> Result<FilmoMovie> {
         return Err(Error::extract("Filmo", "Titel (h1) nicht gefunden"));
     }
     let year = extract_year(&html);
+    let (rating, votes) = extract_rating(&html);
 
     Ok(FilmoMovie {
         url: url.to_string(),
@@ -169,7 +174,24 @@ pub async fn movie(client: &reqwest::Client, url: &str) -> Result<FilmoMovie> {
         year,
         csrf,
         sources,
+        rating,
+        votes,
     })
+}
+
+/// Eigene „Bewertung" von Filmo: `8.0 / 10 (1 Stimmen)`. Der Anker „Stimmen" grenzt
+/// sie vom separaten „IMDb 5.3/10"-Feld ab. Liefert (Rating 0–10, Stimmenzahl).
+fn extract_rating(html: &str) -> (Option<f32>, Option<u32>) {
+    let re = regex::Regex::new(r"(?is)(\d+(?:[.,]\d+)?)\s*/\s*10\s*\(\s*(\d+)\s*Stimmen?").unwrap();
+    let Some(c) = re.captures(html) else {
+        return (None, None);
+    };
+    let rating = c
+        .get(1)
+        .and_then(|m| m.as_str().replace(',', ".").parse::<f32>().ok())
+        .filter(|r| (0.0..=10.0).contains(r));
+    let votes = c.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
+    (rating, votes)
 }
 
 fn extract_year(html: &str) -> Option<u32> {
@@ -288,6 +310,27 @@ mod tests {
     fn percent_encoding() {
         assert_eq!(percent_encode("abcXYZ09-_.~"), "abcXYZ09-_.~");
         assert_eq!(percent_encode("a/b c"), "a%2Fb%20c");
+    }
+
+    #[test]
+    fn rating_aus_bewertung() {
+        // Echter filmo-Block: eigene „Bewertung".
+        let html = r#"<dd class="entry-description">8.0 / 10 (1 Stimmen)</dd>"#;
+        assert_eq!(super::extract_rating(html), (Some(8.0), Some(1)));
+    }
+
+    #[test]
+    fn rating_ignoriert_imdb_feld() {
+        // „IMDb 5.3/10" hat kein „Stimmen" -> der Anker greift nicht, kein Fehlgriff.
+        let html = r#"<span>IMDb 5.3/10</span>"#;
+        assert_eq!(super::extract_rating(html), (None, None));
+    }
+
+    #[test]
+    fn rating_nimmt_eigene_nicht_imdb() {
+        // Beide da: nur die „… (N Stimmen)"-Variante zählt.
+        let html = r#"<span>IMDb 5.3/10</span><dd>7,5 / 10 (420 Stimmen)</dd>"#;
+        assert_eq!(super::extract_rating(html), (Some(7.5), Some(420)));
     }
 }
 
