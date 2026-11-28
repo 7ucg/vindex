@@ -154,6 +154,16 @@ fn open(portal: &str) -> Option<Connection> {
     Some(conn)
 }
 
+/// Hat die `title`-Tabelle die (nachgerüsteten) Spalten rating/votes? Ältere
+/// geshippte Snapshots haben sie noch nicht. `prepare` schlägt bei fehlender Spalte
+/// fehl (Namensauflösung zur Prepare-Zeit), ohne Zeilen zu lesen (LIMIT 0). So baut
+/// der Lese-Pfad die Abfrage passend zum Schema — statt auf einem alten Snapshot zu
+/// werfen und (via `.ok()`) still auf eine Live-Portalabfrage zurückzufallen.
+fn title_has_rating(conn: &Connection) -> bool {
+    conn.prepare("SELECT rating, votes FROM title LIMIT 0")
+        .is_ok()
+}
+
 fn json_list(row: &rusqlite::Row, idx: usize) -> Vec<String> {
     row.get::<_, Option<String>>(idx)
         .ok()
@@ -222,10 +232,16 @@ pub fn discover(
     // Sortierspalten (y = Jahr als Zahl, c = crawled_at) wandern in den SELECT,
     // weil SELECT DISTINCT nur nach Ergebnisspalten sortieren darf. Der Row-Mapper
     // liest weiter nur r.get(0)/r.get(1).
-    let mut sql = String::from(
+    // rating/votes nur, wenn der Snapshot sie hat; sonst NULL (die rt/vo-Aliase
+    // bleiben für das ORDER BY gültig, und NULL schiebt alles ans Ende → Name).
+    let rating_cols = if title_has_rating(&conn) {
+        "t.rating AS rt, t.votes AS vo"
+    } else {
+        "NULL AS rt, NULL AS vo"
+    };
+    let mut sql = format!(
         "SELECT DISTINCT t.name, t.url, \
-         CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, t.crawled_at AS c, \
-         t.rating AS rt, t.votes AS vo FROM title t",
+         CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, t.crawled_at AS c, {rating_cols} FROM title t",
     );
     if language.is_some() {
         sql.push_str(" JOIN episode e ON e.title_id = t.id JOIN link l ON l.episode_id = e.id");
@@ -347,10 +363,19 @@ pub fn languages(url: &str) -> Option<Vec<Language>> {
 pub fn title_meta(url: &str) -> Option<TitleMeta> {
     let slug = core::site::slug_from_url(url)?;
     let conn = open(portal_of_url(url))?;
+    // Alte Snapshots ohne rating/votes: NULL einsetzen statt zu werfen (sonst führte
+    // `.ok()` zu einem stillen Live-Fallback für jeden Detail-Lookup).
+    let (rcol, vcol) = if title_has_rating(&conn) {
+        ("rating", "votes")
+    } else {
+        ("NULL", "NULL")
+    };
     conn.query_row(
-        "SELECT poster, description, year, fsk, country, imdb, genres, directors, actors, producers,
-                rating, votes
-         FROM title WHERE slug = ?1",
+        &format!(
+            "SELECT poster, description, year, fsk, country, imdb, genres, directors, actors,
+                    producers, {rcol}, {vcol}
+             FROM title WHERE slug = ?1"
+        ),
         [&slug],
         |r| {
             Ok(TitleMeta {
@@ -440,4 +465,58 @@ pub fn portal_titles(portal: &str) -> Option<i64> {
     let conn = open(portal)?;
     conn.query_row("SELECT count(*) FROM title", [], |r| r.get(0))
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Altes title-Schema (ohne rating/votes) — wie die aktuell geshippten Snapshots.
+    fn old_schema() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE title (
+               id INTEGER PRIMARY KEY, portal TEXT, slug TEXT, url TEXT, name TEXT,
+               kind TEXT, description TEXT, poster TEXT, year TEXT, fsk INTEGER,
+               country TEXT, imdb TEXT, genres TEXT, directors TEXT, actors TEXT,
+               producers TEXT, crawled_at INTEGER);
+             INSERT INTO title (slug, name, url) VALUES ('x', 'X', 'https://x');",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn rating_spalten_erkannt() {
+        let old = old_schema();
+        assert!(!title_has_rating(&old));
+        old.execute_batch("ALTER TABLE title ADD COLUMN rating REAL; ALTER TABLE title ADD COLUMN votes INTEGER;").unwrap();
+        assert!(title_has_rating(&old));
+    }
+
+    // Der Kern der Fail-open-Absicherung: auf einem alten Snapshot darf der Lese-Pfad
+    // NICHT werfen (sonst `.ok()` -> stiller Live-Fallback). Mit NULL-Ersatz läuft die
+    // discover- und die title_meta-Abfrage auch ohne die Spalten durch.
+    #[test]
+    fn alte_snapshots_werfen_nicht() {
+        let c = old_schema();
+        assert!(!title_has_rating(&c));
+        // discover-Form (NULL-Aliase)
+        c.prepare(
+            "SELECT DISTINCT t.name, t.url, CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, \
+             t.crawled_at AS c, NULL AS rt, NULL AS vo FROM title t \
+             ORDER BY (rt IS NULL), rt DESC, t.name",
+        )
+        .expect("discover-Abfrage muss auf altem Schema vorbereitbar sein");
+        // title_meta-Form
+        let got: i64 = c
+            .query_row(
+                "SELECT poster, description, year, fsk, country, imdb, genres, directors, \
+                 actors, producers, NULL, NULL FROM title WHERE slug = ?1",
+                ["x"],
+                |_| Ok(1),
+            )
+            .expect("title_meta-Abfrage muss auf altem Schema laufen");
+        assert_eq!(got, 1);
+    }
 }
