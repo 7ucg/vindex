@@ -7,6 +7,7 @@
 mod config;
 mod downloads;
 mod logbuf;
+mod mcp;
 mod stream_proxy;
 
 use std::path::PathBuf;
@@ -1232,6 +1233,13 @@ async fn pick_download_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Das Frontend meldet seinen UI-Zustand (aktive Ansicht usw.) an den eingebauten
+/// MCP-Server, damit dessen `ui_state`-Tool ihn ausliefern kann. No-op ohne MCP.
+#[tauri::command]
+fn mcp_report_state(state: serde_json::Value) {
+    mcp::set_reported_state(state);
+}
+
 /// Plattform-Info fürs Frontend (zur Anpassung der Oberfläche).
 #[derive(Serialize)]
 struct PlatformInfo {
@@ -1967,11 +1975,24 @@ pub fn run() {
             });
             // Hintergrund-Task: Gate-Zustand aktuell halten + Abos periodisch prüfen.
             spawn_background(app.handle().clone());
+            // In die App eingebauter MCP-Server (nur wenn VINDEX_MCP gesetzt): erlaubt
+            // einem Agenten, die echte App zu screenshoten/navigieren — ohne Browser.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match mcp::start(handle).await {
+                        Ok(Some(port)) => tracing::info!("MCP-Server auf 127.0.0.1:{port}"),
+                        Ok(None) => {}
+                        Err(e) => tracing::warn!("MCP-Server-Start fehlgeschlagen: {e}"),
+                    }
+                });
+            }
             tracing::info!("Backend-Init {} ms", __boot.elapsed().as_millis());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            mcp_report_state,
             check_update,
             install_update,
             snap_bottom_right,

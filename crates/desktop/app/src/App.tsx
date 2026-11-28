@@ -1,4 +1,4 @@
-import { Switch, Match, createSignal, onMount, onCleanup, type JSX } from "solid-js";
+import { Switch, Match, createSignal, createEffect, onMount, onCleanup, type JSX } from "solid-js";
 import {
   listen,
   listDownloads,
@@ -6,6 +6,7 @@ import {
   setTaskbarProgress,
   checkUpdate,
   installUpdate,
+  mcpReportState,
   type JobView,
   type UpdateInfo,
 } from "./lib/api";
@@ -19,7 +20,7 @@ import { Downloads } from "./views/Downloads";
 import { Library } from "./views/Library";
 import { Player } from "./views/Player";
 import { CommandPalette } from "./views/CommandPalette";
-import { view, playback, openTitle, navOpen, setNavOpen } from "./lib/store";
+import { view, setView, playback, openTitle, navOpen, setNavOpen, type View } from "./lib/store";
 import { Logo } from "./lib/Logo";
 import { t, initLangFromSystem } from "./lib/i18n";
 
@@ -141,6 +142,22 @@ export default function App(): JSX.Element {
       .then((u) => (unlisten = u))
       .catch(() => {});
     onCleanup(() => unlisten?.());
+  });
+
+  // Eingebauter MCP-Server: auf Navigations-Befehle hören und den UI-Zustand melden,
+  // damit ein Agent die echte App steuern/prüfen kann (no-op ohne VINDEX_MCP).
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("mcp-navigate", (e) => {
+      const v = e.payload as View;
+      if (v) setView(v);
+    })
+      .then((u) => (unlisten = u))
+      .catch(() => {});
+    onCleanup(() => unlisten?.());
+  });
+  createEffect(() => {
+    void mcpReportState({ view: view() }).catch(() => {});
   });
   const doInstall = () => {
     const u = update();

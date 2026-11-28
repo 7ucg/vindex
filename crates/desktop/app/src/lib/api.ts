@@ -256,6 +256,11 @@ export function setImpersonate(on: boolean): Promise<void> {
 export function setObscura(path: string | null): Promise<void> {
   return invoke("set_obscura", { path });
 }
+
+/** Meldet den UI-Zustand an den eingebauten MCP-Server (für dessen ui_state-Tool). */
+export function mcpReportState(state: unknown): Promise<void> {
+  return invoke("mcp_report_state", { state });
+}
 export function setProxy(url: string | null): Promise<void> {
   return invoke("set_proxy", { url });
 }
