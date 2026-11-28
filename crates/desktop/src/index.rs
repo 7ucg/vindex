@@ -224,7 +224,8 @@ pub fn discover(
     // liest weiter nur r.get(0)/r.get(1).
     let mut sql = String::from(
         "SELECT DISTINCT t.name, t.url, \
-         CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, t.crawled_at AS c FROM title t",
+         CAST(NULLIF(trim(t.year),'') AS INTEGER) AS y, t.crawled_at AS c, \
+         t.rating AS rt, t.votes AS vo FROM title t",
     );
     if language.is_some() {
         sql.push_str(" JOIN episode e ON e.title_id = t.id JOIN link l ON l.episode_id = e.id");
@@ -246,15 +247,16 @@ pub fn discover(
         sql.push_str(" AND l.language = ?");
         args.push(Box::new(l.to_string()));
     }
-    // Nur gedeckte Sortierungen. Beliebtheit/Bewertung/Status fehlen als Spalten
-    // (title.rating/status/popularity) und bräuchten neuen Crawler + Re-Crawl —
-    // hier bewusst ausser Scope, darum keine toten Optionen. (y IS NULL)/(c IS NULL)
-    // schiebt NULL/leer ans Ende; unbekannte Werte fallen still auf Default.
+    // Nur gedeckte Sortierungen. (… IS NULL) schiebt NULL/leer ans Ende; unbekannte
+    // Werte fallen still auf Default. Bewertung/Beliebtheit sind erst nach einem
+    // Re-Crawl gefüllt (aniworld/filmo liefern sie, serienstream bleibt NULL → ans Ende).
     sql.push_str(match sort {
         Some("za") => " ORDER BY t.name DESC",
         Some("year_desc") => " ORDER BY (y IS NULL), y DESC, t.name",
         Some("year_asc") => " ORDER BY (y IS NULL), y ASC, t.name",
         Some("newest") => " ORDER BY (c IS NULL), c DESC, t.name",
+        Some("rating_desc") => " ORDER BY (rt IS NULL), rt DESC, t.name",
+        Some("popular") => " ORDER BY (vo IS NULL), vo DESC, t.name",
         _ => " ORDER BY t.name",
     });
     let mut stmt = conn.prepare(&sql).ok()?;
@@ -346,7 +348,8 @@ pub fn title_meta(url: &str) -> Option<TitleMeta> {
     let slug = core::site::slug_from_url(url)?;
     let conn = open(portal_of_url(url))?;
     conn.query_row(
-        "SELECT poster, description, year, fsk, country, imdb, genres, directors, actors, producers
+        "SELECT poster, description, year, fsk, country, imdb, genres, directors, actors, producers,
+                rating, votes
          FROM title WHERE slug = ?1",
         [&slug],
         |r| {
@@ -361,6 +364,8 @@ pub fn title_meta(url: &str) -> Option<TitleMeta> {
                 directors: json_list(r, 7),
                 actors: json_list(r, 8),
                 producers: json_list(r, 9),
+                rating: r.get::<_, Option<f64>>(10)?.map(|v| v as f32),
+                votes: r.get::<_, Option<i64>>(11)?.map(|v| v as u32),
             })
         },
     )

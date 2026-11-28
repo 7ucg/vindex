@@ -169,6 +169,8 @@ fn open_db(path: &str) -> anyhow::Result<Connection> {
            directors TEXT,
            actors TEXT,
            producers TEXT,
+           rating REAL,
+           votes INTEGER,
            crawled_at INTEGER,
            UNIQUE(portal, slug)
          );
@@ -203,6 +205,10 @@ fn open_db(path: &str) -> anyhow::Result<Connection> {
         "ALTER TABLE link ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    // Bewertung/Stimmen (Beliebtheit) nachrüsten — „duplicate column" bei DBs, die sie
+    // schon haben, ignorieren. Alte Bestände bleiben NULL, bis sie neu gecrawlt werden.
+    let _ = conn.execute("ALTER TABLE title ADD COLUMN rating REAL", []);
+    let _ = conn.execute("ALTER TABLE title ADD COLUMN votes INTEGER", []);
     Ok(conn)
 }
 
@@ -493,6 +499,10 @@ async fn crawl_filmo_title(
     if meta.year.is_none() {
         meta.year = movie.year.map(|y| y.to_string());
     }
+    // Filmos eigene Bewertung/Stimmen stehen nicht als Schema.org da, sondern im
+    // movie()-Parser — von dort übernehmen (falls die Microdata nichts lieferte).
+    meta.rating = meta.rating.or(movie.rating);
+    meta.votes = meta.votes.or(movie.votes);
 
     let mut links = Vec::new();
     for (lang, hosters) in &movie.sources {
@@ -542,6 +552,7 @@ fn store_title_inner(
     conn.execute(
         "UPDATE title SET kind = ?2, description = ?3, poster = ?4, year = ?5, fsk = ?6,
          country = ?7, imdb = ?8, genres = ?9, directors = ?10, actors = ?11, producers = ?12,
+         rating = COALESCE(?14, rating), votes = COALESCE(?15, votes),
          crawled_at = COALESCE(?13, crawled_at) WHERE id = ?1",
         params![
             title_id,
@@ -557,6 +568,8 @@ fn store_title_inner(
             json(&m.actors),
             json(&m.producers),
             crawled_at,
+            m.rating,
+            m.votes,
         ],
     )?;
 
