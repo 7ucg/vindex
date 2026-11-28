@@ -36,33 +36,15 @@ import {
   inCollection,
 } from "../lib/collections";
 import { rememberTitleUrl } from "../lib/titlemap";
+import { sanitizeFilename } from "../lib/sanitize";
 import { t } from "../lib/i18n";
 
 const LANGUAGES = ["German Dub", "German Sub", "English Sub", "English Dub"];
 const HOSTERS = ["VOE", "Vidoza", "Doodstream", "Filemoon", "Vidmoly", "SpeedFiles"];
 const QUALITIES = ["2160p", "1080p", "720p", "480p", "360p"];
 
-// Windows-Gerätenamen, die als Dateiname verboten sind.
-const RESERVED_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-]);
-// Härtet einen (gescrapten) Titel zu einer Datei-Namenskomponente. MUSS exakt der
-// Rust-Seite entsprechen (sanitize_title_component in src-tauri/src/lib.rs), sonst
-// weichen Download-Namen und der Abo-Abgleich voneinander ab (Endlos-Re-Download).
-function sanitize(s: string): string {
-  const filtered = Array.from(s)
-    .map((c) => (/\p{Cc}/u.test(c) ? " " : c))
-    .filter((c) => !/[\\/:*?"<>|]/.test(c))
-    .join("");
-  // Erst auf 120 Codepoints kürzen, dann normalisieren (idempotent, FS-stabil).
-  let out = Array.from(filtered).slice(0, 120).join("");
-  out = out.trim().replace(/^\.+|\.+$/g, "").trim();
-  if (RESERVED_NAMES.has(out.toUpperCase())) out += "_";
-  if (out === "") out = "titel";
-  return out;
-}
+// Datei-Namenskomponente: zentral in ../lib/sanitize (deckungsgleich mit Rust).
+const sanitize = sanitizeFilename;
 
 function seasonLabel(n: number): string {
   return n === 0 ? t("detail.seasonFilms") : t("detail.season", { n });

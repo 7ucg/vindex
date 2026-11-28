@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { discover, seasons, episodes, startDownload, library, type SearchHit } from "../lib/api";
 import { t } from "../lib/i18n";
+import { computeWindow } from "../lib/vgrid";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
@@ -283,25 +284,19 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
   });
 
   // Sichtbares Fenster: Start/Ende-Index + Spacer-Höhen für eine korrekte Scrollleiste.
-  const win = createMemo(() => {
-    const n = visible().length;
-    const c = cols() || 1;
-    const rh = rowH();
-    if (rh <= 0 || n === 0) return { start: 0, end: Math.min(n, FALLBACK), pad: 0, tail: 0 };
-    const rows = Math.ceil(n / c);
-    const firstRow = Math.floor((scrollTop() - gridTop()) / rh);
-    // Gegen das Listenende klemmen: sonst steht das Fenster nach dem Verkleinern der
-    // Liste (Filter/Sort) jenseits der letzten Zeile und der Bildschirm bleibt leer.
-    const startRow = Math.min(Math.max(0, firstRow - OVERSCAN), Math.max(0, rows - 1));
-    const rowsInView = Math.ceil((viewportH() || 1) / rh);
-    const endRow = Math.min(rows, startRow + rowsInView + OVERSCAN * 2);
-    return {
-      start: startRow * c,
-      end: Math.min(n, endRow * c),
-      pad: startRow * rh,
-      tail: Math.max(0, (rows - endRow) * rh),
-    };
-  });
+  // Die Mathematik steckt pur in ../lib/vgrid (computeWindow), damit sie testbar bleibt.
+  const win = createMemo(() =>
+    computeWindow({
+      count: visible().length,
+      cols: cols(),
+      rowH: rowH(),
+      scrollTop: scrollTop(),
+      gridTop: gridTop(),
+      viewportH: viewportH(),
+      overscan: OVERSCAN,
+      fallback: FALLBACK,
+    }),
+  );
   const windowItems = createMemo(() => visible().slice(win().start, win().end));
 
   const isMovie = () => props.portal === "filmo";
