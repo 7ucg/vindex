@@ -39,7 +39,8 @@
     "resources": {
       "../../../../index/aniworld.db.zst": "index/aniworld.db.zst",
       "../../../../index/serienstream.db.zst": "index/serienstream.db.zst",
-      "../../../../index/filmo.db.zst": "index/filmo.db.zst"
+      "../../../../index/filmo.db.zst": "index/filmo.db.zst",
+      "binaries/*": "binaries/"
     },
     "icon": [
       "icons/32x32.png",
