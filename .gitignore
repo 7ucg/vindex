@@ -33,3 +33,6 @@ HANDOVER-index.md
 index/*.db
 index/*.db-wal
 index/*.db-shm
+# Screenshot-Artefakte der UI-Prüfung (Playwright), nur im Repo-Wurzelverzeichnis.
+/.playwright-mcp/
+/vindex-*.png
