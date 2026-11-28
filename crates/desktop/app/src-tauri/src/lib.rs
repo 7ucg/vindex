@@ -2034,3 +2034,177 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("Fehler beim Start der vindex-Desktop-App");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- sanitize_title_component -----------------------------------------
+
+    #[test]
+    fn sanitize_strippt_verbotene_zeichen() {
+        // Alle Windows-/Unix-Problemzeichen fliegen raus, der Rest bleibt.
+        assert_eq!(
+            sanitize_title_component(r#"a\b/c:d*e?f"g<h>i|j"#),
+            "abcdefghij"
+        );
+    }
+
+    #[test]
+    fn sanitize_steuerzeichen_werden_space() {
+        // Tab/Newline werden zu Space; die Außenränder trimmt es danach weg.
+        assert_eq!(sanitize_title_component("a\tb\nc"), "a b c");
+        assert_eq!(sanitize_title_component("\t\nName\r"), "Name");
+    }
+
+    #[test]
+    fn sanitize_leer_gibt_platzhalter() {
+        assert_eq!(sanitize_title_component(""), "titel");
+        assert_eq!(sanitize_title_component("   "), "titel");
+        // Nur verbotene Zeichen -> nach dem Filtern leer -> Platzhalter.
+        assert_eq!(sanitize_title_component(r#"\/:*?"<>|"#), "titel");
+        // Nur Punkte -> trim_matches('.') räumt alles weg -> Platzhalter.
+        assert_eq!(sanitize_title_component("..."), "titel");
+    }
+
+    #[test]
+    fn sanitize_reservierte_namen_bekommen_unterstrich() {
+        // Case-insensitiv, mit angehängtem '_'.
+        assert_eq!(sanitize_title_component("CON"), "CON_");
+        assert_eq!(sanitize_title_component("con"), "con_");
+        assert_eq!(sanitize_title_component("NUL"), "NUL_");
+        assert_eq!(sanitize_title_component("com1"), "com1_");
+        assert_eq!(sanitize_title_component("LPT9"), "LPT9_");
+        // Kein reservierter Name -> unverändert.
+        assert_eq!(sanitize_title_component("COM0"), "COM0");
+        assert_eq!(sanitize_title_component("CONSOLE"), "CONSOLE");
+    }
+
+    #[test]
+    fn sanitize_grenze_120_codepoints() {
+        // Mehrbyte-Zeichen: gekürzt wird auf 120 Codepoints, nicht 120 Bytes.
+        let input: String = "ä".repeat(130);
+        let out = sanitize_title_component(&input);
+        assert_eq!(out.chars().count(), 120);
+        assert!(out.chars().all(|c| c == 'ä'));
+    }
+
+    #[test]
+    fn sanitize_kuerzen_vor_normalisieren_trimmt_endpunkt() {
+        // Erst auf 120 kürzen, dann trimmen: der durch das Kürzen an Position 120
+        // entstehende Punkt muss weg sein (sonst bricht der Bibliotheks-Abgleich
+        // unter Windows, das Namen auf '.' nicht duldet).
+        let mut input = "a".repeat(119);
+        input.push('.'); // Codepoint 120
+        input.push('b'); // Codepoint 121, fällt beim Kürzen weg
+        let out = sanitize_title_component(&input);
+        assert_eq!(out, "a".repeat(119));
+        assert!(!out.ends_with('.'));
+    }
+
+    // --- episode_file_base ------------------------------------------------
+
+    #[test]
+    fn base_ohne_template_serie() {
+        // season > 0 -> "<t> S01E02" mit zweistelligen Nummern.
+        assert_eq!(episode_file_base("Title", 1, 2, None), "Title S01E02");
+        assert_eq!(episode_file_base("Title", 12, 134, None), "Title S12E134");
+    }
+
+    #[test]
+    fn base_ohne_template_film() {
+        // season == 0 -> "<t> - Film 02".
+        assert_eq!(
+            episode_file_base("Mein Film", 0, 2, None),
+            "Mein Film - Film 02"
+        );
+    }
+
+    #[test]
+    fn base_ohne_template_titel_wird_gehaertet() {
+        // Der Titel läuft durch sanitize_title_component.
+        assert_eq!(episode_file_base("A/B:C", 1, 1, None), "ABC S01E01");
+    }
+
+    #[test]
+    fn base_mit_template_gefuellt() {
+        let out = episode_file_base("X", 1, 2, Some("{title} S{s2}E{e2}"));
+        assert_eq!(out, "X S01E02");
+    }
+
+    #[test]
+    fn base_mit_template_ist_flach_und_traversal_sicher() {
+        // Pfadtrenner aus dem gefüllten Muster werden entfernt -> flacher Name.
+        let out = episode_file_base("X", 1, 2, Some("{title}/S{s2}E{e2}"));
+        assert_eq!(out, "XS01E02");
+        assert!(!out.contains('/'));
+        assert!(!out.contains('\\'));
+
+        // Auch ein Traversal-Versuch im Titel bleibt flach.
+        let out = episode_file_base("../../etc", 1, 2, Some("{title} S{s2}E{e2}"));
+        assert!(!out.contains('/'));
+        assert!(!out.contains('\\'));
+    }
+
+    #[test]
+    fn base_leeres_template_faellt_auf_default_zurueck() {
+        // Ein nur aus Leerraum bestehendes Muster zählt als "kein Muster".
+        assert_eq!(
+            episode_file_base("Title", 1, 2, Some("   ")),
+            "Title S01E02"
+        );
+    }
+
+    // --- file_matches_base ------------------------------------------------
+
+    #[test]
+    fn matches_mit_endung() {
+        assert!(file_matches_base("Title S01E02.mkv", "Title S01E02"));
+        assert!(file_matches_base("Title S01E02.ts", "Title S01E02"));
+    }
+
+    #[test]
+    fn matches_ohne_punkt_ist_false() {
+        // Exakter Name ohne Endung -> kein Rest, der mit '.' beginnt.
+        assert!(!file_matches_base("Title S01E02", "Title S01E02"));
+    }
+
+    #[test]
+    fn matches_e10_e100_kollision() {
+        // "…E100.mkv" darf NICHT auf Basis "…E10" passen (Rest beginnt mit '0').
+        assert!(!file_matches_base("X S01E100.mkv", "X S01E10"));
+        // Gegenprobe: die echte E10-Datei passt.
+        assert!(file_matches_base("X S01E10.mkv", "X S01E10"));
+    }
+
+    // --- resolve_obscura_path ---------------------------------------------
+
+    #[test]
+    fn obscura_leer_ist_none() {
+        assert_eq!(resolve_obscura_path(None), None);
+        assert_eq!(resolve_obscura_path(Some("")), None);
+        assert_eq!(resolve_obscura_path(Some("  ")), None);
+    }
+
+    #[test]
+    fn obscura_pfad_wird_durchgereicht() {
+        assert_eq!(
+            resolve_obscura_path(Some("/pfad/x")),
+            Some("/pfad/x".to_string())
+        );
+        // Umgebender Leerraum wird getrimmt.
+        assert_eq!(
+            resolve_obscura_path(Some("  /pfad/x  ")),
+            Some("/pfad/x".to_string())
+        );
+    }
+
+    #[test]
+    fn obscura_sentinel_paniert_nicht() {
+        // "@bundled" löst über bundled_tool("obscura") auf — Ergebnis ist
+        // umgebungsabhängig. Deterministisch prüfbar: es paniert nicht und liefert
+        // exakt dasselbe wie bundled_tool("obscura").
+        let got = resolve_obscura_path(Some(OBSCURA_BUNDLED));
+        assert_eq!(got, bundled_tool("obscura"));
+    }
+}

@@ -560,3 +560,42 @@ fn notify_done(app: &AppHandle, title: &str) {
         .body(&safe)
         .show();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::in_window;
+
+    // from == to: Fenster gilt rund um die Uhr als offen
+    #[test]
+    fn immer_offen_wenn_from_gleich_to() {
+        assert!(in_window(0, 0, 0));
+        assert!(in_window(600, 600, 600));
+        assert!(in_window(1439, 720, 720));
+    }
+
+    // from < to: normales Fenster am selben Tag, [from, to)
+    #[test]
+    fn normales_fenster_randwerte() {
+        let from = 540; // 09:00
+        let to = 1020; // 17:00
+        assert!(in_window(from, from, to)); // genau from -> drin
+        assert!(in_window(to - 1, from, to)); // to-1 -> drin
+        assert!(!in_window(to, from, to)); // genau to -> exklusiv, raus
+        assert!(!in_window(from - 1, from, to)); // from-1 -> raus
+        assert!(in_window(720, from, to)); // mittendrin
+    }
+
+    // from > to: Fenster laeuft ueber Mitternacht, z. B. 22:00..06:00
+    #[test]
+    fn fenster_ueber_mitternacht() {
+        let from = 1320; // 22:00
+        let to = 360; // 06:00
+        assert!(in_window(1380, from, to)); // 23:00 -> drin
+        assert!(in_window(120, from, to)); // 02:00 -> drin
+        assert!(!in_window(720, from, to)); // 12:00 -> raus
+        assert!(in_window(from, from, to)); // genau from -> drin
+        assert!(!in_window(to, from, to)); // genau to -> raus
+        assert!(in_window(to - 1, from, to)); // 05:59 -> noch drin
+        assert!(!in_window(from - 1, from, to)); // 21:59 -> raus
+    }
+}
