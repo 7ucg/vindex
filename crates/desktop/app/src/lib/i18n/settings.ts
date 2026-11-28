@@ -117,6 +117,11 @@ export const de: Record<string, string> = {
   "settings.network.obscuraOn": "● Stufe 3 (obscura) aktiv",
   "settings.network.obscuraOff": "○ Stufe 3 aus",
   "settings.network.obscuraPath": "obscura-Pfad (Stufe 3, leer = aus)",
+  "settings.network.obscuraMode": "Stufe 3 (obscura)",
+  "settings.network.obscuraOffChip": "Aus",
+  "settings.network.obscuraBundledChip": "Gebündelt",
+  "settings.network.obscuraPathChip": "Eigener Pfad",
+  "settings.network.obscuraNoBundle": "Kein mitgeliefertes obscura-Binary gefunden.",
   "settings.network.obscuraPlaceholder": "/pfad/zu/obscura",
   "settings.network.proxy": "Egress-Proxy (wirkt nach Neustart, leer = keiner)",
   "settings.network.note":
@@ -264,6 +269,11 @@ export const en: Record<string, string> = {
   "settings.network.obscuraOn": "● Level 3 (obscura) active",
   "settings.network.obscuraOff": "○ Level 3 off",
   "settings.network.obscuraPath": "obscura path (level 3, empty = off)",
+  "settings.network.obscuraMode": "Level 3 (obscura)",
+  "settings.network.obscuraOffChip": "Off",
+  "settings.network.obscuraBundledChip": "Bundled",
+  "settings.network.obscuraPathChip": "Custom path",
+  "settings.network.obscuraNoBundle": "No bundled obscura binary found.",
   "settings.network.obscuraPlaceholder": "/path/to/obscura",
   "settings.network.proxy": "Egress proxy (takes effect after restart, empty = none)",
   "settings.network.note":

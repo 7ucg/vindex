@@ -13,6 +13,7 @@ import {
   networkStatus,
   setImpersonate,
   setObscura,
+  OBSCURA_BUNDLED,
   setProxy,
   indexInfo,
   checkUpdate,
@@ -238,6 +239,13 @@ export function Settings(): JSX.Element {
     void setImpersonate(!n.impersonate)
       .then(reloadNet)
       .catch(() => {});
+  };
+  // obscura (Stufe 3) als Tri-State: Aus / Gebündelt / eigener Pfad.
+  const setObscuraOff = () => {
+    void setObscura(null).then(reloadNet).catch(() => {});
+  };
+  const setObscuraBundled = () => {
+    void setObscura(OBSCURA_BUNDLED).then(reloadNet).catch(() => {});
   };
   const saveObscura = () => {
     void setObscura(obscuraInput().trim() || null)
@@ -781,7 +789,32 @@ export function Settings(): JSX.Element {
           </span>
         </div>
         <div class="field">
-          <label>{t("settings.network.obscuraPath")}</label>
+          <label>{t("settings.network.obscuraMode")}</label>
+          <div class="controls" style={{ margin: "4px 0 8px" }}>
+            <button
+              class="chip"
+              classList={{ on: net()?.obscura_mode === "off" }}
+              onClick={setObscuraOff}
+            >
+              {t("settings.network.obscuraOffChip")}
+            </button>
+            <button
+              class="chip"
+              classList={{ on: net()?.obscura_mode === "bundled" }}
+              disabled={!net()?.obscura_bundled}
+              title={net()?.obscura_bundled ? "" : t("settings.network.obscuraNoBundle")}
+              onClick={setObscuraBundled}
+            >
+              {t("settings.network.obscuraBundledChip")}
+            </button>
+            <button
+              class="chip"
+              classList={{ on: net()?.obscura_mode === "path" }}
+              onClick={saveObscura}
+            >
+              {t("settings.network.obscuraPathChip")}
+            </button>
+          </div>
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               class="cfg-input"

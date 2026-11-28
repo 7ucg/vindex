@@ -195,11 +195,19 @@ export function recentLogs(): Promise<string[]> {
   return invoke<string[]>("recent_logs");
 }
 
+/** Sentinel fürs obscura-Feld: „nimm das mitgelieferte Binary" (Backend löst den Pfad auf). */
+export const OBSCURA_BUNDLED = "@bundled";
+
 export interface NetworkStatus {
   dns: string;
   impersonate: boolean;
   obscura: boolean;
+  /** "off" | "bundled" | "path" */
+  obscura_mode: "off" | "bundled" | "path";
+  /** Bei Modus "path" der eigene Pfad, sonst null. */
   obscura_path: string | null;
+  /** Ist ein mitgeliefertes obscura-Binary vorhanden? */
+  obscura_bundled: boolean;
   proxy: string | null;
 }
 
@@ -209,6 +217,7 @@ export function networkStatus(): Promise<NetworkStatus> {
 export function setImpersonate(on: boolean): Promise<void> {
   return invoke("set_impersonate", { on });
 }
+/** Pfad, der Sentinel OBSCURA_BUNDLED (gebündelt) oder null (aus). */
 export function setObscura(path: string | null): Promise<void> {
   return invoke("set_obscura", { path });
 }

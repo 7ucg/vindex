@@ -802,18 +802,35 @@ struct NetworkStatusDto {
     dns: String,
     impersonate: bool,
     obscura: bool,
+    /// Gewählter Modus: "off" | "bundled" | "path".
+    obscura_mode: String,
+    /// Bei Modus "path" der eigene Pfad, sonst leer (der Sentinel wird nicht durchgereicht).
     obscura_path: Option<String>,
+    /// Ist ein mitgeliefertes obscura-Binary vorhanden (Option „Gebündelt" anbietbar)?
+    obscura_bundled: bool,
     proxy: Option<String>,
 }
 
 #[tauri::command]
 fn network_status(state: State<'_, AppState>) -> NetworkStatusDto {
     let cfg = state.config.lock().unwrap();
+    let want = cfg
+        .obscura
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let (mode, path) = match want {
+        None => ("off", None),
+        Some(OBSCURA_BUNDLED) => ("bundled", None),
+        Some(p) => ("path", Some(p.to_string())),
+    };
     NetworkStatusDto {
         dns: "1.1.1.1".into(),
         impersonate: core::http::impersonate_enabled(),
         obscura: core::browser::obscura_enabled(),
-        obscura_path: cfg.obscura.clone(),
+        obscura_mode: mode.into(),
+        obscura_path: path,
+        obscura_bundled: bundled_tool("obscura").is_some(),
         proxy: cfg.proxy.clone(),
     }
 }
@@ -833,9 +850,11 @@ fn set_impersonate(on: bool, state: State<'_, AppState>) -> Result<(), String> {
 /// genau das lehnt auch der Kern beim Abruf ab; so stimmt die Zusage mit der Durchsetzung).
 #[tauri::command]
 fn set_obscura(path: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
-    let p = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    // Gespeichert wird der Wunsch (Pfad ODER Sentinel `@bundled`); der echte Binary-Pfad
+    // wird erst für die ENV aufgelöst — so bleibt „Gebündelt" pfad-unabhängig.
+    let want = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let mut cfg = state.config.lock().unwrap();
-    if p.is_some()
+    if want.is_some()
         && cfg
             .proxy
             .as_deref()
@@ -844,9 +863,13 @@ fn set_obscura(path: Option<String>, state: State<'_, AppState>) -> Result<(), S
     {
         return Err("Mit gesetztem Egress-Proxy ist Stufe 3 (obscura) nicht möglich.".into());
     }
-    core::browser::set_obscura_path(p.clone());
-    std::env::set_var("VINDEX_OBSCURA", p.as_deref().unwrap_or(""));
-    cfg.obscura = p;
+    let resolved = resolve_obscura_path(want.as_deref());
+    if want.as_deref() == Some(OBSCURA_BUNDLED) && resolved.is_none() {
+        return Err("Kein mitgeliefertes obscura-Binary gefunden.".into());
+    }
+    core::browser::set_obscura_path(resolved.clone());
+    std::env::set_var("VINDEX_OBSCURA", resolved.as_deref().unwrap_or(""));
+    cfg.obscura = want;
     config::save(&cfg)
 }
 
@@ -894,13 +917,9 @@ fn apply_network_env(cfg: &config::DesktopConfig) {
     }
     // obscura (Stufe 3) ist opt-in: die gespeicherte Config entscheidet, nie ein bloß
     // vorhandenes/gebündeltes Binary. None/leer => ausdrücklich AUS (überschreibt auch
-    // ein evtl. von außen gesetztes VINDEX_OBSCURA).
-    match cfg
-        .obscura
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    // ein evtl. von außen gesetztes VINDEX_OBSCURA). Der Sentinel `@bundled` wird hier
+    // zum echten Pfad aufgelöst (fehlt das Binary => aus).
+    match resolve_obscura_path(cfg.obscura.as_deref()) {
         Some(p) => std::env::set_var("VINDEX_OBSCURA", p),
         None => std::env::set_var("VINDEX_OBSCURA", ""),
     }
@@ -1225,6 +1244,23 @@ fn platform_info() -> PlatformInfo {
     PlatformInfo {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
+    }
+}
+
+/// Sentinel im `obscura`-Config-Feld: „nimm das mitgelieferte obscura-Binary". So bleibt
+/// die Wahl „Gebündelt" stabil, auch wenn sich der Installationspfad ändert; aufgelöst wird
+/// erst beim Setzen der ENV (`resolve_obscura_path`). Beginnt mit `@`, kollidiert also nicht
+/// mit einem echten Pfad.
+const OBSCURA_BUNDLED: &str = "@bundled";
+
+/// Löst einen gespeicherten obscura-Config-Wert in den tatsächlichen Binary-Pfad auf, der
+/// in `VINDEX_OBSCURA` landet. Leer/None => None (aus). Sentinel => gebündeltes Binary
+/// (oder None, wenn keins mitgeliefert ist). Sonst der Pfad selbst.
+fn resolve_obscura_path(value: Option<&str>) -> Option<String> {
+    match value.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(OBSCURA_BUNDLED) => bundled_tool("obscura"),
+        Some(p) => Some(p.to_string()),
     }
 }
 
