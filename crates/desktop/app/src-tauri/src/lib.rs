@@ -1878,6 +1878,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_os::init())
         .setup(move |app| {
+            // Kaltstart messen: Dauer der (fensterblockierenden) Backend-Initialisierung.
+            let __boot = std::time::Instant::now();
             build_tray(app.handle())?;
 
             // Deep-Links (vindex://…): im Dev die Schemes registrieren und eingehende
@@ -1926,6 +1928,7 @@ pub fn run() {
             });
             // Hintergrund-Task: Gate-Zustand aktuell halten + Abos periodisch prüfen.
             spawn_background(app.handle().clone());
+            tracing::info!("Backend-Init {} ms", __boot.elapsed().as_millis());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
