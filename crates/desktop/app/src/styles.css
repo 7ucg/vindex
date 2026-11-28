@@ -717,8 +717,10 @@ select.cfg-input {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 18px;
-  background: linear-gradient(rgba(0, 0, 0, 0.65), transparent);
+  padding: calc(env(safe-area-inset-top, 0px) + 14px)
+    calc(env(safe-area-inset-right, 0px) + 18px) 18px
+    calc(env(safe-area-inset-left, 0px) + 18px);
+  background: linear-gradient(rgba(0, 0, 0, 0.7), transparent);
   opacity: 1;
   transition: opacity 0.25s;
 }
@@ -753,15 +755,15 @@ select.cfg-input {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 18px;
+  padding: 12px 18px;
   border-radius: 12px;
   border: 1px solid var(--line-2);
-  background: rgba(10, 8, 19, 0.82);
+  background: rgba(14, 16, 22, 0.82);
   color: var(--text);
   font-weight: 600;
   cursor: pointer;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-2);
 }
 .skip-btn:hover {
   border-color: var(--play);
@@ -776,15 +778,16 @@ select.cfg-input {
 
 .player-menu {
   position: absolute;
-  top: 56px;
+  top: 60px;
   right: 18px;
   z-index: 5;
-  background: rgba(10, 8, 19, 0.92);
+  background: rgba(14, 16, 22, 0.94);
   border: 1px solid var(--line-2);
-  border-radius: 12px;
-  padding: 12px 14px;
-  max-width: 420px;
-  backdrop-filter: blur(8px);
+  border-radius: 14px;
+  padding: 14px 16px;
+  max-width: min(420px, calc(100vw - 36px));
+  box-shadow: var(--shadow-2);
+  backdrop-filter: blur(10px);
 }
 .player-menu .pm-sec {
   font-size: 11px;
@@ -991,23 +994,23 @@ select.cfg-input {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 12vh;
-  background: rgba(4, 2, 12, 0.55);
-  backdrop-filter: blur(3px);
+  padding: 12vh 16px 16px;
+  background: rgba(4, 5, 10, 0.6);
+  backdrop-filter: blur(6px);
 }
 .cmdk {
-  width: min(640px, 92vw);
+  width: min(640px, 100%);
   background: var(--surface);
   border: 1px solid var(--line-2);
-  border-radius: 14px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  border-radius: 16px;
+  box-shadow: var(--shadow-2);
   overflow: hidden;
 }
 .cmdk-input {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 11px;
+  padding: 15px 17px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
 }
@@ -1017,23 +1020,27 @@ select.cfg-input {
   border: 0;
   outline: 0;
   color: var(--text);
-  font-size: 15px;
+  font-size: 15.5px;
 }
-.cmdk-esc {
+.cmdk-esc,
+.cmdk-portal {
+  flex: none;
   font-size: 11px;
   color: var(--muted);
-  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
   border-radius: 6px;
-  padding: 2px 7px;
+  padding: 2px 8px;
 }
 .cmdk-note {
-  padding: 14px 16px;
+  padding: 15px 17px;
   color: var(--muted);
   font-size: 13px;
 }
 .cmdk-list {
   max-height: 46vh;
   overflow-y: auto;
+  padding: 6px;
 }
 .cmdk-item {
   display: flex;
@@ -1044,26 +1051,23 @@ select.cfg-input {
   text-align: left;
   background: none;
   border: 0;
-  padding: 11px 16px;
+  border-radius: 10px;
+  padding: 11px 12px;
   color: var(--text);
   font-size: 14px;
   cursor: pointer;
 }
-.cmdk-item.on {
+.cmdk-item:hover {
   background: var(--surface-2);
+}
+.cmdk-item.on {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .cmdk-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.cmdk-portal {
-  flex: none;
-  font-size: 11px;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px 8px;
 }
 
 /* Tastaturbedienung: sichtbarer Fokus-Ring (nur bei Tastatur, nicht bei Maus) */
@@ -1465,8 +1469,9 @@ button:focus:not(:focus-visible) {
   font-size: 12px;
   font-weight: 600;
   color: #fff;
-  background: rgba(18, 16, 26, 0.82);
+  background: rgba(14, 16, 22, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(6px);
   text-shadow: 0 1px 3px #000;
   transition: opacity 0.25s;
 }
