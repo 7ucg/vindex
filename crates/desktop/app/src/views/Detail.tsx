@@ -370,8 +370,14 @@ export function Detail(): JSX.Element {
                 <img class="detail-poster" src={m.poster!} alt={sel.title} loading="lazy" />
               </Show>
               <div class="detail-info">
-                <Show when={m.year || m.fsk != null || m.country || m.imdb}>
+                <Show when={m.year || m.fsk != null || m.country || m.imdb || m.rating != null}>
                   <div class="meta-row">
+                    <Show when={m.rating != null}>
+                      <span class="meta-badge rating" title={t("detail.rating")}>
+                        ★ {m.rating!.toFixed(1)}
+                        <Show when={m.votes != null}>{` (${m.votes})`}</Show>
+                      </span>
+                    </Show>
                     <Show when={m.year}>
                       <span class="meta-badge">{m.year}</span>
                     </Show>

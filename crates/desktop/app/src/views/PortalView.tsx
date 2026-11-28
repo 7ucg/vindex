@@ -17,7 +17,7 @@ import { IconSearch, IconPlay } from "../lib/icons";
 import { openTitle, type Portal } from "../lib/store";
 import { Cover } from "./Cover";
 
-type Sort = "az" | "za" | "year_desc" | "year_asc" | "newest";
+type Sort = "az" | "za" | "year_desc" | "year_asc" | "newest" | "rating_desc" | "popular";
 type Layout = "grid" | "list";
 
 // Kuratiertes Genre-Angebot je Portal (ASCII-Slugs — werden roh in die URL gebaut).
@@ -373,8 +373,22 @@ export function PortalView(props: { portal: Portal }): JSX.Element {
           <button class="chip" classList={{ on: sort() === "za" }} onClick={() => setSort("za")}>
             {t("portal.sort_za")}
           </button>
-          {/* Nur durch Index-Daten gedeckte Sortierungen. Beliebtheit/Bewertung/Status
-              fehlen als Spalten (neue Crawler-Spalten + Re-Crawl nötig) — ausser Scope. */}
+          {/* Durch Index-Daten gedeckte Sortierungen. Bewertung/Beliebtheit sind erst
+              nach einem Re-Crawl gefüllt (serienstream liefert keine → ans Ende). */}
+          <button
+            class="chip"
+            classList={{ on: sort() === "rating_desc" }}
+            onClick={() => setSort("rating_desc")}
+          >
+            {t("portal.sort_rating")}
+          </button>
+          <button
+            class="chip"
+            classList={{ on: sort() === "popular" }}
+            onClick={() => setSort("popular")}
+          >
+            {t("portal.sort_popular")}
+          </button>
           <button
             class="chip"
             classList={{ on: sort() === "year_desc" }}

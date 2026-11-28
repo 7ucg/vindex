@@ -168,6 +168,10 @@ export interface TitleMeta {
   directors: string[];
   actors: string[];
   producers: string[];
+  /** Nutzerbewertung 0–10 (aniworld/filmo; serienstream null). Erst nach Re-Crawl. */
+  rating: number | null;
+  /** Stimmenzahl (Beliebtheit). */
+  votes: number | null;
 }
 
 export function titleMeta(url: string): Promise<TitleMeta> {
