@@ -9,9 +9,15 @@ import {
   IconSettings,
   IconSearch,
 } from "../lib/icons";
-import { view, setView, setPaletteOpen, type View } from "../lib/store";
+import { view, setView, setPaletteOpen, setNavOpen, type View } from "../lib/store";
 import { incognito } from "../lib/private";
 import { t } from "../lib/i18n";
+
+// Navigieren und auf Mobil den Drawer schließen.
+function go(id: View): void {
+  setView(id);
+  setNavOpen(false);
+}
 
 // label ist entweder ein Übersetzungsschlüssel (t()) oder ein fester Portalname.
 type Item = { id: View; label: string; translate?: boolean; icon: () => JSX.Element; accent?: string };
@@ -34,7 +40,7 @@ function NavButton(props: { item: Item }): JSX.Element {
     <button
       class="nav"
       classList={{ active: view() === item.id }}
-      onClick={() => setView(item.id)}
+      onClick={() => go(item.id)}
     >
       {item.icon()}
       {item.translate ? t(item.label) : item.label}
@@ -51,7 +57,13 @@ export function Sidebar(): JSX.Element {
         <span class="word">vindex</span>
       </div>
 
-      <button class="nav" onClick={() => setPaletteOpen(true)}>
+      <button
+        class="nav"
+        onClick={() => {
+          setPaletteOpen(true);
+          setNavOpen(false);
+        }}
+      >
         <IconSearch />
         {t("sidebar.search")}
         <span class="kbd" style={{ "margin-left": "auto" }}>
@@ -68,7 +80,7 @@ export function Sidebar(): JSX.Element {
       <button
         class="nav"
         classList={{ active: view() === "settings" }}
-        onClick={() => setView("settings")}
+        onClick={() => go("settings")}
       >
         <IconSettings />
         {t("sidebar.settings")}

@@ -7,6 +7,7 @@ export const de: Record<string, string> = {
   "app.update.later": "Später",
   "app.update.whatsNew": "Was ist neu",
   "app.update.hideChangelog": "Changelog ausblenden",
+  "app.menu": "Menü",
 };
 export const en: Record<string, string> = {
   "app.update.prefix": "Update",
@@ -16,4 +17,5 @@ export const en: Record<string, string> = {
   "app.update.later": "Later",
   "app.update.whatsNew": "What's new",
   "app.update.hideChangelog": "Hide changelog",
+  "app.menu": "Menu",
 };

@@ -65,6 +65,8 @@ const [playback, setPlayback] = createSignal<Playback | null>(null);
 const [sleepTimer, setSleepTimer] = createSignal<SleepTimer | null>(null);
 // Globale Suchpalette (Ctrl/Cmd-K) — im Store, damit sie von überall geöffnet werden kann.
 const [paletteOpen, setPaletteOpen] = createSignal(false);
+// Mobile Navigation: auf schmalen Geräten ist die Seitenleiste ein Off-Canvas-Drawer.
+const [navOpen, setNavOpen] = createSignal(false);
 
 export function openPlayer(p: Playback): void {
   setPlayback(p);
@@ -90,4 +92,6 @@ export {
   setSleepTimer,
   paletteOpen,
   setPaletteOpen,
+  navOpen,
+  setNavOpen,
 };

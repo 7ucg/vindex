@@ -19,7 +19,8 @@ import { Downloads } from "./views/Downloads";
 import { Library } from "./views/Library";
 import { Player } from "./views/Player";
 import { CommandPalette } from "./views/CommandPalette";
-import { view, playback, openTitle } from "./lib/store";
+import { view, playback, openTitle, navOpen, setNavOpen } from "./lib/store";
+import { Logo } from "./lib/Logo";
 import { t, initLangFromSystem } from "./lib/i18n";
 
 // Erlaubte Portal-Hosts für Deep-Links (spiegelt PORTAL_HOSTS in lib/backup.ts —
@@ -150,7 +151,25 @@ export default function App(): JSX.Element {
   };
 
   return (
-    <div class="app">
+    <div class="app" classList={{ "nav-open": navOpen() }}>
+      {/* Mobile-Kopfzeile: nur auf schmalen Geräten sichtbar (CSS), öffnet den Drawer. */}
+      <header class="mobile-topbar">
+        <button
+          class="hamburger"
+          aria-label={t("app.menu")}
+          onClick={() => setNavOpen((v) => !v)}
+        >
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M4 7h16M4 12h16M4 17h16" />
+          </svg>
+        </button>
+        <Logo class="logo" />
+        <span class="word">vindex</span>
+      </header>
+      {/* Abdunkelung hinter dem Drawer; Klick schließt. */}
+      <Show when={navOpen()}>
+        <div class="scrim" onClick={() => setNavOpen(false)} />
+      </Show>
       <Show when={update()}>
         {(u) => (
           <div class="update-banner">
