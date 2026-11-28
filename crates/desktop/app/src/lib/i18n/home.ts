@@ -17,6 +17,11 @@ export const de: Record<string, string> = {
   "home.hitsFound": "{n} gefunden",
   "home.emptyHint":
     "Tippe einen Titel ein, um den aniworld-Katalog zu durchsuchen. Die Portal-Tabs links zeigen den Katalog als Grid.",
+  "home.heroTitle": "Dein Katalog, lokal und ohne Spuren.",
+  "home.heroSub":
+    "Durchstöbere ein Portal oder such direkt. Kein Konto, keine Telemetrie — alles bleibt auf diesem Gerät.",
+  "home.heroOpen": "Katalog öffnen",
+  "home.heroTip": "Portalübergreifend suchen:",
   "home.filme": "Filme",
   "home.season": "Staffel {n}",
 };
@@ -38,6 +43,11 @@ export const en: Record<string, string> = {
   "home.hitsFound": "{n} found",
   "home.emptyHint":
     "Type a title to search the aniworld catalog. The portal tabs on the left show the catalog as a grid.",
+  "home.heroTitle": "Your catalog, local and private.",
+  "home.heroSub":
+    "Browse a portal or search right away. No account, no telemetry — everything stays on this device.",
+  "home.heroOpen": "Open catalog",
+  "home.heroTip": "Search across all portals:",
   "home.filme": "Movies",
   "home.season": "Season {n}",
 };

@@ -10,7 +10,8 @@ import {
 } from "../lib/api";
 import { IconSearch, IconPlay } from "../lib/icons";
 import { t } from "../lib/i18n";
-import { openTitle, openPlayer } from "../lib/store";
+import { openTitle, openPlayer, setView, PORTALS } from "../lib/store";
+import { Logo } from "../lib/Logo";
 import { recentProgress, type Resume } from "../lib/progress";
 import { getTitleUrl } from "../lib/titlemap";
 import { watchlist } from "../lib/watchlist";
@@ -371,7 +372,29 @@ export function Home(): JSX.Element {
           (lib()?.length ?? 0) === 0
         }
       >
-        <div class="empty">{t("home.emptyHint")}</div>
+        <div class="home-hero">
+          <div class="home-hero-mark">
+            <Logo />
+          </div>
+          <h1 class="home-hero-title">{t("home.heroTitle")}</h1>
+          <p class="home-hero-sub">{t("home.heroSub")}</p>
+          <div class="home-hero-portals">
+            <For each={PORTALS}>
+              {(p) => (
+                <button class="hero-portal" onClick={() => setView(p.id)}>
+                  <span class="hero-portal-dot" style={{ background: p.accent }} />
+                  <span class="hero-portal-name">{p.label}</span>
+                  <span class="hero-portal-go">{t("home.heroOpen")}</span>
+                </button>
+              )}
+            </For>
+          </div>
+          <div class="home-hero-tip">
+            {t("home.heroTip")}
+            <kbd>Ctrl</kbd>
+            <kbd>K</kbd>
+          </div>
+        </div>
       </Show>
     </div>
   );
